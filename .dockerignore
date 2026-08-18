@@ -1,0 +1,39 @@
+node_modules/
+.git/
+.github/
+.gitignore
+.dockerignore
+
+# Tests, Docs, and Designs
+tests/
+designs/
+Reports/
+docs/
+svgs/
+*.md
+!README.md
+
+# Build Artifacts
+dist/
+coverage/
+*.log
+*.tsbuildinfo
+
+# IDE and Environment
+.vscode/
+.idea/
+.cursor/
+.opencode/
+.agents/
+.devin/
+.upgrade/
+.weavetab/
+.weavetab-system/
+.Weavetab/
+.wt-system/
+.env
+
+# Scripts and Misc
+measure.cjs
+reproduce.ts
+test_form_blast.html

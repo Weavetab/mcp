@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>report5 verification fixture</title>
+<style>
+  body { font-family: monospace; margin: 0; padding: 12px; background:#fafafa; }
+  h1 { font-size: 18px; }
+  h2 { font-size: 14px; margin: 4px 0; }
+  .card { border: 1px solid #bbb; background:#fff; padding: 10px; margin: 10px 0; }
+  .count-badge { color:#c00; font-weight:bold; }
+  #scrollBox { width: 280px; height: 100px; overflow: auto; border: 1px solid #000; background:#eee; }
+  #scrollBox .inner { height: 800px; padding: 4px; }
+  #animBtn { animation: slide 3s linear infinite alternate; }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(140px); } }
+  #cover { position: absolute; left: 300px; top: 520px; width: 260px; height: 70px; background: rgba(0,0,120,0.75); z-index: 10; color:#fff; line-height:70px; text-align:center; }
+  #coveredInput { position: absolute; left: 305px; top: 530px; width: 240px; z-index: 1; }
+  #cornerBtn { position: fixed; left: 0; top: 0; width: 30px; height: 30px; z-index: 9999; font-size:9px; }
+  #underPanelBtn { position: fixed; left: 40px; top: 580px; z-index: 9999; }
+  canvas { border: 1px solid #999; background:#fff; }
+</style>
+</head>
+<body>
+<script>
+  window.__testLog = [];
+  document.addEventListener('click', function(e) {
+    var t = e.target;
+    var label = t.tagName + (t.id ? '#' + t.id : '') + (typeof t.className === 'string' && t.className ? '.' + String(t.className).split(' ')[0] : '');
+    window.__testLog.push({ type:'click', x:e.clientX, y:e.clientY, target:label, ts:Date.now() });
+  }, true);
+  window.__counters = {};
+  function bump(el) {
+    var k = (el && (el.id || el.name || el.className)) || 'anon';
+    window.__counters[k] = (window.__counters[k] || 0) + 1;
+    return window.__counters[k];
+  }
+  function setCount(id, key) { document.getElementById(id).textContent = window.__counters[key] || 0; }
+</script>
+
+<h1>report5 verification fixture (fresh build)</h1>
+
+<div class="card">
+  <h2>1. Visible input + static button [B2/N1 type phantom-click, B3/N6 stuck_warning]</h2>
+  <input id="visInput" name="visInput" placeholder="Type here..." style="width:260px">
+  <button id="visBtn">Click Me</button>
+  <span>visBtn clicks: <span id="visBtnCount" class="count-badge">0</span></span>
+</div>
+
+<div class="card">
+  <h2>2. Hidden + occluded inputs [B5/N5 gates]</h2>
+  <input id="hiddenInput" style="display:none">
+  <div>coveredInput is under the blue #cover box below.</div>
+</div>
+
+<div class="card">
+  <h2>3. Checkbox + ARIA toggle [B3/N10 double-click]</h2>
+  <label><input type="checkbox" id="chk"> checkbox</label>
+  <span>chk clicks: <span id="chkCount" class="count-badge">0</span></span>
+  <button id="toggle" role="checkbox" aria-checked="false">aria toggle</button>
+  <span>toggle clicks: <span id="toggleCount" class="count-badge">0</span></span>
+  <span>aria-checked: <span id="ariaState">false</span></span>
+</div>
+
+<div class="card">
+  <h2>4. Animating button [R4 clean single click]</h2>
+  <button id="animBtn">Animate Me</button>
+  <span>anim clicks: <span id="animCount" class="count-badge">0</span></span>
+</div>
+
+<div class="card">
+  <h2>5. Scrollable container [B6 element scroll]</h2>
+  <div id="scrollBox"><div class="inner">SCROLL CONTENT LOREM IPSUM DOLOR SIT AMET<br>line2<br>line3<br>line4<br>line5<br>line6<br>line7<br>line8</div></div>
+</div>
+
+<div class="card">
+  <h2>6. Shadow DOM host [B7 pierce]</h2>
+  <div id="shadowHost"></div>
+  <span>shadow clicks: <span id="shadowCount" class="count-badge">0</span></span>
+</div>
+
+<div class="card">
+  <h2>7. Native select + plain input [B1 fill]</h2>
+  <select id="sel"><option value="a">Option A</option><option value="b">Option B</option></select>
+  <input id="plainInput" name="plainInput" placeholder="plain input" style="width:260px">
+</div>
+
+<div class="card">
+  <h2>8. Canvas [browser_canvas]</h2>
+  <canvas id="testCanvas" width="200" height="80"></canvas>
+  <span>canvas clicks: <span id="canvasCount" class="count-badge">0</span></span>
+</div>
+
+<button id="cornerBtn" onclick="setCount('cornerCount','cornerBtn')">CORNER</button>
+<button id="underPanelBtn" onclick="setCount('underPanelCount','underPanelBtn')">UNDER-PANEL</button>
+<span>corner clicks: <span id="cornerCount" class="count-badge">0</span></span>
+<span>underPanel clicks: <span id="underPanelCount" class="count-badge">0</span></span>
+
+<div class="card" data-wt-ignore="true">
+  <h2>9. data-wt-ignore card [B4 attribute exclusion]</h2>
+  <button id="ignoredBtn">IGNORED BTN</button>
+</div>
+
+<div id="cover">COVER BLOCKING #coveredInput</div>
+<input id="coveredInput">
+
+<script>
+  document.getElementById('visBtn').addEventListener('click', function(){ bump(this); setCount('visBtnCount','visBtn'); });
+  document.getElementById('chk').addEventListener('click', function(){ bump(this); setCount('chkCount','chk'); });
+  document.getElementById('toggle').addEventListener('click', function(){
+    bump(this);
+    var el = this;
+    var next = el.getAttribute('aria-checked') === 'true' ? 'false' : 'true';
+    el.setAttribute('aria-checked', next);
+    document.getElementById('ariaState').textContent = next;
+    setCount('toggleCount','toggle');
+  });
+  document.getElementById('animBtn').addEventListener('click', function(){ bump(this); setCount('animCount','animBtn'); });
+
+  var host = document.getElementById('shadowHost');
+  var sroot = host.attachShadow({ mode: 'open' });
+  sroot.innerHTML = '<input id="shadowIn" placeholder="shadow input" style="width:220px"><button id="shadowBtn">ShadowBtn</button>';
+  sroot.querySelector('#shadowBtn').addEventListener('click', function(){
+    bump(this);
+    document.getElementById('shadowCount').textContent = window.__counters['shadowBtn'] || 0;
+  });
+  window.__shadowRoot = sroot;
+
+  var cv = document.getElementById('testCanvas');
+  var ctx = cv.getContext('2d');
+  ctx.fillStyle = '#9cf'; ctx.fillRect(0,0,200,80);
+  ctx.fillStyle = '#000'; ctx.font = '12px monospace';
+  ctx.fillText('CANVAS-TEST', 20, 45);
+  cv.addEventListener('click', function(){ bump(this); setCount('canvasCount','testCanvas'); });
+
+  window.__coveredInputRect = function(){
+    var r = document.getElementById('coveredInput').getBoundingClientRect();
+    return { x:r.x, y:r.y, w:r.width, h:r.height };
+  };
+</script>
+</body>
+</html>

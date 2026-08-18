@@ -1,0 +1,19 @@
+node_modules/
+dist/
+designs/
+.upgrade/
+.devin/
+
+*.tgz
+.env
+
+# Compiled artifacts — do not commit alongside .ts source
+src/**/*.js
+src/**/*.js.map
+
+.opencode/
+.agents/
+.Weavetab/
+.weavetab/
+*.pem
+*.crx

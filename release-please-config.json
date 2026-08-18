@@ -1,0 +1,10 @@
+{
+  "release-type": "node",
+  "bump-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "changelog-path": "CHANGELOG.md",
+      "release-type": "node"
+    }
+  }
+}

@@ -1,0 +1,218 @@
+/* ═══════════════════════════════════════════════════════════════
+   Weavetab · UI Design System
+   Claude Chrome-inspired sidepanel + floating elements
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── SHARED TOKENS (Light theme default) ─────────────────────── */
+:root {
+  --wt-bg: #ffffff;
+  --wt-bg-panel: #f9f9fb;
+  --wt-bg-item: #f0f0f3;
+  --wt-bg-hover: #e8e8ec;
+  --wt-border: #e4e4e7;
+  --wt-border-hi: #d4d4d8;
+  --wt-blue: #3b82f6;
+  --wt-blue-dark: #2563eb;
+  --wt-blue-light: #60a5fa;
+  --wt-green: #16a34a;
+  --wt-green-bg: #f0fdf4;
+  --wt-red: #ef4444;
+  --wt-red-bg: #fef2f2;
+  --wt-text: #18181b;
+  --wt-text-secondary: #52525b;
+  --wt-text-muted: #a1a1aa;
+  --wt-text-dim: #d4d4d8;
+  --wt-text-bright: #09090b;
+  --wt-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  --wt-shadow-lg: 0 4px 12px rgba(0,0,0,0.1);
+  --wt-radius: 10px;
+  --wt-radius-sm: 6px;
+}
+
+[data-theme='dark'] {
+  --wt-bg: #09090b;
+  --wt-bg-panel: #111113;
+  --wt-bg-item: #18181b;
+  --wt-bg-hover: #27272a;
+  --wt-border: #27272a;
+  --wt-border-hi: #3f3f46;
+  --wt-blue: #3b82f6;
+  --wt-blue-dark: #60a5fa;
+  --wt-blue-light: #93c5fd;
+  --wt-green: #22c55e;
+  --wt-green-bg: #052e16;
+  --wt-red: #f87171;
+  --wt-red-bg: #450a0a;
+  --wt-text: #fafafa;
+  --wt-text-secondary: #a1a1aa;
+  --wt-text-muted: #71717a;
+  --wt-text-dim: #3f3f46;
+  --wt-text-bright: #fafafa;
+  --wt-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  --wt-shadow-lg: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+/* ── COMPONENT: Thought Bubble ──────────────────────────────── */
+.wt-bubble {
+  background: var(--wt-bg);
+  border: 1px solid var(--wt-border);
+  padding: 6px 10px;
+  max-width: 320px;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--wt-text-secondary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  position: relative;
+}
+
+.wt-bubble-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  opacity: .75;
+}
+
+.wt-bubble-cursor {
+  display: inline-block;
+  width: 5px;
+  height: 11px;
+  background: var(--wt-blue);
+  vertical-align: middle;
+  animation: wt-blink 1s steps(1) infinite;
+  margin-left: 2px;
+}
+
+@keyframes wt-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* ── COMPONENT: Chat Input Row ──────────────────────────────── */
+.wt-chat {
+  display: inline-flex;
+}
+
+.wt-chat-in {
+  flex: 1;
+  padding: 5px 10px;
+  background: var(--wt-bg-item);
+  border: 1px solid var(--wt-border);
+  border-right: none;
+  color: var(--wt-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 11px;
+  outline: none;
+  min-width: 200px;
+  caret-color: var(--wt-blue);
+  border-radius: var(--wt-radius-sm) 0 0 var(--wt-radius-sm);
+}
+
+.wt-chat-in::placeholder {
+  color: var(--wt-text-muted);
+}
+
+.wt-chat-in:focus {
+  border-color: var(--wt-blue);
+}
+
+.wt-chat-go {
+  padding: 5px 12px;
+  background: var(--wt-blue);
+  border: 1px solid var(--wt-blue);
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0 var(--wt-radius-sm) var(--wt-radius-sm) 0;
+  transition: background 0.15s;
+}
+
+.wt-chat-go:hover {
+  background: var(--wt-blue-dark);
+}
+
+/* ── ANIMATIONS ──────────────────────────────────────────────── */
+@keyframes wt-bubble-in {
+  from { opacity: 0; transform: scale(0.88) translateY(5px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes wt-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wt-scale-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes wt-bubble-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(6px); }
+}
+
+@keyframes wt-smooth-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes wt-smooth-fade-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(10px); }
+}
+
+/* ── IN-PROGRESS TASK PULSE ─────────────────────────────────── */
+@keyframes wt-task-pulse {
+  0%   { border-left-color: var(--wt-blue); }
+  50%  { border-left-color: var(--wt-blue-light); }
+  100% { border-left-color: var(--wt-blue); }
+}
+
+/* ── TOP-BAR SHIMMER ─────────────────────────────────────────── */
+@keyframes wt-shimmer {
+  0%   { left: -60%; }
+  100% { left: 120%; }
+}
+
+/* ── COMPONENT: Badges ──────────────────────────────────────── */
+.wt-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #fff;
+  border-radius: 4px;
+  letter-spacing: 0.03em;
+}
+
+.wt-badge-beta {
+  background: #f59e0b;
+}
+
+.wt-badge-dev {
+  background: var(--wt-blue);
+}
+
+/* ── PLACEHOLDER STYLING ─────────────────────────────────────── */
+#wt-msg-input::placeholder {
+  color: var(--wt-text-muted);
+  font-size: 11px;
+}
+
+#wt-msg-input:focus::placeholder {
+  color: var(--wt-text-secondary);
+}
+
+/* ── RESPONSIVE ──────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .wt-bubble {
+    max-width: 280px !important;
+  }
+}

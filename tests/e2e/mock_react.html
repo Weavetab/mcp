@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>React Mock</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    function App() {
+      const [val, setVal] = React.useState("");
+
+      // Simulate a latency in React state update or an async formatting
+      const handleChange = (e) => {
+        const v = e.target.value;
+        // The value updates immediately in the DOM because it's a controlled component
+        // But let's say React resets it, then async updates it.
+        setVal(v);
+      };
+
+      return (
+        <div style={{ padding: 20 }}>
+          <input 
+            name="custname"
+            value={val} 
+            onChange={handleChange} 
+            placeholder="Type here..." 
+          />
+        </div>
+      );
+    }
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

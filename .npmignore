@@ -1,0 +1,72 @@
+# ─── Source & Development ─────────────────────────────────────────────────────
+src/
+**/src/
+tests/
+scripts/
+designs/
+Reports/
+svgs/
+ext-dist/hud/src/
+ext-dist/sidepanel/src/
+ext-dist/**/src/
+
+# ─── Source Maps & Typescript ───────────────────────────────────────────────────
+*.map
+**/*.map
+*.ts
+!*.d.ts
+tsconfig.json
+
+# ─── Docs & Markdown (keep README.md) ─────────────────────────────────────────
+*.md
+!README.md
+docs/
+
+# ─── Config / IDE / Editor ────────────────────────────────────────────────────
+.vscode/
+.idea/
+.cursor/
+.opencode/
+.agents/
+.devin/
+.upgrade/
+.weavetab/
+.weavetab-system/
+.wt-system/
+.clinerules
+.editorconfig
+.prettierrc
+.prettierignore
+.eslintrc*
+.eslintignore
+
+# ─── GitHub / CI ──────────────────────────────────────────────────────────────
+.github/
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# ─── Build & Cache Artifacts ──────────────────────────────────────────────────
+node_modules/
+.cache/
+.turbo/
+coverage/
+*.log
+*.tsbuildinfo
+
+# ─── Test Files ───────────────────────────────────────────────────────────────
+*.test.*
+*.spec.*
+jest.config.*
+vitest.config.*
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+test_form_blast.html
+skills-lock.json
+ARCHITECTURE.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+SECURITY.md
+TROUBLESHOOTING.md

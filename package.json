@@ -1,0 +1,114 @@
+{
+  "name": "@weavetab/mcp",
+  "version": "2.5.0-beta.0",
+  "description": "A production-grade local MCP server for AI browser automation via Chrome DevTools Protocol. No extensions. No cloud. Full control.",
+  "author": "fy2ne",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://Weavetab.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/weavetab/mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/weavetab/mcp/issues"
+  },
+  "keywords": [
+    "mcp server",
+    "mcp",
+    "model context protocol",
+    "browser automation",
+    "ai agent",
+    "claude mcp",
+    "cursor mcp",
+    "cdp",
+    "chrome devtools protocol",
+    "local mcp",
+    "Weavetab",
+    "Weavetab MCP",
+    "@weavetab/mcp",
+    "puppeteer alternative",
+    "playwright alternative",
+    "autonomous agent"
+  ],
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=23"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "weavetab": "dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "mcpName": "io.github.weavetab/mcp",
+  "files": [
+    "dist/",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo",
+    "ext-dist/",
+    "!ext-dist/**/src/**",
+    "!ext-dist/**/*.ts",
+    "docs/",
+    "mcp.json",
+    "server.json",
+    "smithery.yaml",
+    "AGENTS.md",
+    "SECURITY.md",
+    "TROUBLESHOOTING.md",
+    "ARCHITECTURE.md",
+    "icon.png",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "npm run build:ext && npm run build:hud && npm run build:sidepanel && tsc",
+    "build:hud": "esbuild ext-dist/hud/src/index.ts --bundle --minify --outfile=ext-dist/hud/hud.js --format=iife",
+    "build:sidepanel": "esbuild ext-dist/sidepanel/src/index.ts --bundle --minify --outfile=ext-dist/sidepanel/sidepanel.js --format=iife",
+    "build:ext": "node scripts/build-ext.js",
+    "docs:generate": "node scripts/generate-docs.js",
+    "verify:versions": "node scripts/verify-versions.js",
+    "verify:package": "node scripts/verify-package.js",
+    "verify": "npm run verify:versions && npm run verify:package",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run verify && npm test && npm run build",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\"",
+    "test:e2e": "tsx tests/e2e/smoke_test.ts"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.3.0",
+    "@modelcontextprotocol/sdk": "^1.10.2",
+    "boxen": "^8.0.1",
+    "chalk": "^5.6.2",
+    "chrome-remote-interface": "^0.33.2",
+    "clipboardy": "^5.3.1",
+    "csv-parse": "^5.5.0",
+    "mammoth": "^1.6.0",
+    "open": "^11.0.0",
+    "ora": "^9.4.0",
+    "pdf-parse": "^1.1.1",
+    "picocolors": "^1.1.1",
+    "proper-lockfile": "^4.1.2",
+    "ws": "^8.20.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/chrome-remote-interface": "^0.33.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.10.0",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.19.2",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,84 @@
+# Weavetab Project Intelligence & Coding Conventions
+
+Welcome, Agent. This file is your strict, immutable operational guide for development inside the Weavetab workspace. It contains the project's folder layout, architectural principles, and mandatory execution pipelines.
+
+---
+
+## 🏛️ Full Weavetab Architecture
+
+Weavetab is a production-grade local browser automation platform. It operates directly at **Layer 0** (using direct WebSocket-based Chrome DevTools Protocol communication), completely bypassing heavy, high-latency testing engines like Puppeteer or Playwright.
+
+### The 4-Layer Feature Flow:
+1. **Layer 1: The MCP Schema Definition (`src/server.ts`)**
+   - Declares the standard Model Context Protocol tool schema using `zod`.
+   - Enforces rate limits, blacklists, and human-intervention pause flags inside the standard `withSecurity` executor wrapper.
+2. **Layer 2: The Logic Implementation (`src/tools/`)**
+   - Implements target actions using low-level CDP websocket payloads (via `chrome-remote-interface`).
+   - Syncs and mutates semantic delta maps (`src/state/delta.ts`) to compress DOM snapshots before returning them to the agent context.
+3. **Layer 3: The Overlay & Presence Layer (`src/overlay/` and `src/ui/`)**
+   - Injects lightweight, vanilla-JS helper states (`getMinimalOverlayScript()`) to expose hooks and handle SPA popstate/pushstate history shifts.
+   - Evaluates the highly polished overlay HUD panel (`src/ui/index.ts` compiled to `dist/ui.bundle.js` via esbuild) on target page frames.
+4. **Layer 4: Dashboard & Telemetry (`src/cli/`)**
+   - Captures latency times, mapping metrics, and executed tools to print live terminal dashboards.
+
+---
+
+## 📁 Directory Structure & File Mapping
+
+```
+Weavetab/
+├── .agents/                 # Core markdown skill files detailing development guides
+│   ├── architecture.md      # Tracing feature implementations across files
+│   ├── mcp-patterns.md      # Schema structures and withSecurity guidelines
+│   ├── browser-injection.md # Script injection, SPA history hooks, and CSP bypass
+│   ├── cli-patterns.md      # Prompting, dashboards, and lockfile structures
+│   ├── anti-patterns.md     # Pitfalls and things to avoid (e.g. no raw prints to stdout)
+│   └── debugging.md         # Troubleshooting connection issues and globals
+├── src/                     # Core TypeScript Source Code
+│   ├── index.ts             # CLI router and launch entry point (config / run / start / status)
+│   ├── server.ts            # MCP Server registration & tool-definition schemas
+│   ├── cdp/                 # Low-level Chrome DevTools Protocol integrations
+│   │   ├── connector.ts     # CDP target lists, tab pools, and session initializers
+│   │   ├── finder.ts        # Dynamic OS-specific browser scanning and paths
+│   │   ├── bridge.ts        # Chrome process spawn wrappers
+│   │   ├── lock.js          # Coordination lockfiles (avoids dynamic port collisions)
+│   │   └── walker.ts        # DOM tree parser & coordinate calculators
+│   ├── tools/               # Core tool operational logic (click, type, scroll, tabs, etc.)
+│   ├── overlay/             # Vanilla-JS baseline script injection hooks
+│   ├── ui/                  # Source files for the Tactical Glass HUD (UI dashboard overlay)
+│   ├── state/               # Session cache registers & semantic delta mapping
+│   ├── security/            # Guard processes, rate-limit checkers, and site blacklists
+│   ├── audit/               # Internal action auditing and action telemetry loggers
+│   └── cli/                 # Subcommands (dashboards, history screens, configuration menus)
+├── dist/                    # Compiled UI bundles and target TypeScript JS output
+└── package.json             # Build script declarations and core NPM dependencies
+```
+
+---
+
+## 🚨 MANDATORY OPERATIONAL RULES
+
+### 1. Plan Upfront Before Coding
+- Before touching any codebase file, analyze the task requirements.
+- Draft a concise, multi-step plan detailing **every single layer** that will be impacted by your changes. Show this plan clearly to the user or record it in a task state before beginning implementation.
+
+### 2. Always Update ALL Layers (Zero Half-Implementations)
+- **Do not** add a feature in a single file or layer.
+- If you add or modify a tool:
+  - Add the logic in `src/tools/`.
+  - Expose and describe the tool parameters inside `src/server.ts` using `zod` schemas.
+  - Wrap tool operations with `withSecurity(...)`.
+  - Add appropriate visual state mappings (such as updating cursor state colors or emitting HUD notes) inside `src/overlay/injector.ts` or `src/ui/index.ts`.
+  - Ensure the tool represents its output cleanly inside CLI logging screens or dashboards.
+
+### 3. Build UI Overlay After Script Alterations
+- Any changes under `src/ui/` or `src/overlay/` **MUST** be compiled.
+- Run `npm run build` which:
+  1. Bundles `src/ui/index.ts` to `dist/ui.bundle.js` (via esbuild).
+  2. Compiles TypeScript source files to JavaScript (via `tsc`).
+- Verify that both build steps complete successfully without compilation warnings.
+
+### 4. Verify Connections After Every Change
+- Never assume an edit functions correctly without testing.
+- Verify that standard TCP and CDP connections are unbroken. Verify that `__wt_status()` exposes your new configuration settings or values cleanly without console script issues.
+- Verify that the standard stdio protocol stream is not corrupted by raw `console.log` statements (always route logs through stderr or audit trackers).

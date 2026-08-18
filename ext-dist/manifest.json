@@ -1,0 +1,77 @@
+{
+  "manifest_version": 3,
+  "name": "Weavetab Agent",
+  "version": "1.0.63031",
+  "description": "Native browser agent for Weavetab MCP",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "storage",
+    "webNavigation",
+    "activeTab",
+    "declarativeNetRequest",
+    "cookies",
+    "notifications",
+    "alarms",
+    "contextMenus",
+    "downloads",
+    "browsingData",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "Weavetab Agent"
+  },
+  "omnibox": {
+    "keyword": "Weavetab"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dashboard.html",
+        "hud/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "commands": {
+    "toggle-hud": {
+      "suggested_key": {
+        "default": "Alt+Shift+W"
+      },
+      "description": "Toggle WeaveTab HUD"
+    },
+    "toggle-debug": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Toggle WeaveTab Debug Menu"
+    }
+  }
+}

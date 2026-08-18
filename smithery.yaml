@@ -1,0 +1,11 @@
+# Smithery.ai Universal MCP Configuration
+# Works automatically across Cursor, Claude Desktop, Windsurf, Continue.dev, Roo Code & Smithery CLI
+
+startCommand:
+  type: stdio
+  config:
+    command: node
+    args:
+      - dist/index.js
+    env:
+      NODE_ENV: production

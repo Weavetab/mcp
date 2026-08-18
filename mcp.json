@@ -1,0 +1,796 @@
+{
+  "name": "@weavetab/mcp",
+  "mcpName": "io.github.weavetab/mcp",
+  "version": "2.5.0-beta.0",
+  "description": "Weavetab MCP — Production-grade browser automation MCP server with direct Chrome DevTools Protocol (CDP) control. Direct socket transport, zero WebDriver/Node.js wrapper overhead, deterministic state execution.",
+  "icon": "icon.png",
+  "author": "fy2ne",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://weavetab.dev",
+  "repository": "https://github.com/weavetab/mcp",
+  "keywords": [
+    "weavetab",
+    "mcp",
+    "model context protocol",
+    "browser automation",
+    "chrome devtools protocol",
+    "cdp",
+    "ai agent",
+    "claude mcp",
+    "cursor mcp",
+    "autonomous agent",
+    "browser control",
+    "tab management",
+    "web automation"
+  ],
+  "runtime": {
+    "command": "node",
+    "args": [
+      "dist/index.js"
+    ],
+    "env": {
+      "NODE_ENV": "production"
+    }
+  },
+  "capabilities": {
+    "tools": {
+      "browser_map": {
+        "category": "vision",
+        "description": "Snapshot interactive DOM with stable ref IDs (w:NN). For complex SPAs, use scope or query to constrain tokens. Supports delta temporal diffing (up to 97% token reduction), semantic pruning (dropping hidden elements), AX tree fallback (Shadow DOM traversal), scope filtering, query filtering, and forced rebuilds.",
+        "features": [
+          "Semantic DOM pruning (up to 97% token reduction with delta)",
+          "Per-tab snapshot temporal diffing (delta mode)",
+          "Shadow DOM / AX tree fallback parsing",
+          "Scope and query filtering for complex SPAs",
+          "Framework auto-detection injection"
+        ]
+      },
+      "browser_navigate": {
+        "category": "navigation",
+        "description": "Navigate to a URL. Enforces domain security policies and rate limits prior to navigation. Waits for network idle and DOM readiness. Supports internal protocol schemes (e.g. weavetab://).",
+        "features": [
+          "Domain policy engine and blocklist enforcement",
+          "Deterministic DOM stability and network idle waiting",
+          "weavetab:// internal protocol support",
+          "Targeted tab navigation via tab_id"
+        ]
+      },
+      "browser_click": {
+        "category": "input",
+        "description": "Click a DOM element. Physical click engine incorporating Bézier curve trajectory kinematics (Ghost Cursor). Multi-stage targeting fallback: ref ID -> selector -> label -> intent -> coordinates -> backendNodeId.",
+        "features": [
+          "Bézier curve trajectory kinematics",
+          "Humanized acceleration and velocity curves",
+          "Multi-stage fallback targeting resolution",
+          "Intent-based historical strategy resolution",
+          "Single-call post-click page map retrieval (include_map)",
+          "Shadow DOM element targeting"
+        ]
+      },
+      "browser_type": {
+        "category": "input",
+        "description": "Type text into a single input field. Keystroke dispatch engine with per-character temporal jitter and burst profiling. Real-time DOM-diffing monitors stuck input state. Supports atomic clearFirst and clipboard paste modes.",
+        "features": [
+          "Per-character temporal jitter simulation",
+          "Burst keystroke profiling",
+          "Stuck-typing loop detection via DOM diffing",
+          "Atomic input value resetting (clearFirst)",
+          "Clipboard paste injection for long text"
+        ]
+      },
+      "browser_type_secret": {
+        "category": "input",
+        "description": "Inject a secret from an environment variable / secrets.json. Blind Injection: securely injects credentials without exposing sensitive values to the LLM context. Permanently masked as [REDACTED] in DOM maps and logs.",
+        "features": [
+          "Zero LLM context exposure for credentials",
+          "Domain-scoped authorization checks",
+          "Shadow DOM input isolation",
+          "Permanent [REDACTED] masking across logs and snapshots"
+        ]
+      },
+      "browser_key": {
+        "category": "input",
+        "description": "Press a keyboard key. Dispatches native hardware key events with modifier key support (Ctrl, Shift, Alt, Meta) to focused elements.",
+        "features": [
+          "Native key code and key identifier mapping",
+          "Modifier key combination handling",
+          "Per-tab keyboard focus targeting"
+        ]
+      },
+      "browser_scroll": {
+        "category": "input",
+        "description": "Scroll the page or targeted element. Smooth scrolling engine via CDP Input.dispatchMouseEvent wheel events. Supports directional delta scrolling and element-relative scroll centering.",
+        "features": [
+          "Directional scrolling (up, down, left, right)",
+          "Configurable pixel scroll distance",
+          "Element-relative scroll targeting via ref ID or label"
+        ]
+      },
+      "browser_dialog": {
+        "category": "dialog_and_interaction",
+        "description": "Accept or dismiss JS dialogs (alert, confirm, prompt) via CDP Page.handleJavaScriptDialog.",
+        "features": [
+          "Handling of alert, confirm, and prompt modal types",
+          "Accept and dismiss actions",
+          "Prompt response text payload submission"
+        ]
+      },
+      "browser_burst": {
+        "category": "mission_execution",
+        "description": "Chain multiple tool calls in one round-trip. High-throughput macro execution engine executing serial action pipelines in a single MCP request, bypassing JSON-RPC serialization overhead. Supports macro steps: type_and_send, navigate_and_read, click_and_wait, scroll_and_read, fill_form, drag_and_drop (ref -> end_ref), and hover_and_read.",
+        "features": [
+          "Single-request multi-action pipeline execution",
+          "Compound macro step abstractions (type_and_send, navigate_and_read, click_and_wait, scroll_and_read, fill_form, drag_and_drop, hover_and_read)",
+          "Automatic loop counter reset on execution start"
+        ]
+      },
+      "browser_tabs": {
+        "category": "tabs",
+        "description": "Manage browser tabs (open, switch, close, list, consolidate, heal, list_windows, focus_window). Full CRUD lifecycle management for tabs and windows.",
+        "features": [
+          "Single and batch tab operations",
+          "Duplicate tab consolidation",
+          "Crash session recovery (heal)",
+          "Background tab targeting",
+          "URL tab reuse prevention"
+        ]
+      },
+      "browser_wait": {
+        "category": "navigation",
+        "description": "Pause until a condition is met ('element', 'text', 'url', 'stable', 'network', 'auto'). Deterministic wait engine for asynchronous web state synchronization.",
+        "features": [
+          "Element, text, URL, DOM stability, and network idle conditions",
+          "Configurable timeout thresholds",
+          "Per-tab asynchronous execution target",
+          "Heuristic auto-condition resolution"
+        ]
+      },
+      "browser_thoughts": {
+        "category": "dialog_and_interaction",
+        "description": "Agent-to-user communication layer rendered as a Shadow DOM overlay. Supports 'question' mode (two-way blocking prompt) and 'feedback' mode (one-way green sticky status update). Consolidates former ask/feedback tools.",
+        "features": [
+          "Shadow DOM HUD thought bubble overlay",
+          "Feedback mode (asynchronous status notification)",
+          "Question mode (blocking interactive user response)",
+          "Sentence and paragraph user input modes",
+          "Configurable response timeout"
+        ]
+      },
+      "browser_pointer": {
+        "category": "input",
+        "description": "Advanced pointer control (hover, click, double_click, drag_and_drop) with Bézier curve kinematics. Supports waitForChild pattern for dynamic flyout menus.",
+        "features": [
+          "Hover, click, double_click, and drag_and_drop actions",
+          "Bézier curve cursor motion",
+          "waitForChild trigger menu resolution",
+          "Configurable hold duration (holdMs)"
+        ]
+      },
+      "browser_select": {
+        "category": "input",
+        "description": "Select an option from a native dropdown by visible text or value. Utilizes native property setters and dispatches input/change events for framework compatibility (React, Vue, Angular).",
+        "features": [
+          "Option matching by visible text or value",
+          "Framework-safe prototype property setter invocation",
+          "Synthetic input and change event dispatch"
+        ]
+      },
+      "browser_fill": {
+        "category": "input",
+        "description": "Smart multi-field form-filling. Evaluates field control types (text, select, checkbox, radio, contenteditable) and processes inputs sequentially with atomic verification.",
+        "features": [
+          "Multi-field batch input execution",
+          "Automatic control type classification",
+          "Per-field post-input verification",
+          "Optional form submission click step"
+        ]
+      },
+      "browser_plan": {
+        "category": "mission_execution",
+        "description": "Create or update a live task panel in the browser. Renders a real-time task dashboard within a Shadow DOM overlay displaying goal progress and step status.",
+        "features": [
+          "Real-time task state and progress display",
+          "Isolated Shadow DOM layout structure",
+          "Structured task state tracking (pending, in-progress, done, failed)"
+        ]
+      },
+      "browser_highlight": {
+        "category": "canvas_and_visual",
+        "description": "Highlight an element with a colored overlay. Renders temporary visual CDP overlay highlights over target elements without DOM tree mutations.",
+        "features": [
+          "CDP visual overlay highlighting",
+          "Configurable overlay color and duration",
+          "Targeting via ref ID, selector, or nodeId"
+        ]
+      },
+      "browser_upload": {
+        "category": "input",
+        "description": "Upload files to a file input. Bypasses OS native file pickers via CDP DOM.setFileInputFiles directly targeting file input node IDs using absolute file paths.",
+        "features": [
+          "Direct CDP file payload injection",
+          "Multi-file payload support",
+          "Zero OS file picker interaction required"
+        ]
+      },
+      "browser_find": {
+        "category": "vision",
+        "description": "Sub-5ms CDP text search. Zero token waste. Best for locating specific keywords/text on page without a full DOM walk.",
+        "features": [
+          "Native CDP search (zero DOM walk overhead)",
+          "Sub-5ms execution latency",
+          "Exact keyword matching and match indexing"
+        ]
+      },
+      "browser_storage": {
+        "category": "storage_and_cookies",
+        "description": "Manage localStorage and sessionStorage. Reads, writes, and clears key-value pairs for the active origin.",
+        "features": [
+          "localStorage and sessionStorage scope targeting",
+          "Atomic key-value retrieval and mutation",
+          "Origin storage purging"
+        ]
+      },
+      "browser_network_intercept": {
+        "category": "network",
+        "description": "Intercept/stub network responses (mock APIs, block tracking) and capture raw protocol network telemetry (TLS/SSL certificate metadata, microsecond timing breakdown, and OS-level network failure reasons).",
+        "features": [
+          "URL glob pattern matching and response mocking",
+          "TLS/SSL Certificate security metadata (issuer, protocol, validity, cipher)",
+          "Microsecond Network Timing breakdown (DNS, TCP, SSL, send, TTFB, download)",
+          "OS-level network failure diagnostics (net::ERR_* codes, blocked reasons)"
+        ]
+      },
+      "browser_console": {
+        "category": "vision",
+        "description": "1-5ms latency access to buffered browser console messages, JS exceptions, and network errors tracked via CDP Runtime.consoleAPICalled.",
+        "features": [
+          "Buffered console output stream retrieval",
+          "Buffer clearance actions",
+          "Runtime exception stack capture",
+          "Timestamped severity logging"
+        ]
+      },
+      "browser_pdf": {
+        "category": "output",
+        "description": "Print the current page to a PDF file via CDP Page.printToPDF with configurable orientation, scale, and page ranges.",
+        "features": [
+          "Landscape and portrait orientation options",
+          "Print scale factor adjustment",
+          "Page range subset printing",
+          "Direct filesystem destination output"
+        ]
+      },
+      "browser_eval": {
+        "category": "evaluation",
+        "description": "Run arbitrary JS via CDP in page context via CDP Runtime.evaluate. Supports asynchronous evaluation and structured JSON serialization.",
+        "features": [
+          "Page JS context execution",
+          "Async/await promise resolution",
+          "Structured JSON return serialization",
+          "Role-based authorization checks"
+        ]
+      },
+      "browser_cookies": {
+        "category": "storage_and_cookies",
+        "description": "Manage browser cookies. Full CRUD management for HTTP and document cookies via CDP Network domain.",
+        "features": [
+          "Cookie property retrieval, setting, and deletion",
+          "Domain and path attribute scoping"
+        ]
+      },
+      "browser_canvas": {
+        "category": "canvas_and_visual",
+        "description": "For ALL canvas content (charts, games, graphs). Use get_image to read pixel data as Base64 PNG, draw to simulate programmatic coordinate gesture paths.",
+        "features": [
+          "Base64 PNG pixel buffer export",
+          "Programmatic gesture path drawing",
+          "Canvas node targeting via ref ID or selector"
+        ]
+      },
+      "browser_scrape": {
+        "category": "vision",
+        "description": "Sub-5ms latency, zero waste extraction via CSS or XPath selectors in a single CDP evaluation step. Returns structured text/attribute arrays.",
+        "features": [
+          "CSS and XPath query evaluation",
+          "Targeted attribute extraction",
+          "Single-step execution (high throughput)",
+          "Single-element and array extraction modes"
+        ]
+      },
+      "browser_snapshot": {
+        "category": "vision",
+        "description": "Capture or restore an MHTML snapshot (DOM + inline assets). Facilitates offline state serialization, replay verification, and compliance auditing.",
+        "features": [
+          "Full DOM and asset stream serialization",
+          "Atomic capture and restore operations",
+          "Offline state audit capability"
+        ]
+      },
+      "browser_screenshot": {
+        "category": "vision",
+        "description": "95-135ms capture latency via CDP Page.captureScreenshot. Supports PNG and JPEG formats, full-page rendering, and clip region bounding boxes.",
+        "features": [
+          "Full-page and viewport bounding box capture",
+          "PNG and JPEG format encoding",
+          "Custom clip region bounding box support",
+          "In-memory Base64 data URL output (zero disk I/O)"
+        ]
+      },
+      "browser_viewport": {
+        "category": "device_and_environment",
+        "description": "Set viewport dimensions and device emulation (width, height, DPR, mobile, geolocation, timezone, locale, color scheme).",
+        "features": [
+          "Viewport width, height, and DPR emulation",
+          "Mobile viewport and touch event emulation",
+          "Geolocation coordinate override",
+          "IANA timezone and locale override",
+          "Color scheme preference override (light/dark)"
+        ]
+      },
+      "browser_clipboard": {
+        "category": "dialog_and_interaction",
+        "description": "Read or write to the system clipboard (plaintext or Base64 image payload data).",
+        "features": [
+          "Read and write data operations",
+          "Plaintext and Base64 image payload format support"
+        ]
+      },
+      "browser_inspect": {
+        "category": "vision",
+        "description": "15-35ms latency, zero waste. Deep DOM inspection returning computed styles, inline styles, box model dimensions, and attached event listener types.",
+        "features": [
+          "Computed CSS style property inspection",
+          "Event listener type registration enumeration",
+          "Box model geometry verification",
+          "Targeting via ref ID, selector, or nodeId"
+        ]
+      },
+      "browser_extract_design": {
+        "category": "vision",
+        "description": "Extract design tokens (colors, typography, spacing, shadows, CSS variables), semantic HTML layouts, and clean CSS into structured files and an LLM design blueprint. Ideal for cloning websites, UI components, and design systems with 100% pixel fidelity.",
+        "features": [
+          "CSS custom properties and design token harvesting",
+          "Palette extraction and typography hierarchy mapping",
+          "Semantic clean DOM extraction with inline SVGs preserved",
+          "Automatic file persistence into configurable designDir (~/.weavetab/designs/)",
+          "Tailwind CSS theme.extend preset generation",
+          "Compact LLM summary preventing context window bloat"
+        ]
+      },
+      "browser_automation": {
+        "category": "mission_execution",
+        "description": "Inject self-running background script for monitoring/polling. Inject persistent scripts into the page context for continuous event tracking.",
+        "features": [
+          "Background script context injection",
+          "Named automation script management",
+          "Decoupled event monitoring lifecycle"
+        ]
+      },
+      "browser_recording": {
+        "category": "output",
+        "description": "Record video screencasts of browser sessions. Automatically compiles captured frames into animated video files (.webp, .gif, .webm, .mp4) using native Node processing or system ffmpeg.",
+        "features": [
+          "Native WebP/GIF animation compilation in pure Node",
+          "Configurable FPS and frame limits",
+          "FFmpeg fallback for WebM/MP4 encoding",
+          "Automated raw frame cleanup"
+        ]
+      },
+      "browser_reset_loop_counter": {
+        "category": "wait_and_timing",
+        "description": "Reset the loop detection strike counter to zero when legitimate repetitive actions flag automated safeguards.",
+        "features": [
+          "Atomic strike counter reset",
+          "Explicit reset reason logging"
+        ]
+      },
+      "browser_detect": {
+        "category": "tabs",
+        "description": "Detect available browsers on the machine and report CDP feature coverage per engine (Chromium, Firefox, WebKit).",
+        "features": [
+          "Local browser engine discovery",
+          "Engine CDP API coverage analysis",
+          "Tool compatibility reporting per browser engine"
+        ]
+      },
+      "browser_performance": {
+        "category": "performance",
+        "description": "Retrieve page performance metrics. Collects Core Web Vitals (FCP, LCP, CLS) and detailed network resource timing distributions.",
+        "features": [
+          "First Contentful Paint (FCP) and Largest Contentful Paint (LCP) capture",
+          "Cumulative Layout Shift (CLS) tracking",
+          "Resource loading timing distributions"
+        ]
+      },
+      "browser_macro_compile": {
+        "category": "macro",
+        "description": "Compile a recent action trail into a reusable browser_burst macro sequence for deterministic replay.",
+        "features": [
+          "Interaction trail analysis and compilation",
+          "Reusable macro structure generation",
+          "Full compatibility with browser_burst engine"
+        ]
+      },
+      "github_analyze": {
+        "category": "github",
+        "description": "Analyze a GitHub repository structure, file tree, and README snippet directly via raw endpoints without API key rate limits.",
+        "features": [
+          "Repository metadata parsing",
+          "Directory tree listing",
+          "README payload extraction",
+          "Zero GitHub API token requirement"
+        ]
+      },
+      "github_read": {
+        "category": "github",
+        "description": "Read file contents from a GitHub repository via raw content endpoints.",
+        "features": [
+          "Raw file content retrieval",
+          "Branch, tag, and commit ref targeting",
+          "Line range subset reading"
+        ]
+      },
+      "github_issues": {
+        "category": "github",
+        "description": "Interact with GitHub issues. List, search, and fetch issue details with comment threads.",
+        "features": [
+          "Issue state filtering (open, closed, all)",
+          "Full-text issue search",
+          "Comment thread extraction"
+        ]
+      },
+      "github_get_pr": {
+        "category": "github",
+        "description": "Interact with GitHub pull requests. Retrieve metadata, changed files, diff summaries, and review comments.",
+        "features": [
+          "Pull request metadata parsing",
+          "Changed file list enumeration",
+          "Review comment thread extraction"
+        ]
+      }
+    },
+    "resources": {
+      "session_memory": {
+        "description": "Per-domain persistent profile store (~/.weavetab-system/memory/) tracking detected web frameworks, Shadow DOM utilization, and interaction strategies across sessions.",
+        "features": [
+          "Framework detection (React, Vue, Angular, Lit, Svelte, Next, Nuxt, Gatsby)",
+          "Successful selector strategy caching",
+          "Interaction history accumulation"
+        ]
+      },
+      "knowledge_hints": {
+        "description": "Domain-specific hint storage (~/.weavetab/knowledge/[domain].md) injecting context notes into session prompts.",
+        "features": [
+          "Domain quirk notes",
+          "Timestamped entry tracking",
+          "Prompt context injection budget (20 tokens)"
+        ]
+      },
+      "trail_log": {
+        "description": "Rolling 50-action window (~/.weavetab-system/sessions/context.json) powering strike-based loop detection algorithms.",
+        "features": [
+          "50-action rolling window tracking",
+          "Strike-based loop detection heuristics",
+          "Auto-reset triggers on navigation, tab switch, or burst start"
+        ]
+      },
+      "network_telemetry": {
+        "description": "Real-time network event tracking via CDP Network domain measuring request/response timing and HTTP error rates.",
+        "features": [
+          "Request and response latency tracking",
+          "Resource classification",
+          "HTTP status code tracking"
+        ]
+      },
+      "mutation_observer": {
+        "description": "CDP-driven DOM mutation tracking measuring dynamic subtree changes for SPA stabilization.",
+        "features": [
+          "Attribute mutation tracking",
+          "Node insertion/removal events",
+          "Subtree modification tracking"
+        ]
+      }
+    },
+    "intelligence": {
+      "semantic_delta_engine": {
+        "description": "Per-tab DOM state diffing engine returning strictly modified elements between snapshots, cutting prompt token consumption up to 97%.",
+        "features": [
+          "Per-tab baseline snapshot storage",
+          "Property-level change detection (label, value, state, class)",
+          "Action recommendation generation"
+        ]
+      },
+      "semantic_dom_pruner": {
+        "description": "AST-based DOM compression algorithm executed before snapshot returns. Removes non-interactive hidden elements and converts SVG icons to tokens.",
+        "features": [
+          "Hidden element pruning",
+          "SVG icon compression",
+          "Interactive tree preservation"
+        ]
+      },
+      "vision_fallback": {
+        "description": "Local pixel analysis pipeline utilizing sharp for visual layout evaluation when accessibility trees return zero nodes.",
+        "pipeline": "AX Tree Check -> Screenshot -> Grayscale -> 4x4 Grid Heatmap -> Text Density -> Clickable Region Analysis",
+        "features": [
+          "Local execution (zero external API dependencies)",
+          "4x4 visual density grid heatmap",
+          "Clickable zone classification"
+        ]
+      },
+      "loop_detection": {
+        "description": "Strike-based loop detection algorithm over rolling 50-action windows with automated escalation.",
+        "thresholds": {
+          "0-4 strikes": "Normal execution",
+          "5-9 strikes": "Warning notification in HUD",
+          "10+ strikes": "Stuck state classification and auto-recovery activation"
+        },
+        "features": [
+          "Rolling action window evaluation",
+          "Escalating alert tiers",
+          "Manual reset via browser_reset_loop_counter"
+        ]
+      },
+      "framework_detection": {
+        "description": "Heuristic detection of web application frameworks via CDP Runtime.evaluate probes.",
+        "detectedFrameworks": [
+          "React",
+          "Vue",
+          "Angular",
+          "Lit",
+          "Svelte",
+          "Next",
+          "Nuxt",
+          "Gatsby"
+        ],
+        "features": [
+          "Zero-overhead runtime probing",
+          "Shadow DOM usage identification",
+          "Domain memory persistence"
+        ]
+      },
+      "intent_resolution": {
+        "description": "Semantic element resolution resolving natural language action descriptions to DOM ref IDs using session memory scoring.",
+        "features": [
+          "Natural language intent scoring",
+          "Historical selector memory integration",
+          "Live DOM context matching"
+        ]
+      }
+    },
+    "security": {
+      "rbac": {
+        "description": "Role-Based Access Control enforcing tool execution boundaries based on configured session role.",
+        "roles": {
+          "admin": "Full access to all 42 tools and system operations",
+          "system": "Full tool access excluding system-level operations",
+          "viewer": "Read-only access (browser_map, browser_find, browser_scrape, browser_screenshot, browser_inspect, browser_snapshot, browser_console, browser_pdf, browser_storage, browser_cookies, browser_tabs, browser_wait, github_*)",
+          "automation": "Restricted execution set for non-interactive automated workflows"
+        }
+      },
+      "domain_policy": {
+        "description": "Domain-level access control policy engine configured via ~/.weavetab/policy.json with enforced security domain blocklists.",
+        "modes": {
+          "allow": "Unrestricted tool access",
+          "read-only": "Mutation tool execution blocked",
+          "deny": "Navigation and interaction blocked",
+          "audit": "Unrestricted access with enhanced audit logging"
+        }
+      },
+      "rate_limiting": {
+        "description": "Mutex-guarded rate limiter enforcing maximum action frequencies.",
+        "features": [
+          "Configurable action per minute threshold (default 60)",
+          "Mutex lock enforcement",
+          "Clear rate limit exception messaging"
+        ]
+      },
+      "blind_injection": {
+        "description": "Credential injection via browser_type_secret. Resolves secret values server-side from secrets.json without context exposure to the LLM.",
+        "secretsFormat": {
+          "KEY_NAME": {
+            "value": "secret-value",
+            "domains": [
+              "example.com"
+            ],
+            "description": "Secret description"
+          }
+        },
+        "resolutionOrder": [
+          "./.weavetab/secrets.json (project)",
+          "~/.weavetab/secrets.json (global)"
+        ]
+      },
+      "input_filter": {
+        "description": "Sanitizes DOM snapshots before context return by stripping prompt injection patterns and invisible characters.",
+        "features": [
+          "Prompt injection pattern filtering",
+          "Control character stripping",
+          "Excessive label length truncation"
+        ]
+      },
+      "additional_mechanisms": {
+        "localhost_binding": "CDP WebSocket connection restricted strictly to 127.0.0.1",
+        "root_guard": "Startup execution block for root/superuser processes (Unix)",
+        "storage_blocker": "Configurable nullification of web storage and document.cookie",
+        "atomic_config_writes": "Atomic configuration file writes via temporary file renaming",
+        "path_traversal_protection": "Strict validation of download and profile directories against path traversal",
+        "two_factor_lock_validation": "Browser lock verification via PID liveness and TCP port checks"
+      }
+    },
+    "transport": {
+      "stdio": {
+        "description": "Standard JSON-RPC over stdio streams. Default mode for MCP clients.",
+        "default": true,
+        "cli": "weavetab"
+      },
+      "websocket": {
+        "description": "JSON-RPC over WebSocket for distributed agent pipelines.",
+        "default": false,
+        "configurable": true
+      }
+    },
+    "overlay": {
+      "hud": {
+        "description": "Shadow DOM HUD overlay injected into browser tabs displaying execution state and thoughts.",
+        "features": [
+          "Mission status display",
+          "Thought bubble rendering",
+          "Task plan visualization",
+          "Shadow DOM isolation"
+        ]
+      },
+      "ghost_cursor": {
+        "description": "Visual pointer trajectory overlay displaying humanized Bézier motion during interaction.",
+        "features": [
+          "Bézier trajectory visualization",
+          "Acceleration curve rendering",
+          "Target element highlight overlay"
+        ]
+      }
+    },
+    "plugins": {
+      "description": "Dynamic plugin system discovering any npm package containing weavetab.json and @weavetab/plugin-* packages at startup.",
+      "manifest": "weavetab.json",
+      "features": [
+        "Automatic package discovery",
+        "Native MCP tool registration",
+        "Unified security pipeline integration"
+      ]
+    },
+    "skills": {
+      "description": "Optional companion package (@weavetab/skills) providing mission templates.",
+      "package": "@weavetab/skills",
+      "repository": "https://github.com/weavetab/skills",
+      "install": "npm install -g @weavetab/skills",
+      "availableSkills": [
+        "Multi-step Form Automation",
+        "E-commerce Checkout",
+        "Data Extraction Pipelines",
+        "Content Management Systems",
+        "API Testing & Validation"
+      ]
+    }
+  },
+  "configuration": {
+    "configLocations": {
+      "global": "~/.weavetab/config.json",
+      "project": ".weavetab/config.json (precedes global)"
+    },
+    "options": {
+      "browserType": {
+        "type": "string",
+        "default": "chromium",
+        "options": [
+          "chromium",
+          "firefox",
+          "webkit"
+        ],
+        "description": "Browser engine target"
+      },
+      "headless": {
+        "type": "boolean",
+        "default": false,
+        "description": "Headless mode toggle"
+      },
+      "devMode": {
+        "type": "boolean",
+        "default": false,
+        "description": "Verbose CDP logging and HUD overlay toggle"
+      },
+      "maxActionsPerMinute": {
+        "type": "number",
+        "default": 60,
+        "description": "Action rate limit threshold"
+      },
+      "role": {
+        "type": "string",
+        "default": "admin",
+        "options": [
+          "admin",
+          "system",
+          "viewer",
+          "automation"
+        ],
+        "description": "Session RBAC role"
+      },
+      "telemetry": {
+        "type": "boolean",
+        "default": false,
+        "description": "Opt-in anonymous usage telemetry toggle"
+      },
+      "attachPort": {
+        "type": "number",
+        "default": 0,
+        "description": "Chrome DevTools Protocol attach port"
+      },
+      "disableExtensions": {
+        "type": "boolean",
+        "default": false,
+        "description": "Disable Weavetab Chrome extension integration"
+      },
+      "maxTabs": {
+        "type": "number",
+        "default": 10,
+        "description": "Maximum tracked tab count"
+      },
+      "navigationTimeout": {
+        "type": "number",
+        "default": 3600,
+        "description": "Navigation timeout in seconds"
+      },
+      "actionabilityTimeoutMs": {
+        "type": "number",
+        "default": 500,
+        "description": "Element actionability wait timeout in ms"
+      }
+    },
+    "domainPolicy": {
+      "location": "~/.weavetab/policy.json",
+      "format": {
+        "policies": [
+          {
+            "pattern": "*.example.com",
+            "mode": "allow | read-only | deny | audit"
+          }
+        ]
+      }
+    },
+    "secretsManagement": {
+      "locations": [
+        ".weavetab/secrets.json (project-scoped)",
+        "~/.weavetab/secrets.json (global default)"
+      ],
+      "cli": [
+        "weavetab secrets set KEY_NAME",
+        "weavetab secrets list",
+        "weavetab secrets rm KEY_NAME",
+        "weavetab secrets init --project"
+      ],
+      "format": {
+        "KEY_NAME": {
+          "value": "secret-value",
+          "domains": [
+            "example.com"
+          ],
+          "description": "Secret description"
+        }
+      }
+    }
+  },
+  "metadata": {
+    "total_tools": 42,
+    "tool_categories": 15,
+    "latency": "3-8ms mean",
+    "token_efficiency": "Up to 97% reduction via semantic delta engine + DOM pruner",
+    "architecture": "Direct CDP WebSocket (Layer 0) — zero WebDriver, Playwright, or Puppeteer wrapper overhead",
+    "security": "Domain blacklist + RBAC (4 roles) + rate limiting + Blind Injection (secrets.json)",
+    "session_memory": "Persistent per-domain profiles with framework detection and strategy caching",
+    "loop_detection": "Strike-based (50-action window), auto-recovery at 10+ strikes",
+    "plugin_system": "Dynamic universal weavetab.json & @weavetab/plugin-* auto-discovery",
+    "skills_package": "@weavetab/skills — https://github.com/weavetab/skills",
+    "transport": "stdio (default) or WebSocket (--ws)",
+    "binary": [
+      "weavetab"
+    ]
+  }
+}

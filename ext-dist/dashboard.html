@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Weavetab AI Voice Hub</title>
+  <style>
+    :root {
+      --bg: #050506;
+      --panel-bg: rgba(13, 13, 16, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --accent: #8b5cf6;
+      --accent-glow: rgba(139, 92, 246, 0.4);
+      --text: #fafafa;
+      --text-muted: #71717a;
+      --orb-idle: #3f3f46;
+      --orb-active: #8b5cf6;
+      --orb-speaking: #3b82f6;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      background: var(--bg); 
+      color: var(--text); 
+      font-family: 'Inter', system-ui, -apple-system, sans-serif; 
+      overflow-x: hidden;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .bg-glow {
+      position: fixed;
+      top: -20vh;
+      left: -20vw;
+      width: 60vw;
+      height: 60vh;
+      background: radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, rgba(0,0,0,0) 70%);
+      z-index: -1;
+      pointer-events: none;
+    }
+    .bg-glow-2 {
+      position: fixed;
+      bottom: -20vh;
+      right: -20vw;
+      width: 60vw;
+      height: 60vh;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.05) 0%, rgba(0,0,0,0) 70%);
+      z-index: -1;
+      pointer-events: none;
+    }
+    
+    header {
+      padding: 20px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: rgba(5, 5, 6, 0.8);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 1.2rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .branch-badge {
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      color: #c4b5fd;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-family: monospace;
+    }
+    
+    main {
+      flex: 1;
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    .panel {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 32px;
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+    }
+    .panel-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    /* --- VOICE SYSTEM UI --- */
+    .voice-hub {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 40px;
+      text-align: center;
+      padding: 60px 0;
+    }
+    
+    .orb-container {
+      position: relative;
+      width: 200px;
+      height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .orb-container:hover { transform: scale(1.05); }
+    .orb-container:active { transform: scale(0.95); }
+    
+    .orb {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: var(--orb-idle);
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+      transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 2;
+    }
+    .orb.listening {
+      background: var(--orb-active);
+      box-shadow: 0 0 40px var(--accent-glow), 0 0 80px rgba(139, 92, 246, 0.2);
+      transform: scale(1.2);
+    }
+    .orb.speaking {
+      background: var(--orb-speaking);
+      box-shadow: 0 0 40px rgba(59, 130, 246, 0.4), 0 0 80px rgba(59, 130, 246, 0.2);
+    }
+    
+    .orb-ring {
+      position: absolute;
+      border: 2px solid var(--border);
+      border-radius: 50%;
+      transition: all 0.5s ease;
+      z-index: 1;
+    }
+    .ring-1 { width: 140px; height: 140px; animation: rotate 10s linear infinite; }
+    .ring-2 { width: 180px; height: 180px; animation: rotate 15s linear infinite reverse; border-style: dashed; }
+    
+    @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    
+    .voice-status {
+      font-size: 1.5rem;
+      font-weight: 500;
+      color: var(--text);
+      min-height: 1.5em;
+      transition: opacity 0.3s;
+    }
+    .voice-transcript {
+      font-size: 1rem;
+      color: var(--text-muted);
+      max-width: 600px;
+      min-height: 1.5em;
+      font-style: italic;
+    }
+    
+    .voice-controls {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+    .btn-voice {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 12px 24px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    .btn-voice:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2); }
+    .btn-voice.active { background: var(--accent); border-color: var(--accent); color: white; }
+    
+    /* --- Permissions Grid --- */
+    .permissions-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .perm-btn {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 16px;
+      border-radius: 16px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+      transition: all 0.2s ease;
+      font-family: inherit;
+      text-align: left;
+    }
+    .perm-btn:hover { background: rgba(255, 255, 255, 0.07); transform: translateY(-2px); }
+    .perm-icon { font-size: 1.25rem; margin-bottom: 4px; }
+    .perm-label { font-weight: 500; font-size: 0.9rem; }
+    .perm-desc { font-size: 0.8rem; color: var(--text-muted); }
+    
+    /* --- Workspace --- */
+    #workspace-panel { margin-top: 32px; }
+    #canvas-container { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 100%; }
+    canvas { background: #000; border: 1px solid var(--border); border-radius: 16px; max-width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+    #content-area { display: none; width: 100%; background: #fff; color: #000; border-radius: 16px; min-height: 600px; padding: 24px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="bg-glow-2"></div>
+  
+  <header>
+    <div class="brand">
+      <span style="color: var(--accent);">✦</span> Weavetab <span style="font-weight: 300; opacity: 0.6; margin-left: 4px;">VoiceHub</span>
+    </div>
+    <div class="branch-badge" id="branch-display">branch: default</div>
+  </header>
+  
+  <main>
+    <!-- Voice Interface Panel -->
+    <div class="panel">
+      <div class="panel-title">AI Voice Command System</div>
+      <div class="voice-hub">
+        <div class="orb-container" id="voice-trigger">
+          <div class="orb-ring ring-1"></div>
+          <div class="orb-ring ring-2"></div>
+          <div class="orb" id="voice-orb"></div>
+        </div>
+        
+        <div class="voice-status" id="status-text">Ready to listen</div>
+        <div class="voice-transcript" id="transcript-text">"Click the orb or press Space to speak"</div>
+        
+        <div class="voice-controls">
+          <button class="btn-voice" id="btn-listen">Start Listening</button>
+          <button class="btn-voice" id="btn-voice-settings">Voice Settings</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Permissions Panel -->
+    <div class="panel">
+      <div class="panel-title">System Permissions</div>
+      <div class="permissions-grid">
+        <button class="perm-btn" onclick="requestMic()">
+          <span class="perm-icon">🎤</span>
+          <span class="perm-label">Microphone</span>
+          <span class="perm-desc">Required for Realtime Voice</span>
+        </button>
+        <button class="perm-btn" onclick="requestCamera()">
+          <span class="perm-icon">📷</span>
+          <span class="perm-label">Camera</span>
+          <span class="perm-desc">Grant video stream access</span>
+        </button>
+        <button class="perm-btn" onclick="requestGeolocation()">
+          <span class="perm-icon">📍</span>
+          <span class="perm-label">Location</span>
+          <span class="perm-desc">Allow location services</span>
+        </button>
+        <button class="perm-btn" onclick="requestNotifications()">
+          <span class="perm-icon">🔔</span>
+          <span class="perm-label">Notifications</span>
+          <span class="perm-desc">Allow system alerts</span>
+        </button>
+      </div>
+    </div>
+    
+    <!-- Workspace Panel -->
+    <div class="panel" id="workspace-panel">
+      <div class="panel-title">Workspace</div>
+      <div id="canvas-container">
+        <canvas id="wt-canvas" width="800" height="600"></canvas>
+      </div>
+      <div id="content-area"></div>
+    </div>
+  </main>
+  
+  <script>
+    // --- Infrastructure Setup ---
+    const urlParams = new URLSearchParams(window.location.search);
+    const branch = urlParams.get('branch') || 'default';
+    document.getElementById('branch-display').textContent = `branch: ${branch}`;
+
+    // --- Voice System Implementation ---
+    class WeavetabVoiceSystem {
+      constructor() {
+        this.orb = document.getElementById('voice-orb');
+        this.status = document.getElementById('status-text');
+        this.transcript = document.getElementById('transcript-text');
+        this.btnListen = document.getElementById('btn-listen');
+        this.trigger = document.getElementById('voice-trigger');
+        
+        this.isListening = false;
+        this.isSpeaking = false;
+        
+        // Speech Recognition Setup
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+          this.status.textContent = "Speech API not supported";
+          this.status.style.color = "#ef4444";
+          return;
+        }
+        
+        this.recognition = new SpeechRecognition();
+        this.recognition.continuous = false;
+        this.recognition.interimResults = true;
+        this.recognition.lang = 'en-US';
+        
+        this.initEventListeners();
+        this.setupRecognition();
+      }
+      
+      initEventListeners() {
+        this.btnListen.onclick = () => this.toggleListening();
+        this.trigger.onclick = () => this.toggleListening();
+        
+        window.addEventListener('keydown', (e) => {
+          if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+            e.preventDefault();
+            this.toggleListening();
+          }
+        });
+      }
+      
+      setupRecognition() {
+        this.recognition.onstart = () => {
+          this.isListening = true;
+          this.updateUI('listening');
+        };
+        
+        this.recognition.onresult = (event) => {
+          const result = event.results[0][0].transcript;
+          this.transcript.textContent = `"${result}"`;
+          
+          if (event.results[0].isFinal) {
+            this.handleVoiceCommand(result);
+          }
+        };
+        
+        this.recognition.onerror = (e) => {
+          console.error("Voice Error:", e);
+          this.stopListening();
+          this.status.textContent = "Error capturing voice";
+        };
+        
+        this.recognition.onend = () => {
+          if (this.isListening) this.recognition.start(); // Keep alive if we intend to listen
+          else this.stopListening();
+        };
+      }
+      
+      toggleListening() {
+        if (this.isListening) this.stopListening();
+        else this.startListening();
+      }
+      
+      startListening() {
+        try {
+          this.recognition.start();
+          this.btnListen.classList.add('active');
+        } catch (e) {
+          console.error("Start Error:", e);
+        }
+      }
+      
+      stopListening() {
+        this.isListening = false;
+        this.recognition.stop();
+        this.btnListen.classList.remove('active');
+        this.updateUI('idle');
+      }
+      
+      updateUI(state) {
+        this.orb.className = 'orb';
+        if (state === 'listening') {
+          this.orb.classList.add('listening');
+          this.status.textContent = "I'm listening...";
+        } else if (state === 'speaking') {
+          this.orb.classList.add('speaking');
+          this.status.textContent = "Weavetab is speaking";
+        } else {
+          this.status.textContent = "Ready to listen";
+        }
+      }
+      
+      async handleVoiceCommand(text) {
+        this.stopListening();
+        this.status.textContent = "Processing...";
+        
+        // Simulate AI Thought
+        setTimeout(() => {
+          const response = this.generateAIResponse(text);
+          this.speak(response);
+        }, 600);
+      }
+      
+      generateAIResponse(text) {
+        const t = text.toLowerCase();
+        if (t.includes('hello') || t.includes('hi')) return "Hello. I am the Weavetab Voice System. How can I assist your workflow today?";
+        if (t.includes('time')) return `The current system time is ${new Date().toLocaleTimeString()}.`;
+        if (t.includes('who are you')) return "I am your enterprise AI agent, integrated directly into the Weavetab core for real-time browser orchestration.";
+        if (t.includes('status')) return "All systems are operational. CDP bridge is active and session is stable.";
+        
+        return `You said: ${text}. I am processing this request through the Weavetab neural bridge.`;
+      }
+      
+      speak(text) {
+        this.isSpeaking = true;
+        this.updateUI('speaking');
+        
+        const utterance = new SpeechSynthesisUtterance(text);
+        
+        // Attempt to find a premium "Enterprise" voice
+        const voices = window.speechSynthesis.getVoices();
+        const premiumVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Samantha') || v.name.includes('Microsoft Aria'));
+        if (premiumVoice) utterance.voice = premiumVoice;
+        
+        utterance.pitch = 0.9; // Slightly deeper for "Enterprise" feel
+        utterance.rate = 1.0;
+        
+        utterance.onend = () => {
+          this.isSpeaking = false;
+          this.updateUI('idle');
+        };
+        
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+    
+    // Initialize Voice System
+    const voiceSystem = new WeavetabVoiceSystem();
+    
+    // --- Go Home Function ---
+    const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
+    function goHome() {
+      // Reset to default branch and clear any error state
+      const url = new URL(window.location.href);
+      url.searchParams.set('branch', 'default');
+      window.location.href = url.toString();
+    }
+    
+    // --- Original Dashboard Logic ---
+    async function requestMic() {
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        alert('Microphone permission granted!');
+      } catch (e) {
+        alert('Microphone permission failed: ' + e.message);
+      }
+    }
+    async function requestCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(t => t.stop());
+        alert('Camera granted!');
+      } catch (e) { alert('Camera failed: ' + e.message); }
+    }
+    function requestGeolocation() {
+      navigator.geolocation.getCurrentPosition(() => alert('Location granted!'), (e) => alert(e.message));
+    }
+    async function requestNotifications() {
+      const p = await Notification.requestPermission();
+      alert('Notification: ' + p);
+    }
+    
+    const canvas = document.getElementById('wt-canvas');
+    const ctx = canvas.getContext('2d');
+    const contentArea = document.getElementById('content-area');
+    const container = document.getElementById('canvas-container');
+    
+    function drawPlaceholder() {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 800, 600);
+      ctx.fillStyle = '#8b5cf6';
+      ctx.font = 'bold 36px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Agent Canvas', 400, 260);
+      ctx.fillStyle = '#a1a1aa';
+      ctx.font = '18px system-ui, sans-serif';
+      ctx.fillText('Real-time Voice Active', 400, 310);
+    }
+    
+    // Add error handling for browserAPI.storage access
+    if (typeof chrome === 'undefined' || !browserAPI.storage || !browserAPI.storage.local) {
+      console.error('Chrome storage API not available');
+      document.body.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#050506;color:#fff;font-family:sans-serif;">
+          <h2 style="color:#ef4444;margin-bottom:20px;">Extension Not Loaded</h2>
+          <p style="margin-bottom:20px;">The WeaveTab extension is not properly loaded.</p>
+          <div style="display:flex;gap:10px;">
+            <button onclick="location.reload()" style="padding:12px 24px;background:#8b5cf6;color:#fff;border:none;border-radius:8px;cursor:pointer;">Retry</button>
+            <button onclick="goHome()" style="padding:12px 24px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;">Go Home</button>
+          </div>
+        </div>
+      `;
+      drawPlaceholder();
+    } else {
+      browserAPI.storage.local.get([`branch_${branch}_html`, `branch_${branch}_canvas`], (result) => {
+        if (browserAPI.runtime.lastError) {
+          console.error('Chrome storage error:', browserAPI.runtime.lastError);
+          document.body.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#050506;color:#fff;font-family:sans-serif;">
+              <h2 style="color:#ef4444;margin-bottom:20px;">Storage Error</h2>
+              <p style="margin-bottom:20px;">${browserAPI.runtime.lastError.message}</p>
+              <div style="display:flex;gap:10px;">
+                <button onclick="location.reload()" style="padding:12px 24px;background:#8b5cf6;color:#fff;border:none;border-radius:8px;cursor:pointer;">Retry</button>
+                <button onclick="goHome()" style="padding:12px 24px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;">Go Home</button>
+              </div>
+            </div>
+          `;
+        } else {
+          if (result[`branch_${branch}_html`]) {
+            contentArea.textContent = result[`branch_${branch}_html`];
+            container.style.display = 'none';
+            contentArea.style.display = 'block';
+          } else {
+            drawPlaceholder();
+          }
+        }
+      });
+    }
+    
+    // Add error handling for storage save interval
+    function safeStorageSave() {
+      if (typeof chrome === 'undefined' || !browserAPI.storage || !browserAPI.storage.local) {
+        return;
+      }
+      try {
+        if (contentArea.style.display === 'block') {
+          browserAPI.storage.local.set({ [`branch_${branch}_html`]: contentArea.innerHTML }).catch(e => {
+            console.error('Storage save error:', e);
+          });
+        } else {
+          browserAPI.storage.local.set({ [`branch_${branch}_canvas`]: canvas.toDataURL() }).catch(e => {
+            console.error('Storage save error:', e);
+          });
+        }
+      } catch (e) {
+        console.error('Storage save error:', e);
+      }
+    }
+    
+    setInterval(safeStorageSave, 1000);
+    
+    window.addEventListener('wt-dashboard-command', (e) => {
+      const { command, params } = e.detail || {};
+      if (command === 'show-canvas') { container.style.display = 'flex'; contentArea.style.display = 'none'; }
+      if (command === 'show-html') { 
+        container.style.display = 'none'; contentArea.style.display = 'block'; 
+        if (params?.html) contentArea.innerHTML = params.html;
+      }
+    });
+  </script>
+</body>
+</html>
