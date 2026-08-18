@@ -1142,53 +1142,11 @@ class WeaveCursor {
 }
 
 // Instantiate the premium cursor
-let __weaveCursor;
-if (window.self === window.top) {
-  if (window.__weaveCursor_instance && window.__weaveCursor_instance.moveTo) {
-    // Reuse existing live instance (page re-run / HMR)
-    __weaveCursor = window.__weaveCursor_instance;
-  } else {
-    // Fresh mount on every page load
-    __weaveCursor = new WeaveCursor();
-  }
-} else {
-  __weaveCursor = { setState: function(){}, moveTo: function(){}, destroy: function(){}, setVisible: function(){}, setWaypoints: function(){} };
-}
-
-// Initialize cursor hidden — only shows when agent actively moves it
-(function() {
-  var initX = window.innerWidth ? window.innerWidth / 2 : 600;
-  var initY = window.innerHeight ? window.innerHeight / 2 : 400;
-  __weaveCursor.setState('idle');
-  // Position canvas directly without moveTo (which starts animation loop + sets _visible=true)
-  if (__weaveCursor._lerpX === -9999) { __weaveCursor._lerpX = initX; __weaveCursor._lerpY = initY; }
-  __weaveCursor._targetX = initX;
-  __weaveCursor._targetY = initY;
-  __weaveCursor._x = initX;
-  __weaveCursor._y = initY;
-  // Start hidden — cursor only appears when agent is working
-  __weaveCursor._visible = false;
-  __weaveCursor._canvas.style.opacity = '0';
-  // Start animation loop so cursor responds to future moveTo calls
-  __weaveCursor._startLoop();
-
-  // Expose instance and mark as ready
-  window.__weaveCursor_instance = __weaveCursor;
-  window.__wt_visualComponents.cursor = true;
-  __wt_initVisuals();
-})();
+let __weaveCursor = { setState: function(){}, moveTo: function(){}, destroy: function(){}, setVisible: function(){}, setWaypoints: function(){} };
+window.__weaveCursor_instance = __weaveCursor;
 
 function moveCursor(x, y, state) {
-  if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) return;
-  // Only show cursor when agent is actively working (non-idle state)
-  // When idle, hide after a brief delay
-  if (state) __weaveCursor.setState(state);
-  if (state && state !== 'idle') {
-    __weaveCursor.moveTo(x, y);
-  } else {
-    __weaveCursor.moveTo(x, y);
-    __weaveCursor._lastMoveTime = 0;
-  }
+  // Cursor visuals disabled
 }
 
 

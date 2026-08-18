@@ -232,21 +232,8 @@ function renderLoop() {
   currY += velY;
 
   if (showScriptedCursorPill) {
-    // Add to trail
-    trail.push({ x: currX, y: currY, age: 0 });
-    if (trail.length > 60) trail.shift(); // Longer trail for more visible movement
-
-    // 3. Draw Trail (Ribbon)
-    drawRibbon();
-
-    // 4. Draw Particles
-    drawParticles();
-
-    // 4.5 Draw Click Waves
+    // Click waves when agent clicks
     drawClickWaves();
-
-    // 5. Draw Cursor (Diamond)
-    drawCursor();
   }
 
   // 6. Draw Emote/Status (handles its own gating)
@@ -369,74 +356,8 @@ function drawClickWaves() {
 }
 
 function drawCursor() {
-  ctx.save();
-  ctx.translate(currX, currY);
-  
-  // Rotate based on velocity
-  const speed = Math.sqrt(velX * velX + velY * velY);
-  if (speed > 0.5) {
-    const angle = Math.atan2(velY, velX);
-    ctx.rotate(angle);
-  }
-
-  // Draw enhanced diamond reticle - more solid and visible
-  ctx.beginPath();
-  const scale = phase === 'clicking' ? 0.75 : (phase === 'typing' ? 0.85 : 1.0);
-  ctx.scale(scale, scale);
-  
-  // Larger cursor for better visibility
-  ctx.moveTo(14, 0);
-  ctx.lineTo(0, 7);
-  ctx.lineTo(-14, 0);
-  ctx.lineTo(0, -7);
-  ctx.closePath();
-
-  // Solid colors - enhanced visibility
-  if (phase === 'idle') {
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#ffffff';
-  } else {
-    // Blue for all working states (typing, clicking, etc.)
-    ctx.fillStyle = '#3b82f6';
-    ctx.strokeStyle = '#ffffff';
-  }
-  
-  ctx.fill();
-  ctx.lineWidth = 3; // Thicker border for better visibility
-  ctx.shadowColor = phase === 'idle' ? '#ffffff' : '#3b82f6';
-  ctx.shadowBlur = 20; // Enhanced glow
-  ctx.stroke();
-  
-  // Add inner glow for more depth
-  ctx.beginPath();
-  ctx.moveTo(8, 0);
-  ctx.lineTo(0, 4);
-  ctx.lineTo(-8, 0);
-  ctx.lineTo(0, -4);
-  ctx.closePath();
-  ctx.fillStyle = phase === 'idle' ? 'rgba(255, 255, 255, 0.8)' : 'rgba(59, 130, 246, 0.8)';
-  ctx.fill();
-  
-  // Typing animation dots next to cursor
-  if (phase === 'typing') {
-    typingAnimTime += 0.016;
-    if (typingAnimTime > 0.5) {
-      typingAnimTime = 0;
-      typingDots = (typingDots + 1) % 4;
-    }
-    
-    ctx.save();
-    ctx.translate(20, 0);
-    ctx.fillStyle = '#3b82f6';
-    ctx.font = 'bold 16px monospace';
-    ctx.shadowColor = '#3b82f6';
-    ctx.shadowBlur = 10;
-    const dots = '.'.repeat(typingDots);
-    ctx.fillText(dots, 0, 5);
-    ctx.restore();
-  }
-  
-  ctx.restore();
+  // Cursor removed from browser visuals
+  return;
 }
 
 function drawEmote() {
