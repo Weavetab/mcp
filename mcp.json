@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
   "mcpName": "io.github.weavetab/mcp",
-  "version": "2.5.0-beta.0",
+  "version": "2.5.0-beta.1",
   "description": "Weavetab MCP — Production-grade browser automation MCP server with direct Chrome DevTools Protocol (CDP) control. Direct socket transport, zero WebDriver/Node.js wrapper overhead, deterministic state execution.",
   "icon": "icon.png",
   "author": "fy2ne",
