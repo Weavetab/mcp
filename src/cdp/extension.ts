@@ -71,7 +71,6 @@ export async function extensionHealth(session: CDP.Client): Promise<{
         if (document.querySelector('weavetab-host') || document.getElementById('__Weavetab_cursor_host')) features.push('cursor');
         if (document.querySelector('[data-wt-internal]') || document.getElementById('wt-ui-styles')) features.push('styles');
         if (document.querySelector('.wt-bubble')) features.push('bubble');
-        if (document.getElementById('wt-plan-panel')) features.push('plan');
         return JSON.stringify({
           loaded: ${loaded},
           features

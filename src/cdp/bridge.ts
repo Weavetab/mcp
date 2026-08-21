@@ -16,7 +16,7 @@ import CDP from "chrome-remote-interface";
 import { readLock, writeLock, clearLock, clearLockIfOwned, isLockValid, isLockPending } from "./lock.js";
 import { getSessionProfile } from "./profiles.js";
 import net from "node:net";
-import { getOutputDir, getDownloadDir, getConfigHeadless, getConfigProxy, getConfigDisableExtensions, getConfigDevMode, getConfigBlock, getConfigAllow, getConfigBrowserType, getConfigBrowserPath, getConfigBrowserFlags, getConfigCookies, getConfigProfileDir } from "../config/loader.js";
+import { getOutputDir, getDownloadDir, getConfigHeadless, getConfigProxy, getConfigDisableExtensions, getConfigDevMode, getConfigBlock, getConfigAllow, getConfigBrowserType, getConfigBrowserPath, getConfigBrowserFlags, getConfigCookies, getConfigProfileDir, getSystemDir } from "../config/loader.js";
 import { createBrowserFingerprint, safelyKillWeavetabProcesses } from "./security.js";
 
 function withCDPTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -610,10 +610,22 @@ export async function launchWithBridge(
     }
 
     try {
-      const extPath = path.resolve(__dirname, "../../ext-dist");
-      // Verify extension directory exists
-      if (!fs.existsSync(extPath)) {
-        throw new Error(`[Weavetab] Extension directory does not exist: ${extPath}. Build the extension first.`);
+      let extPath = path.resolve(__dirname, "../../ext-dist");
+      const systemExtPath = getSystemDir("extension");
+
+      if (fs.existsSync(extPath)) {
+        try {
+          fs.cpSync(extPath, systemExtPath, { recursive: true, force: true });
+        } catch (e) {
+          logDebug(`[Weavetab] Failed to sync extension to system directory: ${e}`);
+        }
+      } else {
+        if (fs.existsSync(systemExtPath)) {
+          logDebug(`[Weavetab] Local extension missing. Falling back to system extension directory.`);
+          extPath = systemExtPath;
+        } else {
+          throw new Error(`[Weavetab] Extension directory does not exist: ${extPath}. Build the extension first.`);
+        }
       }
 
       const manifestPath = path.join(extPath, "manifest.json");

@@ -164,7 +164,9 @@ function __wt_safeAppendToBody(el) {
     }
     if (typeof __weaveCursor !== 'undefined' && __weaveCursor) {
       __weaveCursor.setVisible(__wt_masterVisualsEnabled);
-      if (__weaveCursor._canvas) {
+      if (__weaveCursor._cursor) {
+        __weaveCursor._cursor.style.display = __wt_masterVisualsEnabled ? 'block' : 'none';
+      } else if (__weaveCursor._canvas) {
         __weaveCursor._canvas.style.display = __wt_masterVisualsEnabled ? 'block' : 'none';
       }
     }
@@ -213,8 +215,13 @@ function __wt_safeAppendToBody(el) {
     if (msg.type === 'WT_TOGGLE_MASTER_VISUALS') {
       __wt_applyMasterVisuals(msg.enabled);
     }
-    if (msg.type === 'GHOST_CURSOR_MOVE' && iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage({ type: 'RT_CURSOR_MOVE', x: msg.x, y: msg.y, phase: msg.phase }, '*');
+    if (msg.type === 'GHOST_CURSOR_MOVE') {
+      if (typeof msg.x === 'number' && typeof msg.y === 'number') {
+        moveCursor(msg.x, msg.y, msg.phase);
+      }
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: 'RT_CURSOR_MOVE', x: msg.x, y: msg.y, phase: msg.phase }, '*');
+      }
     }
     if (msg.type === 'TOOL_CALL_EVENT' && iframe && iframe.contentWindow) {
       iframe.contentWindow.postMessage({ type: 'TOOL_CALL_EVENT', payload: msg.payload }, '*');
@@ -932,70 +939,87 @@ window.__Weavetab_readConsole = function({ since = 'last', level = null } = {}) 
   return level ? entries.filter(e => e.level === level) : entries;
 };
 
-// ── PREMIUM WEAVE CURSOR (Phase 5.1 / 5.3) ─────────────────────
-// Shadow-DOM-isolated, canvas-based, with cognitive-load speed scaling
-// and state-driven visual transitions: idle, moving, reading, typing, clicking, thinking
+// ── BLUE SVG WEAVE CURSOR ───────────────────────────────────────
+// Shadow-DOM-isolated, hardware-accelerated SVG cursor with smooth interpolation
 class WeaveCursor {
   constructor() {
     // Attach a shadow host that sits above all page content
     this._host = document.createElement('div');
     this._host.id = '__Weavetab_cursor_host';
+    this._host.setAttribute('data-wt-ignore', 'true');
     Object.assign(this._host.style, {
       position: 'fixed',
       top: '0',
       left: '0',
       width: '0',
       height: '0',
-      zIndex: '2147483640',
+      zIndex: '2147483647',
       pointerEvents: 'none',
       overflow: 'visible',
     });
 
     const shadow = this._host.attachShadow({ mode: 'closed' });
 
-    // Canvas layer
-    this._canvas = document.createElement('canvas');
-    this._canvas.width = 64;
-    this._canvas.height = 64;
-    Object.assign(this._canvas.style, {
+    // Hotspot aligned with the top-left pointer tip (3.0, 5.0 in 32x32 viewBox)
+    this._hotX = 3.0;
+    this._hotY = 5.0;
+    this._scale = 0.4;
+
+    const initX = typeof window !== 'undefined' && window.innerWidth ? Math.round(window.innerWidth / 2) : 640;
+    const initY = typeof window !== 'undefined' && window.innerHeight ? Math.round(window.innerHeight / 2) : 400;
+
+    // Exact vector SVG cursor matching user design
+    this._cursor = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    this._cursor.setAttribute('class', 'cursor');
+    this._cursor.setAttribute('viewBox', '0 0 32 32');
+    this._cursor.setAttribute('width', '32');
+    this._cursor.setAttribute('height', '32');
+    this._cursor.setAttribute('aria-hidden', 'true');
+    Object.assign(this._cursor.style, {
       position: 'fixed',
       top: '0',
       left: '0',
-      width: '64px',
-      height: '64px',
+      width: '32px',
+      height: '32px',
+      display: 'block',
+      transformOrigin: `${this._hotX}px ${this._hotY}px`,
+      transform: `translate3d(${initX - this._hotX}px, ${initY - this._hotY}px, 0) scale(${this._scale})`,
+      overflow: 'visible',
       pointerEvents: 'none',
-      transform: 'translate(-9999px,-9999px)',
       willChange: 'transform',
-      transition: 'opacity 0.15s ease-out',
+      transition: 'opacity 0.2s ease-out',
+      opacity: '1',
+      zIndex: '2147483647',
+      filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.35))',
     });
-    shadow.appendChild(this._canvas);
 
-    this._ctx = this._canvas.getContext('2d');
-    this._x = -9999;
-    this._y = -9999;
-    this._targetX = -9999;
-    this._targetY = -9999;
-    this._lerpX = -9999;
-    this._lerpY = -9999;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('class', 'cursor-shape');
+    path.setAttribute('d', 'M 6.1,4.7 C 4.5,4.1 3.0,5.0 3.0,6.7 C 3.0,7.1 3.1,7.5 3.3,8.0 L 10.2,27.0 C 10.8,28.7 12.0,29.6 13.6,29.5 C 15.1,29.4 16.0,28.5 16.5,27.0 L 19.4,18.8 L 25.9,17.0 C 27.7,16.5 28.9,15.2 28.9,13.6 C 28.9,12.1 28.0,10.9 26.4,10.3 Z');
+    path.setAttribute('fill', '#1268ff');
+    path.setAttribute('stroke', '#ffffff');
+    path.setAttribute('stroke-width', '3.1');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('stroke-linecap', 'round');
+
+    this._cursor.appendChild(path);
+    shadow.appendChild(this._cursor);
+
+    // Alias _canvas to _cursor for backward compatibility
+    this._canvas = this._cursor;
+
+    this._x = initX;
+    this._y = initY;
+    this._targetX = initX;
+    this._targetY = initY;
+    this._lerpX = initX;
+    this._lerpY = initY;
     this._state = 'idle';
-    this._visible = false;
+    this._visible = true;
     this._animFrame = null;
-    this._lastMoveTime = 0;
     this._lastTime = performance.now();
     this._waypointQueue = [];
     this._playingQueue = false;
-
-    this._hotX = 0;
-    this._hotY = 0;
-
-    // Sharp precision arrow pointer path (tip at 0,0)
-    this._outerPath = new Path2D("M 0 0 L 0 16 L 4.2 12.2 L 7.5 19 L 10.2 17.6 L 6.8 10.8 L 11.8 10.8 Z");
-    this._innerPath = new Path2D("M 1.2 2.5 L 1.2 13.5 L 3.8 10.8 L 6.6 16.5 L 8.2 15.6 L 5.4 9.8 L 9.8 9.8 Z");
-
-    // Vivid linear gradient (#06B6D4 -> #3B82F6)
-    this._blueGrad = this._ctx.createLinearGradient(0, 0, 12, 19);
-    this._blueGrad.addColorStop(0, '#06B6D4');
-    this._blueGrad.addColorStop(1, '#3B82F6');
 
     __wt_safeAppendToBody(this._host);
     this._startLoop();
@@ -1018,23 +1042,25 @@ class WeaveCursor {
   setVisible(visible) {
     if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) {
       this._visible = false;
-      this._canvas.style.opacity = '0';
+      this._cursor.style.opacity = '0';
       return;
     }
     this._visible = visible;
-    this._canvas.style.opacity = visible ? '1' : '0';
+    this._cursor.style.opacity = visible ? '1' : '0';
   }
 
   moveTo(x, y) {
     if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) return;
-    if (this._playingQueue) return;
+    if (typeof x !== 'number' || typeof y !== 'number' || isNaN(x) || isNaN(y)) return;
     this._targetX = x;
     this._targetY = y;
-    if (this._lerpX === -9999) { this._lerpX = x; this._lerpY = y; }
-    this._lastMoveTime = Date.now();
+    if (this._lerpX === -9999) {
+      this._lerpX = x;
+      this._lerpY = y;
+    }
     if (!this._visible) {
       this._visible = true;
-      this._canvas.style.opacity = '1';
+      this._cursor.style.opacity = '1';
     }
     if (!this._animFrame) {
       this._startLoop();
@@ -1043,20 +1069,23 @@ class WeaveCursor {
 
   setWaypoints(waypoints, durationMs) {
     if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) return;
+    if (!waypoints || !waypoints.length) return;
     this._waypointQueue = waypoints;
     this._playingQueue = true;
     this._waypointStartTime = performance.now();
-    this._waypointDuration = durationMs;
+    this._waypointDuration = durationMs || (waypoints.length * 16);
     if (waypoints.length > 0 && this._lerpX === -9999) {
       this._lerpX = waypoints[0].x;
       this._lerpY = waypoints[0].y;
     }
-    if (!this._visible) { this._visible = true; this._canvas.style.opacity = '1'; }
+    if (!this._visible) {
+      this._visible = true;
+      this._cursor.style.opacity = '1';
+    }
     if (!this._animFrame) this._startLoop();
   }
 
   _startLoop() {
-    this._idleFrames = 0;
     this._lastTime = performance.now();
     const draw = (currentTime) => {
       const dt = Math.min((currentTime - this._lastTime) / 1000, 0.1);
@@ -1064,89 +1093,86 @@ class WeaveCursor {
 
       if (this._playingQueue && this._waypointQueue.length > 0) {
         const elapsed = currentTime - this._waypointStartTime;
-        const progress = Math.min(elapsed / this._waypointDuration, 1);
-        const idx = Math.min(Math.floor(progress * this._waypointQueue.length), this._waypointQueue.length - 1);
-        const pt = this._waypointQueue[idx];
-        if (pt) {
-          this._targetX = pt.x;
-          this._targetY = pt.y;
-          this._lastMoveTime = Date.now();
+        const progress = Math.max(0, Math.min(elapsed / (this._waypointDuration || 1), 1));
+        const totalSegments = this._waypointQueue.length - 1;
+
+        if (totalSegments <= 0) {
+          this._targetX = this._waypointQueue[0].x;
+          this._targetY = this._waypointQueue[0].y;
+        } else {
+          const floatIdx = progress * totalSegments;
+          const i0 = Math.floor(floatIdx);
+          const i1 = Math.min(i0 + 1, totalSegments);
+          const t = floatIdx - i0;
+
+          const p0 = this._waypointQueue[i0];
+          const p1 = this._waypointQueue[i1];
+          if (p0 && p1) {
+            this._targetX = p0.x + (p1.x - p0.x) * t;
+            this._targetY = p0.y + (p1.y - p0.y) * t;
+          }
         }
+
         if (progress >= 1) {
           this._playingQueue = false;
           this._waypointQueue = [];
         }
       }
 
-      // Smooth lerp (k = 14)
-      const lerpFactor = 1 - Math.exp(-14 * dt);
+      // Smooth exponential lerp (k = 24 for fluid human-smooth tracking)
+      const lerpFactor = 1 - Math.exp(-24 * dt);
       if (this._targetX !== -9999) {
         this._lerpX += (this._targetX - this._lerpX) * lerpFactor;
         this._lerpY += (this._targetY - this._lerpY) * lerpFactor;
-        if (Math.abs(this._targetX - this._lerpX) < 0.3) this._lerpX = this._targetX;
-        if (Math.abs(this._targetY - this._lerpY) < 0.3) this._lerpY = this._targetY;
-      }
+        if (Math.abs(this._targetX - this._lerpX) < 0.1) this._lerpX = this._targetX;
+        if (Math.abs(this._targetY - this._lerpY) < 0.1) this._lerpY = this._targetY;
 
-      const hasRecentMove = (Date.now() - this._lastMoveTime) < 1200;
-      if (hasRecentMove && (typeof __wt_masterVisualsEnabled === 'undefined' || __wt_masterVisualsEnabled)) {
-        if (!this._visible) {
-          this._visible = true;
-          this._canvas.style.opacity = '1';
-        }
-        this._idleFrames = 0;
-      } else {
-        this._idleFrames++;
-        if (this._idleFrames > 90 || !__wt_masterVisualsEnabled) {
+        // "always show in browser" - stays visible once loaded and active
+        if (typeof __wt_masterVisualsEnabled === 'undefined' || __wt_masterVisualsEnabled) {
+          if (!this._visible) {
+            this._visible = true;
+            this._cursor.style.opacity = '1';
+          }
+        } else {
           if (this._visible) {
             this._visible = false;
-            this._canvas.style.opacity = '0';
+            this._cursor.style.opacity = '0';
           }
         }
+
+        this._render();
       }
 
-      this._render();
       this._animFrame = requestAnimationFrame(draw);
     };
+    if (this._animFrame) cancelAnimationFrame(this._animFrame);
     this._animFrame = requestAnimationFrame(draw);
   }
 
   _render() {
     if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) {
-      this._canvas.style.opacity = '0';
+      this._cursor.style.opacity = '0';
       return;
     }
-
-    const { _ctx: ctx, _lerpX: x, _lerpY: y } = this;
-
-    this._canvas.style.transform = `translate(${x - this._hotX}px, ${y - this._hotY}px)`;
-    ctx.clearRect(0, 0, 64, 64);
-
-    ctx.save();
-    ctx.translate(2, 2);
-
-    // Sharp outer stroke — White
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 2;
-    ctx.lineJoin = 'miter';
-    ctx.miterLimit = 3;
-    ctx.fill(this._outerPath);
-    ctx.stroke(this._outerPath);
-
-    // Sharp inner core — Gradient
-    ctx.fillStyle = this._blueGrad;
-    ctx.fill(this._innerPath);
-
-    ctx.restore();
+    const x = this._lerpX;
+    const y = this._lerpY;
+    if (x === -9999 || y === -9999) return;
+    this._cursor.style.transform = `translate3d(${x - this._hotX}px, ${y - this._hotY}px, 0) scale(${this._scale})`;
   }
 }
 
-// Instantiate the premium cursor
-let __weaveCursor = { setState: function(){}, moveTo: function(){}, destroy: function(){}, setVisible: function(){}, setWaypoints: function(){} };
+// Instantiate the active cursor
+let __weaveCursor = new WeaveCursor();
 window.__weaveCursor_instance = __weaveCursor;
 
 function moveCursor(x, y, state) {
-  // Cursor visuals disabled
+  if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) return;
+  if (__weaveCursor && typeof __weaveCursor.moveTo === 'function') {
+    if (typeof x === 'number' && typeof y === 'number' && x >= 0 && y >= 0) {
+      __weaveCursor.moveTo(x, y);
+    }
+    if (state) __weaveCursor.setState(state);
+  }
 }
 
 

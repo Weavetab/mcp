@@ -37,47 +37,90 @@ function wtCursor(session: CDP.Client, x: number, y: number, state: string, opts
   sendToExtension(session, { type: 'Weavetab_STATE', cursor: { x, y, trail }, state }).catch(() => {});
 }
 
+let _wanderActive = false;
+
+export async function ensureInitialCursorPosition(session: CDP.Client): Promise<{ x: number; y: number }> {
+  if (currentX >= 0 && currentY >= 0) {
+    return { x: currentX, y: currentY };
+  }
+  try {
+    const layout = await session.Page.getLayoutMetrics().catch(() => null);
+    if (layout?.visualViewport?.clientWidth && layout?.visualViewport?.clientHeight) {
+      currentX = Math.round(layout.visualViewport.clientWidth / 2);
+      currentY = Math.round(layout.visualViewport.clientHeight / 2);
+    } else {
+      const evalRes = await session.Runtime.evaluate({
+        expression: `({ x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) })`,
+        returnByValue: true
+      }).catch(() => null);
+      if (evalRes?.result?.value?.x && evalRes?.result?.value?.y) {
+        currentX = evalRes.result.value.x;
+        currentY = evalRes.result.value.y;
+      } else {
+        currentX = 640;
+        currentY = 400;
+      }
+    }
+  } catch {
+    currentX = 640;
+    currentY = 400;
+  }
+  wtCursor(session, currentX, currentY, "idle");
+  return { x: currentX, y: currentY };
+}
+
 async function wtThought(session: CDP.Client, text: string) {
   await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: text } }).catch(() => {});
 
-  // Add realistic wandering movement connected to thoughts
-  if (currentX > 0 && currentY > 0 && Math.random() > 0.2) {
-    const wanderDistance = 15 + Math.random() * 35;
+  if (currentX < 0 || currentY < 0) {
+    await ensureInitialCursorPosition(session);
+  }
+
+  // Add realistic wandering movement connected to thoughts (non-racing)
+  if (currentX > 0 && currentY > 0 && !_wanderActive && Math.random() > 0.3) {
+    _wanderActive = true;
+    const startX = currentX;
+    const startY = currentY;
+    const wanderDistance = 10 + Math.random() * 25;
     const angle = Math.random() * Math.PI * 2;
-    const tx = Math.max(0, currentX + Math.cos(angle) * wanderDistance);
-    const ty = Math.max(0, currentY + Math.sin(angle) * wanderDistance);
+    const tx = Math.max(20, startX + Math.cos(angle) * wanderDistance);
+    const ty = Math.max(20, startY + Math.sin(angle) * wanderDistance);
     
-    const steps = 15;
+    const steps = 12;
     const waypoints = [];
-    const cp1X = currentX + (tx - currentX) * 0.3 + (Math.random() - 0.5) * 15;
-    const cp1Y = currentY + (ty - currentY) * 0.3 + (Math.random() - 0.5) * 15;
-    const cp2X = currentX + (tx - currentX) * 0.7 + (Math.random() - 0.5) * 15;
-    const cp2Y = currentY + (ty - currentY) * 0.7 + (Math.random() - 0.5) * 15;
+    const cp1X = startX + (tx - startX) * 0.3;
+    const cp1Y = startY + (ty - startY) * 0.3;
+    const cp2X = startX + (tx - startX) * 0.7;
+    const cp2Y = startY + (ty - startY) * 0.7;
     
     for (let i = 1; i <= steps; i++) {
         let t = i / steps;
         t = 1 - Math.pow(1 - t, 3);
         waypoints.push({
-            x: cubicBezier(t, currentX, cp1X, cp2X, tx),
-            y: cubicBezier(t, currentY, cp1Y, cp2Y, ty)
+            x: Math.round(cubicBezier(t, startX, cp1X, cp2X, tx)),
+            y: Math.round(cubicBezier(t, startY, cp1Y, cp2Y, ty))
         });
     }
     
     sendToExtension(session, {
         type: 'Weavetab_STATE',
-        cursor: { waypoints, duration_ms: steps * 20, x: currentX, y: currentY },
+        cursor: { waypoints, duration_ms: steps * 25, x: startX, y: startY },
         state: "thinking"
     }).catch(() => {});
     
-    // Async physical dispatch to not block the main logic flow
     (async () => {
-        for (let i = 1; i <= steps; i++) {
-            const x = waypoints[i-1].x;
-            const y = waypoints[i-1].y;
-            await session.Input.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "none" }).catch(()=>{});
-            currentX = x;
-            currentY = y;
-            await new Promise(r => setTimeout(r, 20));
+        try {
+          for (let i = 1; i <= steps; i++) {
+              if (!_wanderActive) break;
+              const x = waypoints[i-1].x;
+              const y = waypoints[i-1].y;
+              await session.Input.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "none" }).catch(()=>{});
+              currentX = x;
+              currentY = y;
+              await new Promise(r => setTimeout(r, 25));
+          }
+        } finally {
+          _wanderActive = false;
         }
     })();
   }
@@ -182,6 +225,10 @@ export async function ghostType(
   let wordsSinceBreak = 0;
   let wordCharCount = 0;
   let prevChar = '';
+
+  if (currentX < 0 || currentY < 0) {
+    await ensureInitialCursorPosition(session);
+  }
 
   wtCursor(session, currentX, currentY, "typing");
 
@@ -343,6 +390,12 @@ export async function ghostMove(
   profile?: GhostProfile,
   cursorOpts?: Pick<CursorOptions, "trail" | "opacity">
 ) {
+  _wanderActive = false; // Stop any ongoing thought wander immediately
+
+  if (currentX < 0 || currentY < 0) {
+    await ensureInitialCursorPosition(session);
+  }
+
   const resolvedProfile = profile || (getConfigHeadless(config) ? "instant" : "human");
 
   if (resolvedProfile === "instant") {
@@ -364,9 +417,9 @@ export async function ghostMove(
   }
 
   if (resolvedProfile === "fast") {
-    const steps = 4;
-    const startX = currentX === -1 ? targetX : currentX;
-    const startY = currentY === -1 ? targetY : currentY;
+    const steps = 6;
+    const startX = currentX;
+    const startY = currentY;
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const x = Math.round(startX + (targetX - startX) * t);
@@ -375,7 +428,7 @@ export async function ghostMove(
       currentX = x;
       currentY = y;
       wtCursor(session, x, y, "moving", cursorOpts);
-      await sleep(5);
+      await sleep(6);
     }
     currentX = targetX;
     currentY = targetY;
@@ -386,105 +439,71 @@ export async function ghostMove(
   }
 
   if (!_firstMoveDone) {
-    logDebug(`[Weavetab Ghost] First mouse move → (${targetX}, ${targetY}) — CDP session active`);
+    logDebug(`[Weavetab Ghost] First mouse move from (${currentX}, ${currentY}) → (${targetX}, ${targetY}) — CDP session active`);
     _firstMoveDone = true;
-  }
-
-  // Don't fake-init cursor position — injector.ts hides cursor until first real move
-  if (currentX === -1 && currentY === -1) {
-    currentX = targetX;
-    currentY = targetY;
-    wtCursor(session, targetX, targetY, "hover", cursorOpts);
-    recordCursorPosition(targetX, targetY);
-    await session.Input.dispatchMouseEvent({ type: "mouseMoved", x: targetX, y: targetY, button: "none" });
-    await session.Runtime.evaluate({
-      expression: `(function(){
-        var el = document.elementFromPoint(${targetX}, ${targetY});
-        if (el) {
-          el.dispatchEvent(new MouseEvent('mouseover', {bubbles:true,cancelable:true,clientX:${targetX},clientY:${targetY}}));
-          el.dispatchEvent(new MouseEvent('mouseenter', {bubbles:false,cancelable:true,clientX:${targetX},clientY:${targetY}}));
-        }
-      })()`
-    }).catch(() => {});
-    return;
   }
 
   const dx = targetX - currentX;
   const dy = targetY - currentY;
   const distance = Math.sqrt(dx * dx + dy * dy);
 
-  wtCursor(session, currentX, currentY, label && distance >= 150 ? "searching" : "idle", cursorOpts);
-  if (label && distance >= 150 && getConfigVisuals(config) !== false) {
-    wtThought(session, `moving to ${label.slice(0, 40)}...`);
-    await sleep(80 + Math.random() * 120);
-  }
-
-  if (distance < 150) {
+  if (distance < 4) {
     currentX = targetX;
     currentY = targetY;
     await session.Input.dispatchMouseEvent({ type: "mouseMoved", x: targetX, y: targetY, button: "none" });
     wtCursor(session, targetX, targetY, "hover", cursorOpts);
     recordCursorPosition(targetX, targetY);
-    await session.Runtime.evaluate({
-      expression: `(function(){
-        var el = document.elementFromPoint(${targetX}, ${targetY});
-        if (el) {
-          el.dispatchEvent(new MouseEvent('mouseover', {bubbles:true,cancelable:true,clientX:${targetX},clientY:${targetY}}));
-          el.dispatchEvent(new MouseEvent('mouseenter', {bubbles:false,cancelable:true,clientX:${targetX},clientY:${targetY}}));
-        }
-      })()`
-    }).catch(() => {});
     return;
   }
 
-  const duration = Math.max(80, Math.min(300, distance * 0.6));
-  let steps = Math.floor(duration / 16);
-  if (steps > 10) steps = 10;
-  if (steps < 3) steps = 3;
+  wtCursor(session, currentX, currentY, label && distance >= 150 ? "searching" : "idle", cursorOpts);
+  if (label && distance >= 150 && getConfigVisuals(config) !== false) {
+    wtThought(session, `moving to ${label.slice(0, 40)}...`);
+    await sleep(60 + Math.random() * 80);
+  }
 
-  const cp1X = currentX + dx * 0.2 + randomGaussian(0, distance * 0.2);
-  const cp1Y = currentY + dy * 0.2 + randomGaussian(0, distance * 0.2);
-  const cp2X = currentX + dx * 0.8 + randomGaussian(0, distance * 0.2);
-  const cp2Y = currentY + dy * 0.8 + randomGaussian(0, distance * 0.2);
+  // Smooth, natural human hand curve
+  const duration = Math.max(120, Math.min(380, 80 + Math.sqrt(distance) * 12));
+  const steps = Math.max(8, Math.min(24, Math.floor(duration / 16)));
+  const stepDelay = Math.max(10, Math.floor(duration / steps));
 
-  const doOvershoot = distance >= 300 && Math.random() > 0.3;
-  const overshootAmount = doOvershoot ? randomGaussian(10, 5) : 0;
-  const angle = Math.atan2(dy, dx);
-  const overshootX = targetX + Math.cos(angle) * overshootAmount;
-  const overshootY = targetY + Math.sin(angle) * overshootAmount;
+  // Gentle perpendicular curvature (arcing motion)
+  const nx = -dy / distance;
+  const ny = dx / distance;
+  const maxArc = Math.min(45, distance * 0.15);
+  const arcSign = (Math.random() > 0.5 ? 1 : -1);
+  const arcAmount = maxArc * arcSign * (0.4 + Math.random() * 0.6);
 
-  wtCursor(session, targetX, targetY, "idle", cursorOpts);
+  const cp1X = currentX + dx * 0.3 + nx * arcAmount;
+  const cp1Y = currentY + dy * 0.3 + ny * arcAmount;
+  const cp2X = currentX + dx * 0.7 + nx * (arcAmount * 0.6);
+  const cp2Y = currentY + dy * 0.7 + ny * (arcAmount * 0.6);
 
   const waypoints = [];
   for (let i = 1; i <= steps; i++) {
-    let t = i / steps;
-    t = 1 - Math.pow(1 - t, 4);
-
-    const actualTargetX = doOvershoot && i < steps * 0.8 ? overshootX : targetX;
-    const actualTargetY = doOvershoot && i < steps * 0.8 ? overshootY : targetY;
+    const rawT = i / steps;
+    // Cubic ease-out for natural deceleration
+    const t = 1 - Math.pow(1 - rawT, 3);
 
     waypoints.push({
-      x: cubicBezier(t, currentX, cp1X, cp2X, actualTargetX),
-      y: cubicBezier(t, currentY, cp1Y, cp2Y, actualTargetY)
+      x: Math.round(cubicBezier(t, currentX, cp1X, cp2X, targetX)),
+      y: Math.round(cubicBezier(t, currentY, cp1Y, cp2Y, targetY))
     });
   }
 
-  // Pre-announce the move
+  // Pre-announce waypoints for smooth client-side interpolation
   sendToExtension(session, {
     type: 'Weavetab_STATE',
-    cursor: { waypoints, duration_ms: steps * 8, x: currentX, y: currentY },
+    cursor: { waypoints, duration_ms: steps * stepDelay, x: currentX, y: currentY },
     state: "moving"
   }).catch(() => {});
 
   for (let i = 1; i <= steps; i++) {
-    const x = waypoints[i-1].x;
-    const y = waypoints[i-1].y;
-
-    await session.Input.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "none" });
-    currentX = x;
-    currentY = y;
-    wtCursor(session, x, y, "moving", cursorOpts);
-    await sleep(8);
+    const pt = waypoints[i - 1];
+    await session.Input.dispatchMouseEvent({ type: "mouseMoved", x: pt.x, y: pt.y, button: "none" }).catch(() => {});
+    currentX = pt.x;
+    currentY = pt.y;
+    await sleep(stepDelay);
   }
 
   currentX = targetX;
@@ -492,7 +511,7 @@ export async function ghostMove(
   wtCursor(session, targetX, targetY, "hover", cursorOpts);
   recordCursorPosition(targetX, targetY);
   if (label) wtClearThought(session);
-  await session.Input.dispatchMouseEvent({ type: "mouseMoved", x: targetX, y: targetY, button: "none" });
+  await session.Input.dispatchMouseEvent({ type: "mouseMoved", x: targetX, y: targetY, button: "none" }).catch(() => {});
 
   await session.Runtime.evaluate({
     expression: `(function(){
@@ -615,9 +634,13 @@ export async function ghostClick(session: CDP.Client, x: number, y: number, opti
 }
 
 export function ghostWait(session: CDP.Client) {
-  wtCursor(session, currentX, currentY, "waiting");
+  const x = currentX >= 0 ? currentX : 640;
+  const y = currentY >= 0 ? currentY : 400;
+  wtCursor(session, x, y, "waiting");
 }
 
 export function ghostIdle(session: CDP.Client) {
-  wtCursor(session, currentX, currentY, "idle");
+  const x = currentX >= 0 ? currentX : 640;
+  const y = currentY >= 0 ? currentY : 400;
+  wtCursor(session, x, y, "idle");
 }

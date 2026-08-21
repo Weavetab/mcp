@@ -30,7 +30,6 @@ import { browserWait } from "./tools/wait.js";
 import { browserPointer } from "./tools/pointer.js";
 import { browserSelect } from "./tools/select.js";
 import { browserFill } from "./tools/fill.js";
-import { weavePlan } from "./tools/plan.js";
 import { browserHighlight } from "./tools/highlight.js";
 import { browserUpload } from "./tools/upload.js";
 import { browserFind } from "./tools/find.js";
@@ -890,31 +889,6 @@ server.tool(
       try {
         return await withSecurity(config, "browser_fill", async (session, liveConfig) => {
           return await agentAction(session, 'typing', () => browserFill(session, args, liveConfig), 'browser_fill');
-        });
-      } catch (e) { return wrapError(e); }
-    }
-  );
-
-  // ── 15. browser_plan ───────────────────────────────────────────────────────
-  server.tool(
-    "browser_plan",
-    "Create a live task panel in the browser.",
-    {
-      action: z.enum(["create", "update", "comments", "hide"]).describe("Action to perform."),
-      goal: z.string().optional().describe("Mission goal description (required for create)."),
-      tasks: z.array(z.object({
-        id: z.number(),
-        description: z.string(),
-        status: z.enum(["pending", "in-progress", "done", "failed"]),
-      })).optional().describe("Task list with statuses (required for create)."),
-      taskId: z.number().optional().describe("Task ID to update (required for update)."),
-      status: z.enum(["pending", "in-progress", "done", "failed"]).optional().describe("New status (required for update)."),
-    },
-    async (args) => {
-      try {
-        return await withSecurity(config, "browser_plan", async (session, liveConfig) => {
-          const result = await weavePlan(session, args, liveConfig);
-          return { content: [{ type: "text", text: JSON.stringify(result) }] };
         });
       } catch (e) { return wrapError(e); }
     }
@@ -1932,8 +1906,8 @@ process.on("SIGTERM", async () => {
 });
 
 process.on("exit", () => {
-  if ((global as any).__wt_is_server) return;
-  try {
-    clearLock();
-  } catch { /* ignore */ }
+  // We purposefully do NOT clear the lock file here.
+  // Weavetab launches the browser detached, so it survives the server dying.
+  // Leaving the lock file allows the next MCP server run to find and reuse
+  // the existing browser instead of launching a duplicate.
 });

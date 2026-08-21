@@ -83,7 +83,6 @@ const toolThoughts: Record<string, string[]> = {
   
   // High-Level Logic
   'browser_thought': ['Thinking...', 'Processing query...', 'Asking question...'],
-  'browser_plan': ['Formulating plan...', 'Strategizing...', 'Calculating next steps...'],
   'browser_burst': ['Executing burst actions...', 'Running macro...', 'Batching commands...'],
   'browser_macro_compile': ['Compiling macro...', 'Optimizing action sequence...', 'Building script...'],
   'browser_automation': ['Running automation...', 'Executing workflow...', 'Processing sequence...'],

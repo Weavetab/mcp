@@ -555,5 +555,5 @@ export async function browserMap(
   return output;
 }
 
-// Keep backward-compat alias used by plan.ts
+// Backward-compat alias
 export { browserMap as weaveRead };

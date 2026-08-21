@@ -5,7 +5,6 @@
  * Weavetab by fy2ne
  */
 
-import { getActivePlan } from "../tools/plan.js";
 import { getTabList } from "../cdp/connector.js";
 import { sessionRegistry } from "../state/session.js";
 import * as fs from "node:fs";
@@ -18,7 +17,6 @@ export interface MissionState {
   agentId: string;
   status: "active" | "suspended" | "completed";
   timestamp: number;
-  plan: any;
   tabs: any[];
 }
 
@@ -33,7 +31,6 @@ export async function suspendMission(agentId: string, missionId: string): Promis
     fs.mkdirSync(stateDir, { recursive: true });
   }
 
-  const plan = getActivePlan();
   const tabs = await getTabList(agentId).catch(() => []);
 
   const state: MissionState = {
@@ -41,7 +38,6 @@ export async function suspendMission(agentId: string, missionId: string): Promis
     agentId,
     status: "suspended",
     timestamp: Date.now(),
-    plan,
     tabs
   };
 

@@ -185,15 +185,6 @@
           "Optional form submission click step"
         ]
       },
-      "browser_plan": {
-        "category": "mission_execution",
-        "description": "Create or update a live task panel in the browser. Renders a real-time task dashboard within a Shadow DOM overlay displaying goal progress and step status.",
-        "features": [
-          "Real-time task state and progress display",
-          "Isolated Shadow DOM layout structure",
-          "Structured task state tracking (pending, in-progress, done, failed)"
-        ]
-      },
       "browser_highlight": {
         "category": "canvas_and_visual",
         "description": "Highlight an element with a colored overlay. Renders temporary visual CDP overlay highlights over target elements without DOM tree mutations.",

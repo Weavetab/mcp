@@ -184,9 +184,6 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
         const clientRef = sessionRegistry.getAll().find(c => c.targetId === targetId);
         if (clientRef) clientRef.overlayInstalled = false;
         await ensureVisualLayer(session, cfg, clientRef ?? undefined);
-        // Re-inject active plan into the new page
-        const { restoreActivePlanIntoPage } = await import("../tools/plan.js");
-        await restoreActivePlanIntoPage(session);
       } catch { /* ignore */ }
     }
   });

@@ -181,7 +181,6 @@ export async function hideWeaveTabOverlay(session: CDP.Client): Promise<void> {
       //  - [data-wt-ignore]     : any element flagged as agent-invisible
       //  - .wt-bubble           : thought bubble / action text popups
       //  - #__wt_ask_bridge     : question input bridge element
-      //  - #wt-plan-dashboard   : mission plan dashboard
       //  - #wt-debug-overlay    : debug overlay panel
       //  - #wt-main-container   : WeaveTab OS panel (todos + chat)
       style.textContent = [
@@ -192,7 +191,6 @@ export async function hideWeaveTabOverlay(session: CDP.Client): Promise<void> {
         '[data-wt-ignore]',
         '.wt-bubble',
         '#__wt_ask_bridge',
-        '#wt-plan-dashboard',
         '#wt-debug-overlay',
         '#wt-main-container',
       ].join(', ') + ' { display: none !important; visibility: hidden !important; opacity: 0 !important; }';

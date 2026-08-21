@@ -3,7 +3,7 @@ import { logDebug } from "../audit/logger.js";
  * src/overlay/injector.ts
  * Weavetab — Browser Presence Layer v3 (stripped)
  *
- * Kept:     __wt_plan (mission dashboard), SPA nav detection,
+ * Kept:     SPA nav detection,
  *           __wt_setConfig, __wt_status, favicon state.
  * Removed:  cursor (moved to content.js), chat panel, thought bubble,
  *           ask modal, screen glow, CSS keyframes, emoji system.
@@ -76,23 +76,11 @@ export function getMinimalOverlayScript(): string {
       document.addEventListener('NavigationEnd', function() { em('angular', location.href); });
     }
 
-    // ── Mission plan dashboard ──────────────────────────────────────────────
-    window.__wt_plan_comments = window.__wt_plan_comments || [];
-    window.__wt_plan = function(action, goal, tasks) {
-      window.postMessage({ type: '__WT_PLAN', action: action, goal: goal, tasks: tasks }, '*');
-    };
-
     // The message listeners below are guarded so they are registered exactly once
     // per page, even when __wt_install_minimal() is called repeatedly (e.g. SPAs
     // with frequent navigations).
     if (!window.__wt_msg_installed) {
       window.__wt_msg_installed = true;
-      window.addEventListener("message", function(e) {
-        if (e.data && e.data.type === "__WT_PLAN_COMMENT") {
-          window.__wt_plan_comments.push({ taskId: Number(e.data.taskId), comment: e.data.comment, time: Date.now() });
-        }
-      });
-
       window.__wt_chat_queue = window.__wt_chat_queue || [];
       window.addEventListener("message", function(e) {
         if (e.data && e.data.type === "__WT_FEEDBACK") {
