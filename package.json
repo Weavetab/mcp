@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.5.0-beta.0",
+  "version": "2.5.0-beta.1",
   "description": "A production-grade local MCP server for AI browser automation via Chrome DevTools Protocol. No extensions. No cloud. Full control.",
   "author": "fy2ne",
   "license": "AGPL-3.0-only",
