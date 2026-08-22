@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
   "version": "2.5.0-beta.1",
-  "description": "A production-grade local MCP server for AI browser automation via Chrome DevTools Protocol. No extensions. No cloud. Full control.",
+  "description": "Direct Layer 0 interface for AI agents across web and desktop applications. No WebDriver. No cloud. Pure control.",
   "author": "fy2ne",
   "license": "AGPL-3.0-only",
   "homepage": "https://Weavetab.dev",
@@ -17,6 +17,8 @@
     "mcp",
     "model context protocol",
     "browser automation",
+    "electron automation",
+    "desktop automation",
     "ai agent",
     "claude mcp",
     "cursor mcp",
@@ -74,7 +76,7 @@
     "start": "node dist/index.js",
     "prepublishOnly": "npm run verify && npm run build",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\"",
+    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/electron.test.ts\"",
     "test:e2e": "tsx tests/e2e/smoke_test.ts"
   },
   "dependencies": {

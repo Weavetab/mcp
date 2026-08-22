@@ -10,7 +10,12 @@ import { resetLoopCounter } from "../intelligence/trail.js";
 import { getConfigAgentId, getConfigMaxTabs } from "../config/loader.js";
 
 /** Resolve the active CDP port — live > lock file */
-function resolvePort(_config: Config): number {
+function resolvePort(_config: Config, appName?: string): number {
+  if (appName) {
+    const lock = readLock(appName);
+    if (lock && lock.port) return lock.port;
+    throw new Error(`[!] No active session for Electron app "${appName}". Launch it first.`);
+  }
   const port = getPort() || readLock()?.port;
   if (!port) throw new Error("[!] No active browser session. Run browser_go first.");
   return port;
@@ -50,9 +55,9 @@ function calculateSemanticScore(url: string, title: string): number {
   return Math.min(score, 100);
 }
 
-export async function evaluateTabSemantics(targetId: string): Promise<void> {
+export async function evaluateTabSemantics(targetId: string, appName?: string): Promise<void> {
   try {
-    const client = await connectToTab(targetId);
+    const client = await connectToTab(targetId, undefined, undefined, undefined, appName);
     const result = await client.session.Runtime.evaluate({
       expression: `JSON.stringify({ title: document.title, url: location.href })`,
       returnByValue: true
@@ -127,21 +132,22 @@ async function enforceMaxTabs(config: Config): Promise<void> {
 export async function WeavetabOpen(
   url: string,
   config: Config,
-  reuse = true
+  reuse = true,
+  appName?: string
 ): Promise<{ success: true; tabId: string; url: string; reused?: boolean }> {
-  const port = resolvePort(config);
+  const port = resolvePort(config, appName);
 
   // Tab reuse: if same URL is already open, focus it instead of duplicating
   if (reuse && url) {
     try {
-      const targets = await getTabList(getConfigAgentId(config));
+      const targets = await getTabList(getConfigAgentId(config), appName);
       const existing = targets.find(
         (t: any) => t.url === url
       );
       if (existing) {
-        const client = await connectToTab(existing.id);
+        const client = await connectToTab(existing.id, undefined, undefined, undefined, appName);
         await client.session.Target.activateTarget({ targetId: existing.id });
-        sessionRegistry.setActive(existing.id, getConfigAgentId(config));
+        sessionRegistry.setActive(existing.id, getConfigAgentId(config), appName);
         recordTabActivity(existing.id);
         logAction("browser_tabs", url, `reused existing tab ${existing.id}`);
         return { success: true, tabId: existing.id, url, reused: true };
@@ -149,27 +155,29 @@ export async function WeavetabOpen(
     } catch { /* fall through to open new */ }
   }
 
-  await enforceMaxTabs(config);
+  if (!appName) {
+    await enforceMaxTabs(config);
+  }
 
-  const bctxId = sessionRegistry.getBrowserContextIdForAgent(getConfigAgentId(config));
+  const bctxId = appName ? undefined : sessionRegistry.getBrowserContextIdForAgent(getConfigAgentId(config));
   const metaSession = await CDP({ host: "127.0.0.1", port });
   const { targetId } = await metaSession.Target.createTarget({ url, browserContextId: bctxId });
   await metaSession.close();
 
   recordTabActivity(targetId);
-  await connectToTab(targetId, port, getConfigAgentId(config), bctxId);
-  await evaluateTabSemantics(targetId);
+  await connectToTab(targetId, port, getConfigAgentId(config), bctxId, appName);
+  await evaluateTabSemantics(targetId, appName);
 
   logAction("browser_tabs", url, `opened ${targetId}`);
   return { success: true, tabId: targetId, url };
 }
 
-export async function WeavetabSwitch(tabId: string, config: Config): Promise<{ success: true; tab_id: string; title: string; url: string; contextSwitchCostMs: number }> {
-  const client = await connectToTab(tabId);
+export async function WeavetabSwitch(tabId: string, config: Config, appName?: string): Promise<{ success: true; tab_id: string; title: string; url: string; contextSwitchCostMs: number }> {
+  const client = await connectToTab(tabId, undefined, undefined, undefined, appName);
   
   const startSwitch = Date.now();
   await client.session.Target.activateTarget({ targetId: tabId });
-  sessionRegistry.setActive(tabId, getConfigAgentId(config));
+  sessionRegistry.setActive(tabId, getConfigAgentId(config), appName);
   recordTabActivity(tabId);
 
   const { frameTree } = await client.session.Page.getFrameTree();
@@ -189,10 +197,10 @@ export async function WeavetabSwitch(tabId: string, config: Config): Promise<{ s
   return { success: true, tab_id: tabId, title, url, contextSwitchCostMs: cost };
 }
 
-export async function WeavetabList(config: Config): Promise<{ tabs: TabInfo[] }> {
-  const targets = await getTabList(getConfigAgentId(config));
+export async function WeavetabList(config: Config, appName?: string): Promise<{ tabs: TabInfo[] }> {
+  const targets = await getTabList(getConfigAgentId(config), appName);
 
-  const activeTargetId = sessionRegistry.getActive(getConfigAgentId(config))?.targetId;
+  const activeTargetId = sessionRegistry.getActive(getConfigAgentId(config), appName)?.targetId;
 
   const tabs: TabInfo[] = targets
     .map((t: any) => ({
@@ -216,14 +224,15 @@ export async function WeavetabList(config: Config): Promise<{ tabs: TabInfo[] }>
 export async function WeavetabClose(
   tabId: string,
   config: Config,
-  force = false
+  force = false,
+  appName?: string
 ): Promise<{ success: true; tab_id: string }> {
   const score = semanticScores.get(tabId) ?? 10;
   if (score >= 70 && !force) {
     throw new Error(`[!] Tab Armor block: This tab is semantically protected (score: ${score}). It likely contains a login, checkout, or critical work. Do not close it! If the user explicitly requested this closure, pass force: true.`);
   }
 
-  const port = resolvePort(config);
+  const port = resolvePort(config, appName);
   await CDP.Close({ host: "127.0.0.1", port, id: tabId });
   clearTabCache(tabId);
   sessionRegistry.unregister(tabId);
@@ -240,13 +249,14 @@ export async function WeavetabClose(
 export async function WeavetabCloseBatch(
   tabIds: string[],
   config: Config,
-  force = false
+  force = false,
+  appName?: string
 ): Promise<{ success: true; closed: string[]; skipped: string[] }> {
   const closed: string[] = [];
   const skipped: string[] = [];
   for (const tabId of tabIds) {
     try {
-      await WeavetabClose(tabId, config, force);
+      await WeavetabClose(tabId, config, force, appName);
       closed.push(tabId);
     } catch {
       skipped.push(tabId);
@@ -258,20 +268,20 @@ export async function WeavetabCloseBatch(
 /**
  * Consolidate: deduplicate tabs by URL, close duplicates.
  */
-export async function WeavetabConsolidate(config: Config): Promise<{
+export async function WeavetabConsolidate(config: Config, appName?: string): Promise<{
   success: true;
   tabs_before: number;
   tabs_after: number;
   closed_duplicates: number;
 }> {
-  const port = resolvePort(config);
+  const port = resolvePort(config, appName);
   const targets = await CDP.List({ host: "127.0.0.1", port });
-  const pages = targets.filter((t: any) => t.type === "page");
+  const pages = targets.filter((t: any) => t.type === "page" || t.type === "webview" || t.type === "app");
   const tabsBefore = pages.length;
 
   const seenUrls = new Set<string>();
   let closedDuplicates = 0;
-  const activeTargetId = sessionRegistry.getActive(getConfigAgentId(config))?.targetId;
+  const activeTargetId = sessionRegistry.getActive(getConfigAgentId(config), appName)?.targetId;
 
   for (const page of pages) {
     if (page.id === activeTargetId) {
@@ -295,7 +305,7 @@ export async function WeavetabConsolidate(config: Config): Promise<{
   }
 
   const afterTargets = await CDP.List({ host: "127.0.0.1", port });
-  const tabsAfter = afterTargets.filter((t: any) => t.type === "page").length;
+  const tabsAfter = afterTargets.filter((t: any) => t.type === "page" || t.type === "webview" || t.type === "app").length;
 
   logAction("browser_tabs", "consolidate", `${tabsBefore}→${tabsAfter} (closed ${closedDuplicates} duplicates)`);
   return { success: true, tabs_before: tabsBefore, tabs_after: tabsAfter, closed_duplicates: closedDuplicates };
@@ -304,15 +314,15 @@ export async function WeavetabConsolidate(config: Config): Promise<{
 /**
  * Heal: check all tabs for crashed state and reload them.
  */
-export async function WeavetabHeal(config: Config): Promise<{
+export async function WeavetabHeal(config: Config, appName?: string): Promise<{
   success: true;
   healed: number;
   tabs_checked: number;
   health_summary: Record<string, string>;
 }> {
-  const port = resolvePort(config);
+  const port = resolvePort(config, appName);
   const targets = await CDP.List({ host: "127.0.0.1", port });
-  const pages = targets.filter((t: any) => t.type === "page");
+  const pages = targets.filter((t: any) => t.type === "page" || t.type === "webview" || t.type === "app");
   let healed = 0;
   const healthSummary: Record<string, string> = {};
 
@@ -333,7 +343,7 @@ export async function WeavetabHeal(config: Config): Promise<{
     }
 
     try {
-      const client = await connectToTab(page.id);
+      const client = await connectToTab(page.id, undefined, undefined, undefined, appName);
       const { result } = await client.session.Runtime.evaluate({
         expression: `document.readyState`,
         returnByValue: true,
@@ -365,10 +375,10 @@ export interface WindowInfo {
   focused: boolean;
 }
 
-export async function weaveWindowList(config: Config): Promise<{ windows: WindowInfo[] }> {
-  const port = resolvePort(config);
+export async function weaveWindowList(config: Config, appName?: string): Promise<{ windows: WindowInfo[] }> {
+  const port = resolvePort(config, appName);
   const targets = await CDP.List({ host: "127.0.0.1", port });
-  const pages = targets.filter((t: any) => t.type === "page");
+  const pages = targets.filter((t: any) => t.type === "page" || t.type === "webview" || t.type === "app");
 
   // Group by process — each unique window has its own set of tabs
   // We approximate via CDP Target.getTargets windowId if available
@@ -382,7 +392,7 @@ export async function weaveWindowList(config: Config): Promise<{ windows: Window
         const { windowId, bounds } = await (session as any).Browser.getWindowForTarget({ targetId: page.id });
         if (!seenWindowIds.has(windowId)) {
           seenWindowIds.add(windowId);
-          const activeId = sessionRegistry.getActive(getConfigAgentId(config))?.targetId;
+          const activeId = sessionRegistry.getActive(getConfigAgentId(config), appName)?.targetId;
           windows.push({
             windowId,
             state: bounds.windowState || "normal",
@@ -399,11 +409,11 @@ export async function weaveWindowList(config: Config): Promise<{ windows: Window
   return { windows };
 }
 
-export async function weaveFocusWindow(windowId: number, config: Config): Promise<{ success: true; windowId: number }> {
-  const port = resolvePort(config);
+export async function weaveFocusWindow(windowId: number, config: Config, appName?: string): Promise<{ success: true; windowId: number }> {
+  const port = resolvePort(config, appName);
   const targets = await CDP.List({ host: "127.0.0.1", port });
-  const page = targets.find((t: any) => t.type === "page");
-  if (!page) throw new Error("No page target found to focus window");
+  const page = targets.find((t: any) => t.type === "page" || t.type === "webview" || t.type === "app");
+  if (!page) throw new Error("No page or window target found to focus window");
 
   const session = await CDP({ host: "127.0.0.1", port, target: page.id });
   try {
@@ -415,4 +425,5 @@ export async function weaveFocusWindow(windowId: number, config: Config): Promis
 
   return { success: true, windowId };
 }
+
 

@@ -14,9 +14,9 @@ import { fileURLToPath } from "node:url";
 import type { Config, BrowserEngine } from "../config/loader.js";
 import CDP from "chrome-remote-interface";
 import { readLock, writeLock, clearLock, clearLockIfOwned, isLockValid, isLockPending } from "./lock.js";
-import { getSessionProfile } from "./profiles.js";
+import { getSessionProfile, getElectronProfile, assertNotRealElectronProfile, sanitizeAppName } from "./profiles.js";
 import net from "node:net";
-import { getOutputDir, getDownloadDir, getConfigHeadless, getConfigProxy, getConfigDisableExtensions, getConfigDevMode, getConfigBlock, getConfigAllow, getConfigBrowserType, getConfigBrowserPath, getConfigBrowserFlags, getConfigCookies, getConfigProfileDir, getSystemDir } from "../config/loader.js";
+import { getOutputDir, getDownloadDir, getConfigHeadless, getConfigProxy, getConfigDisableExtensions, getConfigDevMode, getConfigBlock, getConfigAllow, getConfigBrowserType, getConfigBrowserPath, getConfigBrowserFlags, getConfigCookies, getConfigProfileDir, getSystemDir, getElectronAppConfig } from "../config/loader.js";
 import { createBrowserFingerprint, safelyKillWeavetabProcesses } from "./security.js";
 
 function withCDPTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -128,6 +128,40 @@ function isValidBrowserPath(browserPath: string): boolean {
       logDebug(`[SECURITY] Browser path validation failed: not in safe location`);
       return false;
     }
+  }
+
+  return true;
+}
+
+export function isValidElectronExecutablePath(execPath: string): boolean {
+  if (!execPath || typeof execPath !== "string") return false;
+  const normalizedPath = execPath.toLowerCase().trim();
+
+  // Check for suspicious patterns that might indicate command injection or shell escapes
+  const suspiciousPatterns = [
+    '..', // path traversal
+    '%', // URL encoding
+    'cmd.exe', 'powershell.exe', 'bash', 'sh', 'wscript.exe', 'cscript.exe'
+  ];
+
+  if (suspiciousPatterns.some(pattern => normalizedPath.includes(pattern))) {
+    logDebug(`[SECURITY] Electron path validation failed: suspicious pattern in path: ${execPath}`);
+    return false;
+  }
+
+  // Verify that the file actually exists
+  try {
+    if (!fs.existsSync(execPath)) {
+      logDebug(`[SECURITY] Electron path validation failed: file does not exist: ${execPath}`);
+      return false;
+    }
+    const stat = fs.statSync(execPath);
+    if (!stat.isFile()) {
+      logDebug(`[SECURITY] Electron path validation failed: target is not a file: ${execPath}`);
+      return false;
+    }
+  } catch {
+    return false;
   }
 
   return true;
@@ -903,7 +937,7 @@ async function resolvePortFromStderr(
 
     let stderrData = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
-      stderrData += chunk.toString();
+        stderrData += chunk.toString();
 
       // Check for extension loading errors
       if (stderrData.toLowerCase().includes("extension") &&
@@ -934,4 +968,193 @@ async function resolvePortFromStderr(
       }
     });
   });
+}
+
+export async function getFreePort(preferredPort = 9222): Promise<number> {
+  const isAvailable = (p: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const s = net.createServer();
+      s.once("error", () => resolve(false));
+      s.once("listening", () => {
+        s.close(() => resolve(true));
+      });
+      s.listen(p, "127.0.0.1");
+    });
+  };
+
+  if (preferredPort > 0 && (await isAvailable(preferredPort))) {
+    return preferredPort;
+  }
+
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.once("error", reject);
+    s.once("listening", () => {
+      const addr = s.address();
+      const p = typeof addr === "object" && addr ? addr.port : 9222;
+      s.close(() => resolve(p));
+    });
+    s.listen(0, "127.0.0.1");
+  });
+}
+
+export function testPortListening(port: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const socket = new net.Socket();
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, 1000);
+    socket.connect(port, "127.0.0.1", () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on("error", () => {
+      clearTimeout(timeout);
+      resolve(false);
+    });
+  });
+}
+
+export async function launchElectronApp(
+  appName: string,
+  config: Config
+): Promise<{ path: string; name: string; port: number; engine: "chromium"; isElectron: true }> {
+  const appCfg = getElectronAppConfig(appName, config);
+  if (!appCfg) {
+    throw new Error(
+      `[Weavetab] ✗ Electron app "${appName}" is not configured in config.json.\n` +
+      `  Please add an entry under "electron": { "${appName}": "C:\\\\path\\\\to\\\\app.exe" } in your config.`
+    );
+  }
+
+  // 1. Direct port dev attach mode (e.g., dev server or npm run dev)
+  if (appCfg.port && !appCfg.path) {
+    const isAlive = await testPortListening(appCfg.port);
+    if (isAlive) {
+      logDebug(`[Weavetab] Attached to live Electron dev server on port ${appCfg.port}`);
+      return { path: "dev-server", name: appName, port: appCfg.port, engine: "chromium", isElectron: true };
+    }
+    throw new Error(`[Weavetab] ✗ Electron dev app "${appName}" on port ${appCfg.port} is not responding. Ensure your dev server is running.`);
+  }
+
+  // 2. Direct URL dev attach mode
+  if (appCfg.url && !appCfg.path) {
+    try {
+      const parsed = new URL(appCfg.url);
+      const port = parseInt(parsed.port || (parsed.protocol === "https:" ? "443" : "80"), 10);
+      const isAlive = await testPortListening(port);
+      if (isAlive) {
+        logDebug(`[Weavetab] Attached to live Electron app at ${appCfg.url} (port ${port})`);
+        return { path: appCfg.url, name: appName, port, engine: "chromium", isElectron: true };
+      }
+      throw new Error(`[Weavetab] ✗ Electron dev app "${appName}" at ${appCfg.url} is not responding.`);
+    } catch (e: any) {
+      throw new Error(`[Weavetab] ✗ Invalid or unreachable dev URL for "${appName}": ${e?.message || e}`);
+    }
+  }
+
+  const execPath = appCfg.path;
+  if (!execPath || !isValidElectronExecutablePath(execPath)) {
+    throw new Error(`[Weavetab] ✗ Invalid or non-existent Electron executable path for "${appName}": ${execPath}`);
+  }
+
+  // Check app-scoped lock
+  const lock = readLock(appName);
+  if (lock && lock.mode === "session") {
+    if (isLockPending(lock)) {
+      logDebug(`[Weavetab] Launch already in progress for ${appName} (PID: ${lock.pid}). Waiting...`);
+      throw new Error(`Launch already in progress for ${appName}. Wait for it to complete.`);
+    }
+    const valid = await isLockValid(lock);
+    if (valid) {
+      logDebug(`[Weavetab] [OK] Reusing valid Electron lock for ${appName} (PID: ${lock.pid}, Port: ${lock.port})`);
+      return { path: execPath, name: appName, port: lock.port, engine: "chromium", isElectron: true };
+    }
+    logDebug(`[Weavetab] [!] Stale lock detected for ${appName}. Clearing.`);
+    clearLock(appName);
+  } else if (lock) {
+    clearLock(appName);
+  }
+
+  const profileDir = getElectronProfile(appName, appCfg.profileDir);
+  const actualPort = appCfg.port && appCfg.port > 0 ? appCfg.port : await getFreePort(9222);
+
+  // Clean up SingletonLock
+  const singletonLock = path.join(profileDir, "SingletonLock");
+  const singletonCookie = path.join(profileDir, "SingletonCookie");
+  try { if (fs.existsSync(singletonLock)) fs.unlinkSync(singletonLock); } catch { /* non-fatal */ }
+  try { if (fs.existsSync(singletonCookie)) fs.unlinkSync(singletonCookie); } catch { /* non-fatal */ }
+
+  const platform = os.platform();
+  const normalizedProfileDir = platform === 'win32'
+    ? profileDir.replace(/\//g, '\\')
+    : profileDir;
+
+  const resolvedDownloadDir = getDownloadDir(config) && getDownloadDir(config).trim()
+    ? getDownloadDir(config).trim()
+    : getOutputDir("downloads", config);
+  const normalizedDownloadDir = platform === 'win32'
+    ? resolvedDownloadDir.replace(/\//g, '\\')
+    : resolvedDownloadDir;
+
+  // Notice: Clean Electron launch flags: only isolated user-data-dir, remote-debugging-port, and optional user args.
+  // We NEVER pass Chromium browser flags or extension flags to Electron binaries.
+  const args = [
+    `--remote-debugging-port=${actualPort}`,
+    `--user-data-dir=${normalizedProfileDir}`,
+    `--default-download-dir=${normalizedDownloadDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    ...(appCfg.args || []),
+  ];
+
+  const spawnOptions: any = {
+    detached: true,
+    stdio: "ignore",
+  };
+
+  if (platform === 'darwin' && execPath.includes('.app')) {
+    spawnOptions.shell = true;
+  }
+
+  const proc = spawn(execPath, args, spawnOptions);
+  proc.unref();
+  const pid = proc.pid;
+  logDebug(`[Weavetab] Launching Electron app ${appName} (PID: ${pid}, port: ${actualPort}).`);
+
+  // Poll CDP endpoint on actualPort
+  let confirmed = false;
+  for (let i = 0; i < 20; i++) {
+    try {
+      await withCDPTimeout(CDP.List({ host: "127.0.0.1", port: actualPort }), 1500, "CDP.List Electron");
+      confirmed = true;
+      break;
+    } catch {
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+
+  if (!confirmed) {
+    const isListening = await testPortListening(actualPort);
+    if (!isListening) {
+      try { if (pid) process.kill(pid); } catch { /* ignore */ }
+      clearLock(appName);
+      throw new Error(`[Weavetab] Electron app ${appName} failed to start CDP listener on port ${actualPort} after 12s.`);
+    }
+  }
+
+  await writeLock({
+    pid,
+    port: actualPort,
+    profileDir,
+    browserPath: execPath,
+    mode: "session",
+    appName,
+    pending: false,
+    timestamp: Date.now(),
+  }, appName);
+
+  return { path: execPath, name: appName, port: actualPort, engine: "chromium", isElectron: true };
 }

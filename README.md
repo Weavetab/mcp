@@ -3,8 +3,8 @@
 ![WeaveTab MCP Logo](icon.png)
 
   <h1>WeaveTab MCP</h1>
-  <p><strong>The Production-Grade Browser Automation MCP Server</strong></p>
-  <p><em>Direct CDP at Layer 0 — No WebDriver. No Cloud. No Compromise.</em></p>
+  <p><strong>Direct Layer 0 interface for AI agents across web and desktop applications.</strong></p>
+  <p><em>No WebDriver. No Cloud. Pure Control.</em></p>
 
   <p>
     <img src="https://img.shields.io/badge/version-2.5.0-3b82f6?style=flat-square" alt="Version" />
@@ -26,7 +26,7 @@
 
 ---
 
-**Weavetab** is a local, high-performance [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that grants AI agents human-like control over Chromium browsers. Unlike Playwright or Puppeteer, Weavetab communicates directly over the **Chrome DevTools Protocol (CDP) WebSocket at Layer 0** — no WebDriver process, no browser binary download, no heavy abstraction layer. This architectural decision yields **3–8ms mean tool execution latency** and eliminates an entire class of process-level overhead.
+**Weavetab** is a local, high-performance [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server providing AI agents with direct, physical control across Chromium browsers and Electron desktop applications (Discord, VS Code, Antigravity, Figma, Slack, and local projects). Communicating directly over the **Chrome DevTools Protocol (CDP) WebSocket at Layer 0**, Weavetab eliminates WebDriver binaries, browser wrappers, and cloud middleware for deterministic **3–8ms tool execution latency**.
 
 Built by **fy2ne**, Weavetab is engineered for autonomous AI agents operating in production environments where latency, security, and token efficiency are non-negotiable.
 
@@ -37,6 +37,7 @@ Built by **fy2ne**, Weavetab is engineered for autonomous AI agents operating in
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [Core Features](#core-features)
+- [Electron & Desktop App Automation](#electron--desktop-app-automation)
 - [Tool Categories](#tool-categories)
 - [CLI Reference](#cli-reference)
 - [Configuration](#configuration)
@@ -212,6 +213,136 @@ CDP AX Tree Empty → Capture Screenshot → Grayscale Conversion
 
 ### ⚡ Burst Mode
 Chain N actions in a single MCP round-trip with `browser_burst`. Supports macro steps: `type_and_send`, `navigate_and_read`, `click_and_wait`, `scroll_and_read`. Eliminates the per-tool JSON-RPC overhead for high-throughput workflows.
+
+---
+
+## Electron & Desktop App Automation
+
+Weavetab extends its Layer 0 CDP engine beyond web browsers to **any Electron-based desktop application or locally hosted webview app** (e.g. **Discord**, **Slack**, **VS Code**, **Antigravity IDE**, **Figma**, **Obsidian**, **Postman**, or your own custom Electron projects running from source).
+
+Because Electron is built on Chromium and Blink, Weavetab controls desktop apps using the exact same low-latency CDP primitives (`browser_map`, `browser_click`, `browser_type`, `browser_tabs`, etc.) with zero app-specific hacks or overhead.
+
+### 1. Configuring Installed Desktop Apps
+
+Add your application executable paths to `~/.weavetab/config.json` (or `./.weavetab/config.json`) under the `"electron"` dictionary:
+
+```json
+{
+  "browserType": "chromium",
+  "electron": {
+    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
+    "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+    "vscode": "C:\\Users\\<user>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    "figma": "C:\\Users\\<user>\\AppData\\Local\\Figma\\Figma.exe",
+    "obsidian": "C:\\Users\\<user>\\AppData\\Local\\Obsidian\\Obsidian.exe",
+    "slack": "/Applications/Slack.app/Contents/MacOS/Slack"
+  }
+}
+```
+
+### 2. Automating Local / Source-Hosted Electron Projects
+
+If you are developing a local Electron app from source code or running it via Vite / Webpack / Next.js on `localhost`, you can automate it in two ways:
+
+#### Option A: Launch with Remote Debugging Flag
+Start your development process passing the Chrome DevTools Protocol remote debugging port:
+
+```bash
+# Standard Electron CLI / npm script
+npx electron . --remote-debugging-port=9222
+
+# Or within your package.json scripts:
+# "dev:debug": "electron . --remote-debugging-port=9222"
+npm run dev:debug
+```
+
+Then configure `"attachPort": 9222` in `.weavetab/config.json` or register it in `"electron"`:
+```json
+{
+  "electron": {
+    "my-dev-app": "npm run dev:debug"
+  }
+}
+```
+
+#### Option B: Register Local App Executable / Wrapper Script
+Specify your local build binary or launch script in `"electron"`:
+```json
+{
+  "electron": {
+    "my-local-app": "C:\\Users\\<user>\\projects\\my-app\\node_modules\\electron\\dist\\electron.exe"
+  }
+}
+```
+
+### 3. Controlling Desktop Apps via MCP Tools
+
+All Weavetab tools accept an optional `app` parameter specifying which application to target. When specified, Weavetab automatically connects to that app's dedicated CDP session without launching or interfering with your default browser.
+
+#### Launch / Focus Desktop App
+```json
+{
+  "name": "browser_navigate",
+  "arguments": {
+    "app": "antigravity"
+  }
+}
+```
+
+#### List & Switch Windows / Workbenches
+Desktop apps often run multiple browser windows or background webviews. Inspect and switch active contexts using `browser_tabs`:
+```json
+{
+  "name": "browser_tabs",
+  "arguments": {
+    "action": "list",
+    "app": "antigravity"
+  }
+}
+```
+
+Switch to a specific window/tab:
+```json
+{
+  "name": "browser_tabs",
+  "arguments": {
+    "action": "switch",
+    "tabId": "D8832CBF1FEF413B6E09E96EF8C82DFF",
+    "app": "antigravity"
+  }
+}
+```
+
+#### Inspect DOM & Interact with UI Elements
+Generate actionable Ref IDs (`w:NN`) and interact directly with native desktop UI components:
+```json
+// 1. Snapshot the Desktop App UI
+{
+  "name": "browser_map",
+  "arguments": {
+    "app": "antigravity"
+  }
+}
+
+// 2. Click Settings or Menus
+{
+  "name": "browser_click",
+  "arguments": {
+    "ref": "w:14",
+    "app": "antigravity"
+  }
+}
+
+// 3. Type text into Desktop inputs
+{
+  "name": "browser_type",
+  "arguments": {
+    "ref": "w:28",
+    "text": "Hello from WeaveTab automation!",
+    "app": "discord"
+  }
+}
+```
 
 ---
 
@@ -394,7 +525,11 @@ Weavetab auto-generates a config file at `~/.weavetab/config.json` on first run.
   "role": "admin",
   "telemetry": false,
   "downloadDir": "~/Downloads",
-  "profileDir": "~/.weavetab/profile"
+  "profileDir": "~/.weavetab/profile",
+  "electron": {
+    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
+    "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe"
+  }
 }
 ```
 
@@ -406,6 +541,7 @@ Weavetab auto-generates a config file at `~/.weavetab/config.json` on first run.
 | `maxActionsPerMinute` | number | `60` | Rate limit threshold |
 | `role` | `"admin"` \| `"system"` \| `"viewer"` \| `"automation"` | `"admin"` | RBAC role |
 | `telemetry` | boolean | `false` | Opt-in telemetry |
+| `electron` | `Record<string, string>` | `{}` | Named map of Electron desktop apps to executable paths or startup scripts |
 
 ### Domain Policy
 

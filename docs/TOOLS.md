@@ -2,7 +2,10 @@
 
 > **Version:** 2.5.0 | **Total Registered Tools:** 45 | **Architecture:** Layer 0 Direct CDP & Extension Bridge
 
-Weavetab provides 45 production-grade MCP tools engineered for browser automation, GitHub repository analysis, Office document parsing, and deep web inspection.
+Weavetab provides 45 production-grade MCP tools engineered for browser automation, desktop/Electron application control (Discord, Slack, VS Code, Antigravity, Figma, Obsidian, etc.), GitHub repository analysis, Office document parsing, and deep web inspection.
+
+> [!TIP]
+> **Universal `app` Parameter:** All browser tools accept an optional `app?: string` argument to target any configured Electron desktop application or locally hosted source project without launching or interfering with your default web browser.
 
 ---
 
@@ -95,6 +98,39 @@ For enterprise security, inject secrets without exposing raw password text to th
   "arguments": {
     "envVar": "WORKFLOW_AUTH_TOKEN",
     "selector": "#api-key-input"
+  }
+}
+```
+
+### 4. Desktop & Electron Application Automation
+Automate desktop applications (Discord, Slack, VS Code, Antigravity, Figma, Obsidian, or local projects from source) using the `app` parameter:
+
+```json
+// 1. Target desktop app workbench tabs/windows
+{
+  "name": "browser_tabs",
+  "arguments": {
+    "action": "list",
+    "app": "antigravity"
+  }
+}
+
+// 2. Map DOM and click desktop buttons
+{
+  "name": "browser_click",
+  "arguments": {
+    "ref": "w:12",
+    "app": "antigravity"
+  }
+}
+
+// 3. Type into Electron desktop chat or editors
+{
+  "name": "browser_type",
+  "arguments": {
+    "ref": "w:25",
+    "text": "Sent via Weavetab Layer 0 CDP!",
+    "app": "discord"
   }
 }
 ```

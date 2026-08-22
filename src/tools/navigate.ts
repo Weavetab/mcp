@@ -31,7 +31,8 @@ export async function weaveNavigate(
   config: Config,
   targetId = "default",
   force = false,
-  fast = false
+  fast = false,
+  appName?: string
 ): Promise<NavigateResult | WeaveError> {
   logDebug(`[weaveNavigate] Attempting navigation to: ${url}`);
   let parsed: URL;
@@ -57,18 +58,40 @@ export async function weaveNavigate(
     }
   }
 
-  // Allow http(s), file (for local HTML debugging), and chrome-extension (handled below).
-  // Block script-execution protocols (javascript:, data:) that bypass the domain policy.
+  const active = sessionRegistry.getActive(config.agentId, appName);
+  const isElectron = !!(appName || active?.isElectron);
+
+  // Allowed web and desktop application protocols.
+  // Block script-execution protocols (javascript:, data:) that bypass safety policies.
   const proto = parsed.protocol.toLowerCase();
-  if (proto !== "http:" && proto !== "https:" && proto !== "file:" && proto !== "chrome-extension:") {
-    return { success: false, error_code: "BLOCKED_PROTOCOL", message: `[!] Blocked protocol '${proto}'. Only http, https, and file are allowed.` };
+  const allowedProtocols = new Set([
+    "http:",
+    "https:",
+    "file:",
+    "chrome-extension:",
+    "app:",
+    "vscode-webview:",
+    "vscode-file:",
+    "discord:",
+    "slack:",
+    "devtools:",
+    "chrome:",
+    "about:",
+  ]);
+
+  if (!allowedProtocols.has(proto)) {
+    return { success: false, error_code: "BLOCKED_PROTOCOL", message: `[!] Blocked protocol '${proto}'. Only web, file, and desktop app protocols are allowed.` };
   }
 
-  const domainCheck = checkDomain(parsed.href, config);
-  logDebug(`[weaveNavigate] Domain check for ${parsed.hostname}: ${JSON.stringify(domainCheck)}`);
-  if (!domainCheck.allowed) {
-    return { success: false, error_code: "DOMAIN_BLOCKED", message: `[!] Weave blocked: ${domainCheck.reason}` };
+  // Domain policy check only applies to standard web navigations
+  if (!isElectron && (proto === "http:" || proto === "https:")) {
+    const domainCheck = checkDomain(parsed.href, config);
+    logDebug(`[weaveNavigate] Domain check for ${parsed.hostname}: ${JSON.stringify(domainCheck)}`);
+    if (!domainCheck.allowed) {
+      return { success: false, error_code: "DOMAIN_BLOCKED", message: `[!] Weave blocked: ${domainCheck.reason}` };
+    }
   }
+
 
   // Extension pages: open in new tab instead of navigating current tab
   // (chrome-extension:// pages use a different process context — Page.navigate
@@ -106,7 +129,6 @@ export async function weaveNavigate(
   }
 
   // Resolve active tab id
-  const active = sessionRegistry.getActive(config.agentId);
   const resolvedTargetId = active?.targetId ?? targetId;
 
   // 1. Anchor Tab Protection

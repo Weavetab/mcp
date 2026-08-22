@@ -155,7 +155,7 @@ function expandMacro(step: BurstMacroStep): BurstStep[] {
 
 export async function browserBurst(
   session: CDP.Client,
-  args: { steps: AnyBurstStep[]; batch?: boolean },
+  args: { steps: AnyBurstStep[]; batch?: boolean; app?: string },
   config: Config
 ): Promise<BurstResult> {
   if (!args.steps || args.steps.length === 0) {
@@ -206,7 +206,8 @@ export async function browserBurst(
           result = await weaveType(session, step.args as any, config);
           break;
         case "browser_go":
-          result = await weaveNavigate(session, (step.args as any).url, config);
+        case "browser_navigate":
+          result = await weaveNavigate(session, (step.args as any).url, config, undefined, false, false, args.app);
           break;
         case "browser_key":
           result = await weaveKey(session, step.args as any, config);
@@ -218,7 +219,7 @@ export async function browserBurst(
           result = await browserWait(session, step.args as any, config);
           break;
         case "browser_map": {
-          const mapTargetId = sessionRegistry.getActive(getConfigAgentId(config))?.targetId || "default";
+          const mapTargetId = sessionRegistry.getActive(getConfigAgentId(config), args.app)?.targetId || "default";
           result = await browserMap(session, step.args as ReadOptions, mapTargetId, config);
           break;
         }
@@ -233,7 +234,7 @@ export async function browserBurst(
           break;
         case "browser_console": {
           let targetId = "default";
-          const active = sessionRegistry.getActive(getConfigAgentId(config));
+          const active = sessionRegistry.getActive(getConfigAgentId(config), args.app);
           if (active) targetId = active.targetId;
           result = await browserConsole(session, step.args as any, config, targetId);
           break;
@@ -244,10 +245,8 @@ export async function browserBurst(
         case "browser_fill":
           result = await browserFill(session, step.args as any, config);
           break;
-        case "browser_navigate":
-          result = await weaveNavigate(session, (step.args as any).url, config);
-          break;
         case "browser_type_secret":
+
           result = await weaveTypeSecret(session, step.args as any, config);
           break;
         case "browser_screenshot": {

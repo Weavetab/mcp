@@ -6,7 +6,7 @@
 
 ## Overview
 
-Weavetab is a production-grade, in-process MCP (Model Context Protocol) server that grants AI agents human-like control over Chromium browsers. It communicates directly over the Chrome DevTools Protocol (CDP) at Layer 0 — no WebDriver process, no browser binary download, no Playwright/Puppeteer abstraction layer.
+Weavetab is a production-grade, in-process MCP (Model Context Protocol) server providing AI agents with direct, physical Layer 0 control across Chromium browsers and Electron desktop applications. It communicates directly over the Chrome DevTools Protocol (CDP) WebSocket at Layer 0 — no WebDriver process, no browser binary download, no cloud middleware.
 
 ### Core Capabilities
 
@@ -264,7 +264,12 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
   "disableExtensions": false,
   "cookies": false,
   "browserFlags": [],
-  "policies": []
+  "policies": [],
+  "electron": {
+    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
+    "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+    "vscode": "C:\\Users\\<user>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+  }
 }
 ```
 
@@ -283,6 +288,7 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
 | `cookies` | boolean | false | Persist cookies/storage across sessions. When `false`, `document.cookie`, `localStorage`, and `sessionStorage` are all neutered at the browser level (returns empty/null for everything) + a fresh isolated profile is used each session. When `true`, cookies/storage work normally and persist via the profile directory. |
 | `browserFlags` | string[] | `[]` | Extra Chromium command-line flags to append on launch (e.g., `["--disable-web-security"]`). The `--disable-sync` flag is mandatory and cannot be overridden — any conflicting flag is automatically dropped. |
 | `policies` | PolicyEntry[] | `[]` | Domain-level access control policies (see [Domain Policy](#domain-policy) below). Supersedes the legacy `block`/`allow` lists. |
+| `electron` | Record<string, string> | `{}` | Map of registered Electron desktop applications (e.g. Discord, VS Code, Figma, Antigravity, local dev apps) to executable paths or startup commands. |
 
 ---
 
@@ -486,6 +492,57 @@ Skills are automatically discovered by MCP clients and provide:
 - Step-by-step mission templates
 - Error handling patterns
 - Best practice recommendations
+
+---
+
+## Electron & Desktop Application Automation
+
+Weavetab natively supports **generic automation of any Electron or Chromium-based desktop application** (e.g. Discord, Slack, VS Code, Antigravity IDE, Figma, Obsidian, Postman, or local developer applications running from source).
+
+### Why It Works at Layer 0
+Electron desktop applications run a bundled Chromium/Blink engine under the hood. When started with Chrome DevTools Protocol debugging enabled (either automatically via Weavetab or via `--remote-debugging-port`), Weavetab connects directly to the desktop app's internal WebSockets and exposes all 45+ MCP tools without requiring external drivers or wrappers.
+
+### Registering Applications
+In `~/.weavetab/config.json` or project-scoped `.weavetab/config.json`:
+
+```json
+{
+  "electron": {
+    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
+    "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+    "vscode": "C:\\Users\\<user>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    "figma": "C:\\Users\\<user>\\AppData\\Local\\Figma\\Figma.exe",
+    "obsidian": "C:\\Users\\<user>\\AppData\\Local\\Obsidian\\Obsidian.exe",
+    "my-app": "C:\\path\\to\\my-project\\node_modules\\electron\\dist\\electron.exe"
+  }
+}
+```
+
+### Automating Local / Source-Hosted Projects
+When developing an Electron app locally (e.g. `localhost:3000` or running via Vite/Webpack/Electron forge):
+
+1. **Launch with remote debugging enabled:**
+   ```bash
+   npx electron . --remote-debugging-port=9222
+   # or with npm scripts:
+   npm run dev -- --remote-debugging-port=9222
+   ```
+
+2. **Automate via MCP tools:**
+   Set `"attachPort": 9222` or register the dev script in `"electron"` config.
+
+### Tool Execution Flow with Desktop Apps
+Every Weavetab tool supports the optional `app` parameter:
+
+| Tool Call | Desktop Behavior |
+| :--- | :--- |
+| `browser_navigate({ app: "antigravity" })` | Launches or connects to Antigravity's CDP session |
+| `browser_tabs({ action: "list", app: "antigravity" })` | Lists all windows, webviews, and workbench tabs in the app |
+| `browser_tabs({ action: "switch", tabId: "<id>", app: "antigravity" })` | Switches active focus to the specified workbench or window |
+| `browser_map({ app: "antigravity" })` | Generates semantic Ref IDs (`w:NN`) for the desktop app's active window |
+| `browser_click({ ref: "w:12", app: "antigravity" })` | Sends Ghost Cursor click to the desktop app element |
+| `browser_type({ ref: "w:15", text: "...", app: "discord" })` | Types text directly into the desktop app input field |
+| `browser_eval({ expression: "...", app: "vscode" })` | Evaluates JavaScript inside the desktop app frame context |
 
 ---
 

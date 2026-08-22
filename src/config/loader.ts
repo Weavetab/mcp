@@ -21,7 +21,13 @@ export interface PolicyEntry {
   mode: PolicyMode;
 }
 
-// ─── Simplified Config Structure ─────────────────────────────────────────────────────
+export interface ElectronAppConfig {
+  path?: string;
+  port?: number;
+  url?: string;
+  args?: string[];
+  profileDir?: string;
+}
 
 export interface Config {
   mode: "session" | "attach";
@@ -40,6 +46,8 @@ export interface Config {
   profileDir: string;
   cookies: boolean;
   syncDataAcrossBrowsers: boolean;
+  
+  electron?: Record<string, ElectronAppConfig>;
   
   role: Role;
   block: string[];
@@ -100,6 +108,8 @@ export const DEFAULT_CONFIG: Config = {
   profileDir: "",
   cookies: false,
   syncDataAcrossBrowsers: false,
+  
+  electron: undefined,
   
   role: "admin",
   block: ["*.bank.*", "paypal.com"],
@@ -173,6 +183,8 @@ function migrateToSimple(sectioned: any): Config {
     profileDir: sectioned.browser?.profileDir || "",
     cookies: sectioned.browser?.cookies || false,
     
+    electron: sectioned.electron || undefined,
+    
     role: sectioned.security?.role || "admin",
     block: sectioned.security?.block || ["*.bank.*", "paypal.com"],
     allow: sectioned.security?.allow || [],
@@ -245,7 +257,7 @@ function validateConfig(raw: Record<string, unknown>): Config {
   return validateConfigInternal(raw);
 }
 
-function validateConfigInternal(raw: Record<string, unknown>): Config {
+export function validateConfigInternal(raw: Record<string, unknown>): Config {
   const d = DEFAULT_CONFIG;
   const VALID_MODES    = ["session", "attach"] as const;
   const VALID_ENGINES  = ["chromium", "firefox", "webkit"] as const;
@@ -305,6 +317,74 @@ function validateConfigInternal(raw: Record<string, unknown>): Config {
     proxy = undefined;
   }
 
+  // Validate electron apps mapping
+  let electron: Record<string, ElectronAppConfig> | undefined = undefined;
+  if (raw.electron && typeof raw.electron === "object" && !Array.isArray(raw.electron)) {
+    const rawMap = raw.electron as Record<string, unknown>;
+    const validatedMap: Record<string, ElectronAppConfig> = {};
+    for (const [rawKey, rawVal] of Object.entries(rawMap)) {
+      const sanitizedKey = rawKey.trim();
+      if (!/^[a-zA-Z0-9_-]+$/.test(sanitizedKey)) {
+        logDebug(`[Weavetab Config] [WARN] Invalid electron app name "${rawKey}". Must be alphanumeric, dashes, or underscores.`);
+        continue;
+      }
+      if (typeof rawVal === "string") {
+        const strVal = rawVal.trim();
+        if (/^\d+$/.test(strVal)) {
+          const portNum = parseInt(strVal, 10);
+          if (portNum > 0 && portNum <= 65535) {
+            validatedMap[sanitizedKey] = { port: portNum };
+          }
+        } else if (strVal.startsWith("http://") || strVal.startsWith("https://") || strVal.startsWith("ws://") || strVal.startsWith("wss://")) {
+          const cfg: ElectronAppConfig = { url: strVal };
+          try {
+            const parsedUrl = new URL(strVal);
+            if (parsedUrl.port) {
+              const p = parseInt(parsedUrl.port, 10);
+              if (p > 0 && p <= 65535) cfg.port = p;
+            }
+          } catch { /* ignore */ }
+          validatedMap[sanitizedKey] = cfg;
+        } else {
+          const safePath = safePathField(`electron.${sanitizedKey}`, strVal);
+          if (safePath) {
+            validatedMap[sanitizedKey] = { path: safePath };
+          }
+        }
+      } else if (typeof rawVal === "number" && Number.isFinite(rawVal) && rawVal > 0 && rawVal <= 65535) {
+        validatedMap[sanitizedKey] = { port: rawVal };
+      } else if (typeof rawVal === "object" && rawVal !== null && !Array.isArray(rawVal)) {
+        const objVal = rawVal as Record<string, unknown>;
+        const appCfg: ElectronAppConfig = {};
+        if (typeof objVal.path === "string" && objVal.path.trim()) {
+          const safePath = safePathField(`electron.${sanitizedKey}.path`, objVal.path);
+          if (safePath) appCfg.path = safePath;
+        }
+        if (typeof objVal.port === "number" && Number.isFinite(objVal.port) && objVal.port > 0 && objVal.port <= 65535) {
+          appCfg.port = objVal.port;
+        } else if (typeof objVal.port === "string" && /^\d+$/.test((objVal.port as string).trim())) {
+          const p = parseInt((objVal.port as string).trim(), 10);
+          if (p > 0 && p <= 65535) appCfg.port = p;
+        }
+        if (typeof objVal.url === "string" && objVal.url.trim()) {
+          appCfg.url = objVal.url.trim();
+        }
+        if (Array.isArray(objVal.args)) {
+          appCfg.args = (objVal.args as unknown[]).filter(isStr);
+        }
+        if (typeof objVal.profileDir === "string" && objVal.profileDir.trim()) {
+          appCfg.profileDir = safePathField(`electron.${sanitizedKey}.profileDir`, objVal.profileDir);
+        }
+        if (appCfg.path || appCfg.port || appCfg.url) {
+          validatedMap[sanitizedKey] = appCfg;
+        }
+      }
+    }
+    if (Object.keys(validatedMap).length > 0) {
+      electron = validatedMap;
+    }
+  }
+
   return {
     mode,
     session:             validateField("session", raw.session, isStr, d.session),
@@ -321,6 +401,8 @@ function validateConfigInternal(raw: Record<string, unknown>): Config {
     browserFlags:        isArr(raw.browserFlags) ? (raw.browserFlags as unknown[]).filter(isStr) : d.browserFlags,
     profileDir,
     cookies:             validateField("cookies", raw.cookies, isBool, d.cookies),
+    
+    electron,
     
     role:                validateField("role", raw.role, isStr, d.role, v => (VALID_ROLES as readonly string[]).includes(v)) as Role,
     block:               isArr(raw.block)  ? (raw.block  as unknown[]).filter(isStr) : d.block,
@@ -774,6 +856,28 @@ export function getConfigDevMode(config: Config): boolean {
   return config.devMode;
 }
 
+export function getConfigElectron(config: Config): Record<string, ElectronAppConfig> | undefined {
+  return config.electron;
+}
+
+export function getElectronAppConfig(appName: string, config?: Config): ElectronAppConfig | null {
+  const cfg = config ?? getCachedConfig();
+  if (!cfg.electron) return null;
+  const sanitized = appName.trim();
+  return cfg.electron[sanitized] || null;
+}
+
+export function getElectronAppNames(config?: Config): string[] {
+  const cfg = config ?? getCachedConfig();
+  if (!cfg.electron) return [];
+  return Object.keys(cfg.electron);
+}
+
+export function getElectronApps(config?: Config): Record<string, ElectronAppConfig> {
+  const cfg = config ?? getCachedConfig();
+  return cfg.electron || {};
+}
+
 // ─── Additional Helper Functions for Code Compatibility ─────────────────────────
 
 export function getConfigNavigationTimeoutMs(config: Config): number {
@@ -798,6 +902,15 @@ const GLOBAL_SYSTEM_DIR = path.join(HOME, ".weavetab-system");
 
 export function getSystemDir(subdir: string): string {
   const dir = path.join(GLOBAL_SYSTEM_DIR, subdir);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+export function getSystemAppDir(appName: string): string {
+  const sanitized = appName.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+  const dir = path.join(GLOBAL_SYSTEM_DIR, "apps", sanitized);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }

@@ -11,12 +11,15 @@ import * as os from "node:os";
 import * as net from "node:net";
 import { lock } from "proper-lockfile";
 
+import { sanitizeAppName } from "./profiles.js";
+
 export interface LockData {
   pid?: number;
   port: number;
   profileDir: string;
   browserPath: string;
   mode: "session" | "attach";
+  appName?: string;
   pending?: boolean;
   timestamp?: number;
   // Browser fingerprinting data
@@ -28,54 +31,63 @@ export interface LockData {
 }
 
 const LOCK_DIR = path.join(os.homedir(), ".weavetab-system", "locks");
-const LOCK_FILE = path.join(LOCK_DIR, ".weavetab.lock");
-const MUTEX_FILE = path.join(LOCK_DIR, ".weavetab.lock.mutex");
 
-// ─── In-process serialization queue ──────────────────────────────────────────
-// When multiple MCP tool calls run in parallel inside the same Node process they
-// all race to acquireMutex() simultaneously. The OS-level proper-lockfile handles
-// cross-process contention, but within the same process concurrent callers share
-// the same lockfile handle and can trigger "Lock is already released" errors.
-// This queue serializes callers at the JS level before they touch the filesystem.
+export function getLockFilePath(appName?: string): string {
+  if (appName && appName.trim()) {
+    return path.join(LOCK_DIR, `.weavetab.electron.${sanitizeAppName(appName)}.lock`);
+  }
+  return path.join(LOCK_DIR, ".weavetab.lock");
+}
 
-let _inProcessMutexQueue: Promise<void> = Promise.resolve();
+export function getMutexFilePath(appName?: string): string {
+  if (appName && appName.trim()) {
+    return path.join(LOCK_DIR, `.weavetab.electron.${sanitizeAppName(appName)}.lock.mutex`);
+  }
+  return path.join(LOCK_DIR, ".weavetab.lock.mutex");
+}
 
-// Re-entrancy tracking. getOrConnect() acquires the mutex and then calls
-// launchWithBridge(), which internally calls writeLock() → acquireMutex()
-// again (nested). The serialization queue would block the nested call on the
-// outer slot, which only releases after the launch finishes — a self-deadlock.
-// Track how many regions this process currently holds and only touch the OS
-// file lock + queue slot on the outermost acquisition / release.
-let _heldDepth = 0;
-let _heldFileRelease: (() => Promise<void>) | null = null;
-let _heldSlotResolve: (() => void) | null = null;
+// ─── In-process serialization queues per app/browser ──────────────────────────
 
-async function acquireMutex(): Promise<() => Promise<void>> {
-  // Re-entrant fast path: this process already holds the mutex.
-  if (_heldDepth > 0) {
-    _heldDepth++;
+const _inProcessQueues = new Map<string, Promise<void>>();
+const _heldDepths = new Map<string, number>();
+const _heldFileReleases = new Map<string, (() => Promise<void>) | null>();
+const _heldSlotResolves = new Map<string, (() => void) | null>();
+
+function getTargetKey(appName?: string): string {
+  return appName && appName.trim() ? `electron:${sanitizeAppName(appName)}` : "browser";
+}
+
+async function acquireMutex(appName?: string): Promise<() => Promise<void>> {
+  const key = getTargetKey(appName);
+  const currentDepth = _heldDepths.get(key) ?? 0;
+
+  // Re-entrant fast path: this process already holds the mutex for this target.
+  if (currentDepth > 0) {
+    _heldDepths.set(key, currentDepth + 1);
     return async () => {
-      _heldDepth--;
+      const d = (_heldDepths.get(key) ?? 1) - 1;
+      _heldDepths.set(key, Math.max(0, d));
     };
   }
 
-  // Enqueue this caller — it will only proceed once all prior callers finish.
+  // Enqueue this caller for this specific key
   let resolveSlot!: () => void;
   const slot = new Promise<void>(resolve => { resolveSlot = resolve; });
-  const prevQueue = _inProcessMutexQueue;
-  _inProcessMutexQueue = _inProcessMutexQueue.then(() => slot);
-  await prevQueue; // Wait for all prior callers to fully release
+  const prevQueue = _inProcessQueues.get(key) ?? Promise.resolve();
+  _inProcessQueues.set(key, prevQueue.then(() => slot));
+  await prevQueue; // Wait for all prior callers for this key to fully release
 
   fs.mkdirSync(LOCK_DIR, { recursive: true });
-  if (!fs.existsSync(MUTEX_FILE)) {
+  const mutexFile = getMutexFilePath(appName);
+  if (!fs.existsSync(mutexFile)) {
     try {
-      fs.writeFileSync(MUTEX_FILE, String(process.pid), "utf-8");
+      fs.writeFileSync(mutexFile, String(process.pid), "utf-8");
     } catch { /* race/non-fatal */ }
   }
 
   let fileRelease: (() => Promise<void>) | null = null;
   try {
-    fileRelease = await lock(MUTEX_FILE, {
+    fileRelease = await lock(mutexFile, {
       retries: {
         retries: 25,
         minTimeout: 200,
@@ -85,27 +97,28 @@ async function acquireMutex(): Promise<() => Promise<void>> {
     });
     // Write current PID to mutex file for diagnostics/HUD
     try {
-      fs.writeFileSync(MUTEX_FILE, String(process.pid), "utf-8");
+      fs.writeFileSync(mutexFile, String(process.pid), "utf-8");
     } catch { /* non-fatal */ }
   } catch (err: any) {
     resolveSlot(); // Unblock the queue even on failure
-    throw new Error(`[Weavetab] Could not acquire launch mutex after retries: ${err?.message || err}`);
+    throw new Error(`[Weavetab] Could not acquire launch mutex for ${key} after retries: ${err?.message || err}`);
   }
 
   // Mark this process as the current holder so nested calls skip the queue.
-  _heldDepth = 1;
-  _heldFileRelease = fileRelease;
-  _heldSlotResolve = resolveSlot;
+  _heldDepths.set(key, 1);
+  _heldFileReleases.set(key, fileRelease);
+  _heldSlotResolves.set(key, resolveSlot);
 
   // Return a release function that releases both the file lock and the in-process slot
   return async () => {
-    _heldDepth--;
-    if (_heldDepth > 0) return; // nested regions still active
-    _heldDepth = 0;
-    const rel = _heldFileRelease;
-    const slotResolve = _heldSlotResolve;
-    _heldFileRelease = null;
-    _heldSlotResolve = null;
+    const d = (_heldDepths.get(key) ?? 1) - 1;
+    _heldDepths.set(key, Math.max(0, d));
+    if (d > 0) return; // nested regions still active
+    _heldDepths.delete(key);
+    const rel = _heldFileReleases.get(key);
+    const slotResolve = _heldSlotResolves.get(key);
+    _heldFileReleases.delete(key);
+    _heldSlotResolves.delete(key);
     try {
       if (rel) await rel();
     } catch { /* already released — safe to ignore */ }
@@ -116,40 +129,45 @@ async function acquireMutex(): Promise<() => Promise<void>> {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export async function writeLockSafe(data: LockData): Promise<void> {
-  const release = await acquireMutex();
+export async function writeLockSafe(data: LockData, appName?: string): Promise<void> {
+  const targetApp = appName || data.appName;
+  const release = await acquireMutex(targetApp);
+  const lockFile = getLockFilePath(targetApp);
   try {
     fs.mkdirSync(LOCK_DIR, { recursive: true });
-    fs.writeFileSync(LOCK_FILE, JSON.stringify(data, null, 2), "utf-8");
+    fs.writeFileSync(lockFile, JSON.stringify(data, null, 2), "utf-8");
   } finally {
     await release();
   }
 }
 
-export async function writeLock(data: LockData): Promise<void> {
-  await writeLockSafe(data);
+export async function writeLock(data: LockData, appName?: string): Promise<void> {
+  await writeLockSafe(data, appName);
 }
 
-export function readLock(): LockData | null {
-  if (!fs.existsSync(LOCK_FILE)) return null;
+export function readLock(appName?: string): LockData | null {
+  const lockFile = getLockFilePath(appName);
+  if (!fs.existsSync(lockFile)) return null;
   try {
-    return JSON.parse(fs.readFileSync(LOCK_FILE, "utf-8")) as LockData;
+    return JSON.parse(fs.readFileSync(lockFile, "utf-8")) as LockData;
   } catch {
     return null;
   }
 }
 
-export function clearLock(): void {
+export function clearLock(appName?: string): void {
+  const lockFile = getLockFilePath(appName);
+  const mutexFile = getMutexFilePath(appName);
   try {
-    if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE);
+    if (fs.existsSync(lockFile)) fs.unlinkSync(lockFile);
   } catch (e) {
     logDebug(`[Weavetab] [!] Failed to clear lock file: ${e}`);
   }
   try {
-    if (fs.existsSync(MUTEX_FILE)) fs.unlinkSync(MUTEX_FILE);
+    if (fs.existsSync(mutexFile)) fs.unlinkSync(mutexFile);
   } catch { /* ignore */ }
   try {
-    const lockDir = MUTEX_FILE + ".lock";
+    const lockDir = mutexFile + ".lock";
     if (fs.existsSync(lockDir)) fs.rmSync(lockDir, { recursive: true, force: true });
   } catch { /* ignore */ }
 }
@@ -159,14 +177,14 @@ export function clearLock(): void {
  * Prevents a second MCP server instance from wiping the first instance's browser lock
  * during its retry loop, which would allow a race condition where two browsers spawn.
  */
-export function clearLockIfOwned(): void {
+export function clearLockIfOwned(appName?: string): void {
   try {
-    const lock = readLock();
+    const lock = readLock(appName);
     if (!lock || lock.pid !== process.pid) {
       logDebug(`[Weavetab] clearLockIfOwned: skipping — lock owned by PID ${lock?.pid ?? 'none'}, this PID is ${process.pid}`);
       return;
     }
-    clearLock();
+    clearLock(appName);
   } catch (e) {
     logDebug(`[Weavetab] clearLockIfOwned error: ${e}`);
   }
@@ -223,3 +241,4 @@ export function isLockPending(lock: LockData): boolean {
 }
 
 export { acquireMutex };
+

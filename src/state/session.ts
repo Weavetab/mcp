@@ -63,11 +63,24 @@ export class SessionRegistry {
     this.savePersistence();
   }
 
-  getActive(agentId?: string): BrowserClient | null {
+  getActive(agentId?: string, appName?: string): BrowserClient | null {
     if (!agentId) return null;
-    const targetId = this.activeTargetIdByAgent.get(agentId);
-    if (!targetId) return null;
-    return this.sessions.get(targetId) || null;
+    const key = appName ? `${agentId}:app:${appName}` : agentId;
+    const targetId = this.activeTargetIdByAgent.get(key);
+    if (targetId && this.sessions.has(targetId)) {
+      return this.sessions.get(targetId) || null;
+    }
+    if (appName) {
+      const match = Array.from(this.sessions.values()).find(c => c.agentId === agentId && c.appName === appName);
+      if (match) return match;
+    } else {
+      const browserTargetId = this.activeTargetIdByAgent.get(agentId);
+      if (browserTargetId) {
+        const client = this.sessions.get(browserTargetId);
+        if (client && !client.isElectron) return client;
+      }
+    }
+    return null;
   }
 
   getMostRecent(agentId?: string): BrowserClient | null {
@@ -75,9 +88,12 @@ export class SessionRegistry {
     return values.length > 0 ? values[values.length - 1]! : null;
   }
 
-  setActive(targetId: string, agentId: string): void {
+  setActive(targetId: string, agentId: string, appName?: string): void {
     if (this.sessions.has(targetId)) {
-      this.activeTargetIdByAgent.set(agentId, targetId);
+      const client = this.sessions.get(targetId);
+      const targetApp = appName || client?.appName;
+      const key = targetApp ? `${agentId}:app:${targetApp}` : agentId;
+      this.activeTargetIdByAgent.set(key, targetId);
     }
   }
 
@@ -93,8 +109,9 @@ export class SessionRegistry {
     this.sessions.set(targetId, client);
     this.heartbeatTimestamps.set(targetId, Date.now());
     this.startHeartbeat(targetId, client.session);
-    if (!this.activeTargetIdByAgent.has(client.agentId)) {
-      this.activeTargetIdByAgent.set(client.agentId, targetId);
+    const key = client.appName ? `${client.agentId}:app:${client.appName}` : client.agentId;
+    if (!this.activeTargetIdByAgent.has(key)) {
+      this.activeTargetIdByAgent.set(key, targetId);
     }
   }
 
@@ -105,13 +122,14 @@ export class SessionRegistry {
       client.session.close().catch(() => {});
       this.sessions.delete(targetId);
       
-      const activeForAgent = this.activeTargetIdByAgent.get(client.agentId);
+      const key = client.appName ? `${client.agentId}:app:${client.appName}` : client.agentId;
+      const activeForAgent = this.activeTargetIdByAgent.get(key);
       if (activeForAgent === targetId) {
-        const agentTabs = Array.from(this.sessions.values()).filter(c => c.agentId === client.agentId);
+        const agentTabs = Array.from(this.sessions.values()).filter(c => c.agentId === client.agentId && c.appName === client.appName);
         if (agentTabs.length > 0) {
-          this.activeTargetIdByAgent.set(client.agentId, agentTabs[agentTabs.length - 1]!.targetId);
+          this.activeTargetIdByAgent.set(key, agentTabs[agentTabs.length - 1]!.targetId);
         } else {
-          this.activeTargetIdByAgent.delete(client.agentId);
+          this.activeTargetIdByAgent.delete(key);
         }
       }
     }

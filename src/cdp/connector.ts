@@ -8,9 +8,9 @@ import { logDebug } from "../audit/logger.js";
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
 import { blockStorageAccess } from "../security/guard.js";
-import { launchWithBridge, injectStealthScript } from "./bridge.js";
+import { launchWithBridge, launchElectronApp, injectStealthScript } from "./bridge.js";
 import { setupOverlay, ensureVisualLayer, INSTALL_EXPR } from "../overlay/injector.js";
-import { onConfigChange, saveConfig, loadConfigSync, getCachedConfig, getConfigAgentId, getConfigCookies, getConfigProfileDir, getConfigMode, getConfigBrowserType, getConfigRole } from "../config/loader.js";
+import { onConfigChange, saveConfig, loadConfigSync, getCachedConfig, getConfigAgentId, getConfigCookies, getConfigProfileDir, getConfigMode, getConfigBrowserType, getConfigRole, getElectronAppConfig } from "../config/loader.js";
 import { clearSnapshot } from "../state/delta.js";
 import { sessionRegistry } from "../state/session.js";
 import { initConsoleBuffering } from "../tools/console.js";
@@ -24,7 +24,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { execSync } from "node:child_process";
-import { getSessionProfile } from "./profiles.js";
+import { getSessionProfile, getElectronProfile } from "./profiles.js";
 import { safelyKillWeavetabProcesses, verifyProfileIsolation, verifyBrowserFingerprint, clearProfileVerificationCache } from "./security.js";
 
 function withCDPTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -67,6 +67,8 @@ export interface BrowserClient {
   overlayInstalled: boolean;
   agentId: string;
   browserContextId?: string;
+  appName?: string;
+  isElectron?: boolean;
   /** Sticky pruning state: if true, all subsequent DOM reads by action tools (click, type, etc.) will also apply pruning. */
   pruneActive?: boolean;
 }
@@ -125,14 +127,22 @@ async function waitForPageReady(session: CDP.Client): Promise<void> {
 
 // ─── Session init (overlay + re-injection) ───────────────────────────────────
 
-async function initSession(session: CDP.Client, targetId: string, port: number, config: Config): Promise<void> {
+async function initSession(session: CDP.Client, targetId: string, port: number, config: Config, isElectron?: boolean): Promise<void> {
   initDialogHandler(session);
 
   // Initialize Omni-Context Broker for iframes
   const { initOmniBroker } = await import("./omni_broker.js");
   await initOmniBroker(session, targetId, port);
 
-  if (activeEngine === "chromium") {
+  if (isElectron) {
+    // Electron desktop app initialization
+    try {
+      await session.Page.addScriptToEvaluateOnNewDocument({ source: WT_REGISTRY_INIT_EXPR });
+    } catch { /* non-fatal */ }
+
+    // Direct DOM minimal overlay injection without Chrome Extension
+    await ensureVisualLayer(session, config);
+  } else if (activeEngine === "chromium") {
     // Only block cookies/storage when cookies mode is disabled
     if (!getConfigCookies(config)) {
       await blockStorageAccess(session);
@@ -177,7 +187,7 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
     clearTabCache(targetId);
     // Invalidate URC on navigation — elements from the old page are stale
     urcInvalidate(targetId);
-    if (activeEngine === "chromium") {
+    if (isElectron || activeEngine === "chromium") {
       try {
         await waitForPageReady(session);
         const cfg = getCachedConfig();
@@ -188,8 +198,8 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
     }
   });
 
-  // Diagnostic: verify extension content script loaded
-  if (activeEngine === "chromium") {
+  // Diagnostic: verify extension content script loaded (Standard browser only)
+  if (!isElectron && activeEngine === "chromium") {
     try {
       // Check for multiple indicators that extension is loaded
       const { result: extCheck } = await session.Runtime.evaluate({
@@ -208,29 +218,12 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
       } else {
         logDebug(`[Weavetab] [!] Extension content script NOT detected — HUD/overlay may not work`);
         logDebug(`[Weavetab] [!] Try reloading page or check if extension loaded in browser://extensions`);
-        
-        // Try to inject a basic error indicator into the page
-        try {
-          await session.Runtime.evaluate({
-            expression: `
-              (function() {
-                const div = document.createElement('div');
-                div.style.cssText = 'position:fixed;top:10px;right:10px;background:red;color:white;padding:10px;z-index:999999;font-family:sans-serif;font-size:14px;';
-                div.textContent = 'WeaveTab Extension Not Loaded';
-                document.body.appendChild(div);
-                setTimeout(() => div.remove(), 5000);
-              })()
-            `
-          });
-        } catch { /* ignore */ }
       }
     } catch (checkErr) {
       logDebug(`[Weavetab] [!] Extension health check failed: ${checkErr}`);
     }
-  }
 
-  // Push config + initial idle state to extension right away (Chrome only)
-  if (activeEngine === "chromium") {
+    // Push config + initial idle state to extension right away (Chrome only)
     const { sendToExtension } = await import("../cdp/helpers.js");
     sendToExtension(session, {
       type: 'Weavetab_CONFIG',
@@ -242,8 +235,7 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
     }).catch(() => {});
   }
 
-  // Analytics ping every 5s — stored per-tab so each interval can be
-  // independently cancelled when the tab closes or cleanupAll() is called.
+  // Analytics ping every 30s
   const sessionStartTime = Date.now();
   const analyticsInterval = setInterval(async () => {
     try {
@@ -259,37 +251,147 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
         expression: `if(window.__wt_push_analytics) window.__wt_push_analytics("${health}", ${latency}, ${sessionSeconds})`
       }).catch(() => {});
     } catch { /* ignore */ }
-  }, 30_000); // 30s interval — reduced from 5s to cut idle CDP overhead (6 round-trips/min → 1)
-  // Register in the per-tab map so cleanupAll() and the session-close handler can
-  // cancel it without relying on a single overwriteable global slot.
+  }, 30_000);
   analyticsIntervals.set(targetId, analyticsInterval);
-  // unref() so this polling interval does not pin the Node.js event loop.
-  // An orphaned MCP process (IDE disconnected, browser closed) would otherwise
-  // stay alive indefinitely due to this 30s interval firing forever.
   analyticsInterval.unref();
 }
 
 // ─── Main connection entry point ──────────────────────────────────────────────
 
-export async function getOrConnect(config: Config): Promise<BrowserClient> {
-  if (getConfigMode(config) === "attach") {
+export async function getOrConnect(config: Config, targetApp?: string): Promise<BrowserClient> {
+  if (getConfigMode(config) === "attach" && !targetApp) {
     throw new Error("[!] Attach mode (connect to your real browser) coming soon. Use session mode for now.");
   }
 
-  const activeClient = sessionRegistry.getActive(getConfigAgentId(config));
+  // 1. Check existing active session for this agent & app
+  const activeClient = sessionRegistry.getActive(getConfigAgentId(config), targetApp);
   if (activeClient) {
     try {
       await activeClient.session.Browser.getVersion();
       return activeClient;
     } catch {
-      logDebug("[Weavetab CDP] Connection lost. Reconnecting...");
+      logDebug(`[Weavetab CDP] Connection lost for ${targetApp || "browser"}. Reconnecting...`);
       clearProfileVerificationCache(activeClient.targetId);
       sessionRegistry.unregister(activeClient.targetId);
     }
   }
 
-  const releaseMutex = await acquireMutex();
+  const releaseMutex = await acquireMutex(targetApp);
   try {
+    if (targetApp) {
+      // ──────────────── ELECTRON APP CONNECTION FLOW ────────────────
+      const appCfg = getElectronAppConfig(targetApp, config);
+      if (!appCfg) {
+        throw new Error(
+          `[Weavetab] ✗ Electron app "${targetApp}" is not configured in config.json.\n` +
+          `  Please add an entry under "electron": { "${targetApp}": "C:\\\\path\\\\to\\\\app.exe" } in your config.`
+        );
+      }
+
+      let port: number | null = null;
+      const sessionLock = readLock(targetApp);
+      if (sessionLock && sessionLock.mode === "session") {
+        if (isLockPending(sessionLock)) {
+          logDebug(`[Weavetab] Launch in progress for ${targetApp} by PID ${sessionLock.pid}. Waiting up to 5s...`);
+          for (let i = 0; i < 5; i++) {
+            await new Promise(r => setTimeout(r, 1000));
+            const updatedLock = readLock(targetApp);
+            if (!updatedLock || !isLockPending(updatedLock)) break;
+          }
+        }
+        const freshLock = readLock(targetApp);
+        if (freshLock && (await isLockValid(freshLock))) {
+          port = freshLock.port;
+        } else {
+          clearLock(targetApp);
+        }
+      }
+
+      let targets: any[] = [];
+      if (port) {
+        try {
+          targets = await withCDPTimeout(CDP.List({ host: "127.0.0.1", port }), 3000, "CDP.List existing Electron");
+        } catch {
+          port = null;
+        }
+      }
+
+      if (!port || targets.length === 0) {
+        logDebug(`[Weavetab CDP] Launching Electron app ${targetApp}...`);
+        const launchResult = await launchElectronApp(targetApp, config);
+        port = launchResult.port;
+
+        // Poll for target window availability (Electron may take up to 2-3s to render initial window)
+        for (let retry = 0; retry < 10; retry++) {
+          try {
+            targets = await withCDPTimeout(CDP.List({ host: "127.0.0.1", port }), 2000, "CDP.List Electron retry");
+            if (targets.length > 0) break;
+          } catch { /* wait */ }
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+
+      let pageTarget = targets.find(t => t.type === "page" || t.type === "webview" || t.type === "app") ?? targets[0];
+      if (!pageTarget) {
+        throw new Error(`[Weavetab] ✗ No window or webview target found in Electron app "${targetApp}".`);
+      }
+
+      const targetId = pageTarget.id || pageTarget.targetId;
+      const session = await withCDPTimeout(CDP({ host: "127.0.0.1", port, target: targetId }), 5000, "CDP connect Electron target");
+
+      (session as any).on("close", () => {
+        logDebug(`[Weavetab CDP] Electron session WebSocket closed (${targetApp}) — unregistering.`);
+        const iv = analyticsIntervals.get(targetId);
+        if (iv) { clearInterval(iv); analyticsIntervals.delete(targetId); }
+        clearProfileVerificationCache(targetId);
+        import("./omni_broker.js").then(m => m.cleanupOmniBroker(targetId)).catch(()=>{});
+        import("../tools/network_intercept.js").then(m => m.cleanupNetworkIntercept(session as any)).catch(()=>{});
+        sessionRegistry.unregister(targetId);
+      });
+      (session as any).on("error", (err: any) => {
+        logDebug(`[Weavetab CDP] Electron session WebSocket error (${targetApp}):`, err?.message ?? err);
+      });
+
+      // Validate connection health
+      try {
+        await session.Browser.getVersion();
+      } catch {
+        throw new Error("Failed health check: CDP session connected to Electron app but getVersion failed.");
+      }
+
+      await Promise.all([
+        session.Accessibility.enable(),
+        session.DOM.enable(),
+        session.Page.enable(),
+        session.Runtime.enable(),
+        session.Network.enable().catch(() => {}),
+        session.Performance.enable().catch(() => {})
+      ]);
+
+      await wireUiConfigBinding(session);
+
+      await initSession(session, targetId, port, config, true);
+
+      await session.Target.setDiscoverTargets({ discover: true }).catch(() => {});
+
+      logDebug(`[Weavetab CDP] [OK] Active Electron target: ${pageTarget.title || pageTarget.url || targetApp}`);
+
+      const client: BrowserClient = {
+        session,
+        targetId,
+        url: pageTarget.url || "",
+        title: pageTarget.title || targetApp,
+        overlayInstalled: false,
+        agentId: getConfigAgentId(config),
+        appName: targetApp,
+        isElectron: true,
+      };
+
+      sessionRegistry.register(targetId, client);
+      return client;
+    }
+
+    // ──────────────── STANDARD WEB BROWSER FLOW ────────────────
     const sessionLock = readLock();
 
     if (sessionLock && sessionLock.mode === "session") {
@@ -480,7 +582,7 @@ export async function getOrConnect(config: Config): Promise<BrowserClient> {
       if (activatedId) {
         const client = sessionRegistry.getAll().find(c => c.targetId === activatedId);
         if (client) {
-          sessionRegistry.setActive(activatedId, client.agentId);
+          sessionRegistry.setActive(activatedId, client.agentId, client.appName);
         }
       }
     });
@@ -541,27 +643,32 @@ export async function getOrConnect(config: Config): Promise<BrowserClient> {
   }
 }
 
-export async function getTabList(agentId?: string): Promise<any[]> {
+export async function getTabList(agentId?: string, targetApp?: string): Promise<any[]> {
   const config = getCachedConfig();
 
-  // Validate the lock before blindly connecting (same two-factor check that
-  // getOrConnect() performs). A stale lock after a server restart would otherwise
-  // produce raw ECONNREFUSED.
-  let port = actualPort;
-  if (!port) {
-    const lock = readLock();
-    if (lock && lock.mode === "session") {
-      const valid = await isLockValid(lock);
-      if (valid) {
-        port = lock.port;
-      } else {
-        logDebug("[Weavetab CDP] getTabList: stale lock detected — clearing.");
-        clearLock();
-        port = null;
+  let port: number | null = null;
+  if (targetApp) {
+    const lock = readLock(targetApp);
+    if (lock && (await isLockValid(lock))) {
+      port = lock.port;
+    }
+  } else {
+    port = actualPort;
+    if (!port) {
+      const lock = readLock();
+      if (lock && lock.mode === "session") {
+        const valid = await isLockValid(lock);
+        if (valid) {
+          port = lock.port;
+        } else {
+          logDebug("[Weavetab CDP] getTabList: stale lock detected — clearing.");
+          clearLock();
+          port = null;
+        }
       }
     }
   }
-  if (!port) throw new Error("[!] No active browser session. Run browser_go first.");
+  if (!port) throw new Error(`[!] No active ${targetApp ? targetApp : "browser"} session. Run browser_go or launch app first.`);
 
   try {
     const metaSession = await withCDPTimeout(CDP({ host: "127.0.0.1", port }), 5000, "getTabList CDP");
@@ -572,7 +679,7 @@ export async function getTabList(agentId?: string): Promise<any[]> {
     const bctxId = sessionRegistry.getBrowserContextIdForAgent(aid);
 
     return targetInfos
-      .filter(t => t.type === "page" && (!bctxId || t.browserContextId === bctxId))
+      .filter(t => (t.type === "page" || t.type === "webview" || t.type === "app") && (!bctxId || t.browserContextId === bctxId))
       .map(t => ({
         id: t.targetId,
         title: t.title,
@@ -580,7 +687,7 @@ export async function getTabList(agentId?: string): Promise<any[]> {
         type: t.type,
       }));
   } catch {
-    throw new Error(`[!] Weavetab cannot reach browser on port ${port}.`);
+    throw new Error(`[!] Weavetab cannot reach ${targetApp ? targetApp : "browser"} on port ${port}.`);
   }
 }
 
@@ -611,21 +718,21 @@ async function wireUiConfigBinding(session: CDP.Client): Promise<void> {
   } catch { /* already bound */ }
 }
 
-export async function connectToTab(targetId: string, port?: number, agentId?: string, browserContextId?: string): Promise<BrowserClient> {
+export async function connectToTab(targetId: string, port?: number, agentId?: string, browserContextId?: string, appName?: string): Promise<BrowserClient> {
   const existing = sessionRegistry.getAll().find(c => c.targetId === targetId);
   if (existing) return existing;
 
-  const lock = readLock();
-  const p = port || actualPort || lock?.port;
-  if (!p) throw new Error("[!] No active browser session. Run browser_go first.");
+  const lock = readLock(appName);
+  const p = port || (appName ? lock?.port : (actualPort || lock?.port));
+  if (!p) throw new Error(`[!] No active ${appName || "browser"} session. Run browser_go first.`);
   const targets = await withCDPTimeout(CDP.List({ host: "127.0.0.1", port: p }), 5000, "connectToTab CDP.List");
-  const t = targets.find(t => t.id === targetId);
+  const t = targets.find((t: any) => (t.id || t.targetId) === targetId);
   if (!t) throw new Error("Tab not found");
 
   const session = await withCDPTimeout(CDP({ host: "127.0.0.1", port: p, target: targetId }), 5000, "connectToTab CDP");
 
   (session as any).on("close", () => {
-    logDebug("[Weavetab CDP] connectToTab session closed — unregistering.");
+    logDebug(`[Weavetab CDP] connectToTab session closed (${appName || "browser"}) — unregistering.`);
     // Cancel this tab's analytics interval so it doesn't outlive the session
     const iv = analyticsIntervals.get(targetId);
     if (iv) { clearInterval(iv); analyticsIntervals.delete(targetId); }
@@ -635,7 +742,7 @@ export async function connectToTab(targetId: string, port?: number, agentId?: st
     sessionRegistry.unregister(targetId);
   });
   (session as any).on("error", (err: any) => {
-    logDebug("[Weavetab CDP] connectToTab session error:", err?.message ?? err);
+    logDebug(`[Weavetab CDP] connectToTab session error (${appName || "browser"}):`, err?.message ?? err);
   });
 
   await Promise.all([
@@ -650,7 +757,7 @@ export async function connectToTab(targetId: string, port?: number, agentId?: st
   await wireUiConfigBinding(session);
 
   const currentConfig = getCachedConfig();
-  await initSession(session, targetId, p, currentConfig);
+  await initSession(session, targetId, p, currentConfig, !!appName);
 
   // NOTE: initSession() already installs a frameNavigated handler that handles
   // clearSnapshot, clearViewportCache, and ensureVisualLayer. Do NOT add a second
@@ -666,6 +773,8 @@ export async function connectToTab(targetId: string, port?: number, agentId?: st
     overlayInstalled: false,
     agentId: actualAgentId,
     browserContextId,
+    appName,
+    isElectron: !!appName,
   };
 
   sessionRegistry.register(targetId, client);

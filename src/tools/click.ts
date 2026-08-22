@@ -69,7 +69,8 @@ export async function weaveClick(
   const { id, label, intent, backendNodeId: directNodeId } = args;
   const { Page, DOM, Input } = session;
   const startMs = Date.now();
-  const targetId = sessionRegistry.getActive(config.agentId)?.targetId ?? "default";
+  const clientMatch = sessionRegistry.getAll().find(c => c.session === session);
+  const targetId = clientMatch?.targetId ?? (session as any).targetId ?? "default";
   
   // Track URL before click
   const initialUrl = (await Page.getFrameTree()).frameTree.frame.url;
@@ -134,39 +135,44 @@ export async function weaveClick(
     const query = label || intent;
 
     if (args.id) {
-      const targetId = args.id;
-      element = map.elements.find((el) => el.id === targetId);
+      const reqId = args.id;
+      element = map.elements.find((el) => el.id === reqId);
 
-      // Fast-fail for stale w:NN refs: if a weavetab ref ID is not in the current map,
-      // the DOM mutated since the last browser_map call (e.g. a radio was selected, SPA navigated).
-      // Tell the agent explicitly so it knows to refresh — don't silently fall through.
-      if (!element && targetId.startsWith("w:")) {
+      // If not found in cache, rebuild map once to catch recent DOM updates or cache misses
+      if (!element && reqId.startsWith("w:")) {
+        map = await buildActionMap(session, { lite: true }, targetId);
+        cacheActionMap(targetId, map);
+        element = map.elements.find((el) => el.id === reqId);
+      }
+
+      // Fast-fail if still not found
+      if (!element && reqId.startsWith("w:")) {
         return {
           success: false,
           error_code: "ELEMENT_NOT_FOUND",
-          message: `[!] Ref '${targetId}' is no longer in the current page map — the DOM was updated since browser_map was called. Call browser_map() to get fresh ref IDs.`,
+          message: `[!] Ref '${reqId}' is no longer in the current page map — the DOM was updated since browser_map was called. Call browser_map() to get fresh ref IDs.`,
         };
       }
 
-      if (!element && (targetId.startsWith("#") || targetId.startsWith(".") || targetId.includes("[") || targetId.includes(">") || targetId.includes(" "))) {
-        const actCheck = await verifyActionability(session, targetId, {
+      if (!element && (reqId.startsWith("#") || reqId.startsWith(".") || reqId.includes("[") || reqId.includes(">") || reqId.includes(" "))) {
+        const actCheck = await verifyActionability(session, reqId, {
           stabilityTimeoutMs: config.actionabilityTimeoutMs ?? 400,
           totalTimeoutMs: (config.actionabilityTimeoutMs ?? 400) * 3,
         });
         if (actCheck.status === 'ACTIONABLE') {
           element = {
-            id: targetId,
+            id: reqId,
             label: 'selector-match',
             x: actCheck.x,
             y: actCheck.y,
-            selector: targetId,
+            selector: reqId,
             role: "button",
             group: "utility",
             depth: 0,
-            fingerprint: "selector:" + targetId,
+            fingerprint: "selector:" + reqId,
           } as any;
         } else if (actCheck.status === 'OCCLUDED' && !actCheck.occludedBy?.isWeavetabOwned) {
-          return { success: false, error_code: "ELEMENT_OCCLUDED_BY", message: `[!] ${describeOccluder(actCheck.occludedBy!)} — element ${targetId} is blocked.` };
+          return { success: false, error_code: "ELEMENT_OCCLUDED_BY", message: `[!] ${describeOccluder(actCheck.occludedBy!)} — element ${reqId} is blocked.` };
         }
       }
     } else if (label) {

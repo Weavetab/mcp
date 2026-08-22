@@ -1,5 +1,5 @@
 import { findBrowser, findFirefox, probeAllBrowsers } from "../cdp/bridge.js";
-import type { BrowserEngine } from "../config/loader.js";
+import { getCachedConfig, getElectronApps, type BrowserEngine, type ElectronAppConfig } from "../config/loader.js";
 
 // Phase 8c: Per-engine tool coverage map
 // Firefox CDP is ~80% feature-complete; WebKit is ~60%
@@ -45,6 +45,7 @@ const ENGINE_COVERAGE: Record<BrowserEngine, { coverage: number; unsupported: st
 export interface BrowserDetectResult {
   available: { engine: BrowserEngine; name: string; path: string }[];
   current: BrowserEngine;
+  electronApps?: Record<string, ElectronAppConfig>;
   toolCoverage: Record<string, number>;
   unsupportedTools: Record<string, string[]>;
 }
@@ -68,17 +69,20 @@ export function detectBrowsers(currentEngine: BrowserEngine): BrowserDetectResul
   // We do not auto-detect WebKit — only report if manually configured
 
   const toolCoverage: Record<string, number> = {};
-  const unsupportedTools: Record<string, string[]> = {};
+  const unsupportedMap: Record<string, string[]> = {};
   for (const engine of ["chromium", "firefox", "webkit"] as BrowserEngine[]) {
     toolCoverage[engine] = ENGINE_COVERAGE[engine].coverage;
-    unsupportedTools[engine] = [...ENGINE_COVERAGE[engine].unsupported];
+    unsupportedMap[engine] = [...ENGINE_COVERAGE[engine].unsupported];
   }
+
+  const electronApps = getElectronApps(getCachedConfig());
 
   return {
     available,
     current: currentEngine,
+    electronApps: Object.keys(electronApps).length > 0 ? electronApps : undefined,
     toolCoverage,
-    unsupportedTools,
+    unsupportedTools: unsupportedMap,
   };
 }
 

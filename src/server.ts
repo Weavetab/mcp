@@ -131,7 +131,8 @@ async function withSecurity<T>(
   config: Config,
   toolName: string,
   handler: ToolHandler<T>,
-  isOfficial = false
+  isOfficial = false,
+  targetApp?: string
 ): Promise<{ content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> }> {
   const liveConfig = getCachedConfig();
 
@@ -148,7 +149,7 @@ async function withSecurity<T>(
     }
   }
 
-  const { session } = await withTimeoutGuard(() => getOrConnect(liveConfig), 15000, `CDP Connection (${toolName})`);
+  const { session } = await withTimeoutGuard(() => getOrConnect(liveConfig, targetApp), 15000, `CDP Connection (${toolName}${targetApp ? `:${targetApp}` : ''})`);
   agentState.setSession(session);
   (global as any).__wt_live_config = liveConfig;
 
@@ -172,8 +173,8 @@ async function withSecurity<T>(
 
   if (!isOfficial) {
     // Phase 7c: Domain policy check for read-only / deny / audit-only modes
-    const activeClient = sessionRegistry.getActive(liveConfig.agentId);
-    if (activeClient?.url) {
+    const activeClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
+    if (activeClient?.url && !activeClient.isElectron) {
       const domainCheck = checkDomain(activeClient.url, liveConfig);
       if (!domainCheck.allowed) {
         throw new Error(`[!] ${domainCheck.reason}`);
@@ -234,7 +235,7 @@ async function withSecurity<T>(
     agentState.reportToolSuccess();
     const ms = Date.now() - t0;
 
-    const activeClient = sessionRegistry.getActive(liveConfig.agentId);
+    const activeClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
     logActionStructured({
       timestamp: new Date(t0).toISOString(),
       sessionId: activeClient?.targetId,
@@ -373,7 +374,7 @@ async function withSecurity<T>(
     const errMsg = err instanceof Error ? err.message : String(err);
     agentState.reportToolError();
 
-    const activeClient = sessionRegistry.getActive(liveConfig.agentId);
+    const activeClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
     logActionStructured({
       timestamp: new Date(t0).toISOString(),
       sessionId: activeClient?.targetId,
@@ -437,6 +438,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       delta: z.boolean().optional().describe("Diff mode: return ONLY elements that changed since the last browser_map call (added, removed, or modified). Diffs across time — distinct from prune. Cuts prompt tokens by up to 97% on consecutive calls."),
       ax_tree: z.boolean().optional().describe("Bypass the extension entirely and read raw Chrome Accessibility Tree. Use this if Shadow DOMs hide elements."),
       tab_id: z.string().optional().describe("Read a specific background tab instead of the active one."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
       show_overlays: z.boolean().optional().describe("Default false. Debug only — draws colored element borders via extension (ugly). The blue edge glow is the standard visual indicator, shown automatically during reading states. Only enable this for debugging element boundaries."),
       force: z.boolean().optional().describe("Force a full DOM map rebuild even if loop detection says nothing changed. Bypasses the map skip guard."),
       prune: z.boolean().optional().describe("Semantic DOM pruning: compress the current snapshot before returning. Drops hidden elements with no interactive descendants and not referenced by any toggle trigger (aria-controls etc.). Replaces SVG icons with [SVG Icon: label] tokens. Distinct from delta:true — delta diffs across time, prune compresses this snapshot once. Combine both for maximum token efficiency."),
@@ -447,12 +449,12 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
           let targetSession = session;
           let targetId = "default";
           const { sessionRegistry } = await import("./state/session.js");
-          const active = sessionRegistry.getActive(liveConfig.agentId);
+          const active = sessionRegistry.getActive(liveConfig.agentId, args.app);
           if (active) targetId = active.targetId;
 
           if (args.tab_id) {
             const { connectToTab } = await import("./cdp/connector.js");
-            const client = await connectToTab(args.tab_id);
+            const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
             targetSession = client.session;
             targetId = args.tab_id;
           }
@@ -479,7 +481,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
 
           const result = await agentAction(targetSession, 'reading', () => browserMap(targetSession, args, targetId, liveConfig), 'browser_map');
           return { content: [{ type: "text", text: result }] };
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -487,25 +489,32 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
   // ── 2. browser_navigate ────────────────────────────────────────────────────
   server.tool(
     "browser_navigate",
-    "Navigate to a URL.",
+    "Navigate to a URL or launch/focus a configured Electron app.",
     {
-      url: z.string().describe("Absolute URL to navigate to (must include https://)."),
+      url: z.string().optional().describe("Absolute URL to navigate to (must include https:// or app URL). Optional if 'app' is specified."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron' (e.g. 'example' or 'my-dev-app'). When specified, targets or launches the Electron app."),
       force: z.boolean().optional().describe("If true, overwrites current tab even if it's protected (anchor tab). Otherwise opens a new tab automatically."),
       tab_id: z.string().optional().describe("Target a specific tab ID for navigation instead of the active tab.")
     },
     async (args) => {
       try {
+        if (!args.url && !args.app) {
+          throw new Error("Either 'url' or 'app' must be provided to browser_navigate.");
+        }
         return await withSecurity(config, "browser_navigate", async (session, liveConfig) => {
           let targetSession = session;
           let targetId = "default";
           if (args.tab_id) {
             const { connectToTab } = await import("./cdp/connector.js");
-            const client = await connectToTab(args.tab_id);
+            const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
             targetSession = client.session;
             targetId = args.tab_id;
           }
-          return await agentAction(targetSession, 'navigating', () => weaveNavigate(targetSession, args.url, liveConfig, targetId, args.force), 'browser_navigate');
-        });
+          if (args.url) {
+            return await agentAction(targetSession, 'navigating', () => weaveNavigate(targetSession, args.url!, liveConfig, targetId, args.force), 'browser_navigate');
+          }
+          return { success: true, app: args.app, message: `Connected to Electron app "${args.app}".` };
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -516,6 +525,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
     "Click a DOM element. Use browser_canvas for charts/canvas. If stuck_warning=true, stop and use browser_map.",
     {
       id: z.string().optional().describe("Ref ID from browser_map (e.g. 'w:42'). Primary targeting method. DO NOT SPAM. If stuck_warning is returned, stop retrying and call browser_map first."),
+      ref: z.string().optional().describe("Alias for id (e.g. 'w:42')."),
       selector: z.string().optional().describe("CSS selector of the element to click."),
       target: z.string().optional().describe("CSS selector or query string. Alias for selector."),
       label: z.string().optional().describe("Visible text or aria-label to click."),
@@ -525,6 +535,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       y: z.number().optional().describe("Raw Y coordinate. Use for precise positional clicks when element ID is not available."),
       include_map: z.boolean().optional().describe("Set true to include a full updated page_map in the response. Default false — omit when you already have ref IDs or don't need a DOM refresh."),
       tab_id: z.string().optional().describe("Execute in a specific tab instead of active."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
@@ -532,14 +543,15 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
           let targetSession = session;
           if (args.tab_id) {
             const { connectToTab } = await import("./cdp/connector.js");
-            const client = await connectToTab(args.tab_id);
+            const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
             targetSession = client.session;
           }
           const normalizedArgs = { ...args };
+          if (args.ref && !normalizedArgs.id) normalizedArgs.id = args.ref;
           if (args.selector && !normalizedArgs.id) normalizedArgs.id = args.selector;
           if (args.target && !normalizedArgs.id) normalizedArgs.id = args.target;
           return await agentAction(targetSession, 'clicking', () => weaveClick(targetSession, normalizedArgs, liveConfig), 'browser_click');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -552,6 +564,7 @@ server.tool(
     "Type text into a single input field (use browser_fill for smart multi-field forms). If NOT_EDITABLE, fallback to click + browser_key. Use browser_map if stuck.",
   {
     id: z.string().optional().describe("Ref ID from browser_map. Primary targeting — always prefer this over label when you have a ref ID."),
+    ref: z.string().optional().describe("Alias for id (e.g. 'w:42')."),
     selector: z.string().optional().describe("CSS selector of the input field. Use when you know the exact selector."),
     target: z.string().optional().describe("CSS selector or query string. Alias for selector."),
     label: z.string().optional().describe("Field label or placeholder text. Used for fuzzy matching."),
@@ -563,6 +576,7 @@ server.tool(
     paste: z.boolean().optional().describe("Instant paste mode via clipboard. Auto-enabled for text longer than 8 chars. Best for long URLs or multi-word strings."),
     include_map: z.boolean().optional().describe("Set true to include a full updated page_map in the response. Default false."),
     tab_id: z.string().optional().describe("Execute in a specific tab instead of active."),
+    app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
   },
   async (args) => {
     try {
@@ -570,14 +584,15 @@ server.tool(
         let targetSession = session;
         if (args.tab_id) {
           const { connectToTab } = await import("./cdp/connector.js");
-          const client = await connectToTab(args.tab_id);
+          const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
           targetSession = client.session;
         }
         const normalizedArgs = { ...args };
+        if (args.ref && !normalizedArgs.id) normalizedArgs.id = args.ref;
         if (args.selector && !normalizedArgs.id) normalizedArgs.id = args.selector;
         if (args.target && !normalizedArgs.id) normalizedArgs.id = args.target;
         return await agentAction(targetSession, 'typing', () => weaveType(targetSession, normalizedArgs, liveConfig), 'browser_type');
-      });
+      }, false, args.app);
     } catch (e) { return wrapError(e); }
   }
 );
@@ -588,14 +603,18 @@ server.tool(
     "Inject a secret from an environment variable.",
   {
     id: z.string().optional().describe("Ref ID from browser_map."),
+    ref: z.string().optional().describe("Alias for id (e.g. 'w:42')."),
     target: z.string().optional().describe("Alternative target input element identifier or CSS selector."),
     envKey: z.string().describe("The environment variable key containing the secret."),
+    app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
   },
   async (args) => {
     try {
       return await withSecurity(config, "browser_type_secret", async (session, liveConfig) => {
-        return await agentAction(session, 'typing', () => weaveTypeSecret(session, args as any, liveConfig), 'browser_type_secret');
-      });
+        const normalizedArgs = { ...args };
+        if (args.ref && !normalizedArgs.id) normalizedArgs.id = args.ref;
+        return await agentAction(session, 'typing', () => weaveTypeSecret(session, normalizedArgs as any, liveConfig), 'browser_type_secret');
+      }, false, args.app);
     } catch (e) { return wrapError(e); }
   }
 );
@@ -609,19 +628,20 @@ server.tool(
       key: z.string().describe("Key name: Enter, Escape, Tab, ArrowDown, F5, etc. DO NOT SPAM. If action fails or loops, STOP calling this tool and use browser_map to re-evaluate the page state."),
       modifiers: z.array(z.enum(["Alt", "Ctrl", "Meta", "Shift"])).optional().describe("Array of modifier keys to hold during the press."),
       tab_id: z.string().optional().describe("Execute in a specific tab instead of active."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
-      const { key, modifiers, tab_id } = args;
+      const { key, modifiers, tab_id, app } = args;
       try {
         return await withSecurity(config, "browser_key", async (session, liveConfig) => {
           let targetSession = session;
           if (tab_id) {
             const { connectToTab } = await import("./cdp/connector.js");
-            const client = await connectToTab(tab_id);
+            const client = await connectToTab(tab_id, undefined, undefined, undefined, app);
             targetSession = client.session;
           }
           return await weaveKey(targetSession, { key, modifiers }, liveConfig);
-        });
+        }, false, app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -632,12 +652,14 @@ server.tool(
     "Scroll the page.",
     {
       id: z.string().optional().describe("Ref ID to scroll into view or scroll inside of. DO NOT SPAM. If action fails or loops, STOP calling this tool and use browser_map to re-evaluate the page state."),
+      ref: z.string().optional().describe("Alias for id (e.g. 'w:42')."),
       selector: z.string().optional().describe("CSS Selector of the element to scroll into view."),
       target: z.string().optional().describe("Alternative element identifier or query to scroll into view."),
       label: z.string().optional().describe("Element label to scroll into view."),
       direction: z.enum(["up", "down", "left", "right"]).describe("Scroll direction."),
       distance: z.number().optional().describe("Pixels to scroll (default 400)."),
       tab_id: z.string().optional().describe("Execute in a specific tab instead of active. DO NOT SPAM. If action fails or loops, STOP calling this tool and use browser_map to re-evaluate the page state."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
@@ -645,14 +667,15 @@ server.tool(
           let targetSession = session;
           if (args.tab_id) {
             const { connectToTab } = await import("./cdp/connector.js");
-            const client = await connectToTab(args.tab_id);
+            const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
             targetSession = client.session;
           }
           const normalizedArgs = { ...args };
+          if (args.ref && !normalizedArgs.id) normalizedArgs.id = args.ref;
           if (args.selector && !normalizedArgs.id) normalizedArgs.id = args.selector;
           if (args.target && !normalizedArgs.id) normalizedArgs.id = args.target;
           return await browserScroll(targetSession, normalizedArgs, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -660,13 +683,18 @@ server.tool(
   // ── 7. browser_dialog ──────────────────────────────────────────────────────
   server.tool(
     "browser_dialog",
-    "Accept or dismiss JS dialogs.",
+    "Accept or dismiss JS dialogs (alert, confirm, prompt). Browser sessions only.",
     {
       action: z.enum(["accept", "dismiss"]).describe("Action to perform on the dialog."),
       promptText: z.string().optional().describe("Text to enter if it is a prompt dialog.")
     },
     async (args) => {
       try {
+        const liveConfig = getCachedConfig();
+        const active = sessionRegistry.getActive(liveConfig.agentId);
+        if (active?.isElectron) {
+          return { content: [{ type: "text", text: "[Note] JS dialog interception is only available for web browser sessions (Electron apps handle dialogs natively)." }] };
+        }
         return await withSecurity(config, "browser_dialog", async (session) => {
           return await browserDialog(session, args as any);
         });
@@ -683,14 +711,15 @@ server.tool(
         tool: z.enum(["browser_click", "browser_type", "browser_navigate", "browser_key", "browser_scroll", "browser_wait", "browser_map", "browser_pointer", "browser_eval", "browser_select", "type_and_send", "navigate_and_read", "click_and_wait", "scroll_and_read"]),
         args: z.record(z.unknown()).describe("Arguments for the respective tool. For type_and_send: { text, x?, y?, id?, label?, pressEnter? }. For navigate_and_read: { url }. For click_and_wait: { id?, label?, x?, y?, wait_for?, wait_value? }. For scroll_and_read: { direction, distance? }.")
       })).describe("Ordered array of tool calls to execute serially. Use macro steps to save tokens."),
-      batch: z.boolean().optional().describe("If true, defers action map generation until all steps are complete to save time.")
+      batch: z.boolean().optional().describe("If true, defers action map generation until all steps are complete to save time."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_burst", async (session, liveConfig) => {
           const { browserBurst } = await import("./tools/burst.js");
           return await browserBurst(session, args as any, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -698,51 +727,53 @@ server.tool(
   // ── 9. browser_tabs ───────────────────────────────────────────────────────
   server.tool(
     "browser_tabs",
-    "Manage browser tabs (open, switch, close, list).",
+    "Manage browser and Electron app tabs/windows (open, switch, close, list).",
     {
       action: z.enum(["list", "open", "close", "switch", "list_windows", "focus_window", "consolidate", "heal"]).describe("Action to perform. 'consolidate' deduplicates tabs. 'heal' recovers crashed tabs."),
       url: z.string().optional().describe("URL to open (required for 'open' action)."),
+      app: z.string().optional().describe("Optional Electron app name configured in config.json under 'electron'."),
       tabId: z.string().optional().describe("Target Tab ID (required for 'switch' or 'close')."),
       tabIds: z.array(z.string()).optional().describe("Multiple Tab IDs for batch 'close' action."),
       force: z.boolean().optional().describe("Force close protected (anchor) tabs. Use with extreme caution."),
       windowId: z.number().optional().describe("Window ID to focus (required for 'focus_window')."),
       reuse: z.boolean().optional().describe("Default true. When opening a URL already loaded in another tab, focus that tab instead of opening a duplicate."),
     },
-    async ({ action, url, tabId, tabIds, force, windowId, reuse }) => {
+    async ({ action, url, app, tabId, tabIds, force, windowId, reuse }) => {
       try {
         return await withSecurity(config, "browser_tabs", async (_, liveConfig) => {
-          if (action === "list") return await WeavetabList(liveConfig);
+          if (action === "list") return await WeavetabList(liveConfig, app);
           if (action === "open") {
             if (!url) throw new Error("url is required for action: open");
-            return await WeavetabOpen(url, liveConfig, reuse !== false);
+            return await WeavetabOpen(url, liveConfig, reuse !== false, app);
           }
           if (action === "switch") {
             if (!tabId) throw new Error("tabId is required for action: switch");
-            return await WeavetabSwitch(tabId, liveConfig);
+            return await WeavetabSwitch(tabId, liveConfig, app);
           }
           if (action === "close") {
-            if (tabIds && tabIds.length > 0) return await WeavetabCloseBatch(tabIds, liveConfig, force);
+            if (tabIds && tabIds.length > 0) return await WeavetabCloseBatch(tabIds, liveConfig, force, app);
             if (!tabId) throw new Error("tabId or tabIds is required for action: close");
-            return await WeavetabClose(tabId, liveConfig, force);
+            return await WeavetabClose(tabId, liveConfig, force, app);
           }
           if (action === "list_windows") {
-            return await weaveWindowList(liveConfig);
+            return await weaveWindowList(liveConfig, app);
           }
           if (action === "focus_window") {
             if (windowId === undefined) throw new Error("windowId is required for action: focus_window");
-            return await weaveFocusWindow(windowId, liveConfig);
+            return await weaveFocusWindow(windowId, liveConfig, app);
           }
           if (action === "consolidate") {
-            return await WeavetabConsolidate(liveConfig);
+            return await WeavetabConsolidate(liveConfig, app);
           }
           if (action === "heal") {
-            return await WeavetabHeal(liveConfig);
+            return await WeavetabHeal(liveConfig, app);
           }
           throw new Error("Invalid action");
-        });
+        }, false, app);
       } catch (e) { return wrapError(e); }
     }
   );
+
 
   // ── 11. browser_wait ──────────────────────────────────────────────────────
   server.tool(
@@ -755,6 +786,7 @@ server.tool(
       value: z.string().optional().describe("CSS selector, text string, or URL pattern. Not needed for 'stable'/'network'."),
       timeout: z.number().optional().describe("Max wait in ms (default 8000)."),
       tab_id: z.string().optional().describe("Execute in a specific tab instead of active."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
@@ -762,11 +794,11 @@ server.tool(
           let targetSession = session;
           if (args.tab_id) {
             const { connectToTab } = await import("./cdp/connector.js");
-            const client = await connectToTab(args.tab_id);
+            const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
             targetSession = client.session;
           }
           return await browserWait(targetSession, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -797,9 +829,21 @@ server.tool(
       message: z.string().describe("The question to ask, or the feedback/analysis to log."),
       input: z.enum(["sentence", "paragraph"]).optional().describe("Input field type for question mode (default: sentence)."),
       timeout: z.number().optional().describe("Timeout in seconds for question mode before auto-cancel (default: 120)."),
+      app: z.string().optional().describe("Optional Electron app name. (Note: thought HUD overlay is browser-only)."),
     },
     async (args) => {
       try {
+        const liveConfig = getCachedConfig();
+        const active = sessionRegistry.getActive(liveConfig.agentId, args.app);
+        if (args.app || active?.isElectron) {
+          const { logActionStructured } = await import("./audit/logger.js");
+          logActionStructured({
+            timestamp: new Date().toISOString(),
+            tool: "browser_thoughts",
+            result: `[ELECTRON APP FEEDBACK]: ${args.message}`
+          });
+          return { content: [{ type: "text", text: "[Note] Thought/HUD overlay is disabled for Electron desktop apps (DOM-only execution). Feedback recorded in audit log." }] };
+        }
         return await withSecurity(config, "browser_thoughts", async (session) => {
           if (args.action === "feedback") {
             const { logActionStructured } = await import("./audit/logger.js");
@@ -817,6 +861,7 @@ server.tool(
       } catch (e) { return wrapError(e); }
     }
   );
+
 
 
   // ── 13. browser_pointer ───────────────────────────────────────────────────────
@@ -838,7 +883,8 @@ server.tool(
       end_x: z.number().optional().describe("Destination X coordinate (only for drag_and_drop)."),
       end_y: z.number().optional().describe("Destination Y coordinate (only for drag_and_drop)."),
       waitForChild: z.string().optional().describe("CSS Selector of a child element to wait for (only for hover)."),
-      holdMs: z.number().optional().describe("Milliseconds to hold the pointer down (only for hover).")
+      holdMs: z.number().optional().describe("Milliseconds to hold the pointer down (only for hover)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
@@ -851,7 +897,7 @@ server.tool(
           if (args.end_selector && !normalizedArgs.end_ref) normalizedArgs.end_ref = args.end_selector;
           if (args.end_target && !normalizedArgs.end_ref) normalizedArgs.end_ref = args.end_target;
           return await browserPointer(session, normalizedArgs as any, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -864,12 +910,13 @@ server.tool(
       nodeId: z.number().optional().describe("CDP backendNodeId."),
       selector: z.string().optional().describe("CSS Selector."),
       value: z.string().describe("The exact text value to select."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_select", async (session, liveConfig) => {
           return await browserSelect(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -884,12 +931,13 @@ server.tool(
         value: z.string().describe("Value to fill/select/type into the field."),
       })).describe("Array of field ref+value pairs to fill sequentially."),
       submit: z.string().optional().describe("Optional ref ID (w:NN) of a submit button to click after filling all fields."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_fill", async (session, liveConfig) => {
           return await agentAction(session, 'typing', () => browserFill(session, args, liveConfig), 'browser_fill');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -904,7 +952,8 @@ server.tool(
       ref: z.string().optional().describe("Alternative element Ref ID (e.g. 'w:42')."),
       target: z.string().optional().describe("Alternative element identifier, CSS Selector, or query."),
       nodeId: z.number().optional().describe("CDP backendNodeId to highlight directly."),
-      color: z.string().optional().describe("CSS color to use for the overlay (e.g. 'rgba(255,0,0,0.5)').")
+      color: z.string().optional().describe("CSS color to use for the overlay (e.g. 'rgba(255,0,0,0.5)')."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
@@ -922,7 +971,7 @@ server.tool(
           delete normalizedArgs.ref;
           delete normalizedArgs.target;
           return await browserHighlight(session, normalizedArgs, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -934,13 +983,14 @@ server.tool(
     "Upload files to a file input.",
     {
       nodeId: z.number().describe("CDP backendNodeId of the target <input type='file'> element."),
-      filePaths: z.array(z.string()).describe("List of absolute system file paths to upload.")
+      filePaths: z.array(z.string()).describe("List of absolute system file paths to upload."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_upload", async (session, liveConfig) => {
           return await browserUpload(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -952,13 +1002,14 @@ server.tool(
     "browser_find",
     "Sub-5ms CDP text search. Zero token waste. Best for locating specific keywords/text on page without a full DOM walk. No refs returned (use browser_map for refs). No shadow roots/regex.",
     {
-      query: z.string().describe("Exact text query to find on the page.")
+      query: z.string().describe("Exact text query to find on the page."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_find", async (session, liveConfig) => {
           return await agentAction(session, 'reading', () => browserFind(session, args, liveConfig), 'browser_find');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -972,12 +1023,13 @@ server.tool(
       action: z.enum(["get", "set", "clear"]).describe("Action to perform on the storage."),
       key: z.string().optional().describe("Key name (required for 'get' and 'set' actions)."),
       value: z.string().optional().describe("String value (required for 'set' action)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_storage", async (session, liveConfig) => {
           return await browserStorage(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -991,12 +1043,13 @@ server.tool(
       pattern: z.string().optional().describe("URL glob pattern to intercept or filter telemetry (e.g. '*api/login*')."),
       mockStatus: z.number().optional().describe("HTTP status code to return when enabling mock (default 200)."),
       mockBody: z.string().optional().describe("JSON or plaintext body payload to return in the mocked response."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_network_intercept", async (session, liveConfig) => {
           return await browserNetworkIntercept(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1006,17 +1059,18 @@ server.tool(
     "browser_console",
     "1-5ms latency. Read or clear buffered console API messages, JS exceptions, and network errors.",
     {
-      action: z.enum(["read", "clear"]).describe("Action to perform on the console buffer.")
+      action: z.enum(["read", "clear"]).describe("Action to perform on the console buffer."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_console", async (session, liveConfig) => {
           let targetId = "default";
           const { sessionRegistry } = await import("./state/session.js");
-          const active = sessionRegistry.getActive(liveConfig.agentId);
+          const active = sessionRegistry.getActive(liveConfig.agentId, args.app);
           if (active) targetId = active.targetId;
           return await browserConsole(session, args, liveConfig, targetId);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1030,12 +1084,13 @@ server.tool(
       landscape: z.boolean().optional().describe("Print in landscape orientation (default false)."),
       scale: z.number().optional().describe("Scale factor (default 1.0)."),
       pageRanges: z.string().optional().describe("Page ranges to print (e.g. '1-5'). Leave empty for all pages."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_pdf", async (session, liveConfig) => {
           return await browserPdf(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1046,13 +1101,14 @@ server.tool(
     "Run arbitrary JS via CDP. Good for extracting app state. Cannot traverse shadow DOM/cross-origin iframes.",
     {
       expression: z.string().describe("JavaScript code to evaluate in the context of the page."),
-      timeout: z.number().optional().describe("Timeout in ms (default 5000).")
+      timeout: z.number().optional().describe("Timeout in ms (default 5000)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_eval", async (session, liveConfig) => {
           return await agentAction(session, 'reading', () => browserEval(session, args, liveConfig), 'browser_eval');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1070,12 +1126,13 @@ server.tool(
       domain: z.string().optional().describe("Domain for the cookie."),
       path: z.string().optional().describe("Path for the cookie."),
       url: z.string().optional().describe("URL scope for 'get' action (defaults to current page)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_cookies", async (session, liveConfig) => {
           return await browserCookies(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1091,13 +1148,14 @@ server.tool(
       label: z.string().optional().describe("Visible text or aria-label of the canvas element."),
       ref: z.string().optional().describe("Alternative ref identifier for the canvas element."),
       backendNodeId: z.number().optional().describe("Raw CDP backendNodeId for direct targeting."),
-      points: z.array(z.object({ x: z.number(), y: z.number() })).optional().describe("Array of {x,y} points relative to canvas viewport for 'draw' action. Simulates a drag path across the canvas.")
+      points: z.array(z.object({ x: z.number(), y: z.number() })).optional().describe("Array of {x,y} points relative to canvas viewport for 'draw' action. Simulates a drag path across the canvas."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_canvas", async (session, liveConfig) => {
           return await browserCanvas(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1110,13 +1168,14 @@ server.tool(
       query: z.string().describe("CSS Selector or XPath query to extract."),
       type: z.enum(["css", "xpath"]).optional().describe("Query type (default 'css')."),
       attributes: z.array(z.string()).optional().describe("Attributes to extract (e.g. ['textContent', 'href'], default ['textContent'])."),
-      multiple: z.boolean().optional().describe("Whether to extract multiple elements (default true).")
+      multiple: z.boolean().optional().describe("Whether to extract multiple elements (default true)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_scrape", async (session, liveConfig) => {
           return await agentAction(session, 'reading', () => browserScrape(session, args, liveConfig), 'browser_scrape');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1127,13 +1186,14 @@ server.tool(
     "Capture or restore an MHTML snapshot. Best for offline archival, replay testing, and compliance audits.",
     {
       action: z.enum(["capture", "restore"]).describe("Action to perform."),
-      filePath: z.string().describe("Absolute file path to save/load the .mhtml snapshot.")
+      filePath: z.string().describe("Absolute file path to save/load the .mhtml snapshot."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_snapshot", async (session, liveConfig) => {
           return await browserSnapshot(session, args as any, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1151,13 +1211,14 @@ server.tool(
         y: z.number().describe("Y coordinate of clip region."),
         width: z.number().describe("Width of clip region."),
         height: z.number().describe("Height of clip region.")
-      }).optional().describe("Clip region. Use to capture only part of the page (e.g. just a chart area) to reduce token cost.")
+      }).optional().describe("Clip region. Use to capture only part of the page (e.g. just a chart area) to reduce token cost."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_screenshot", async (session, liveConfig) => {
           return await agentAction(session, 'reading', () => browserScreenshot(session, args, liveConfig), 'browser_screenshot');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1171,13 +1232,14 @@ server.tool(
       width: z.number().optional().describe("Viewport width in pixels."),
       height: z.number().optional().describe("Viewport height in pixels."),
       deviceScaleFactor: z.number().optional().describe("Device Pixel Ratio (default 1)."),
-      mobile: z.boolean().optional().describe("Whether to emulate a mobile device (default false).")
+      mobile: z.boolean().optional().describe("Whether to emulate a mobile device (default false)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_viewport", async (session, liveConfig) => {
           return await browserViewport(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1191,13 +1253,14 @@ server.tool(
       action: z.enum(["read", "write"]).describe("Action to perform."),
       text: z.string().optional().describe("Text to write to clipboard (for write action)."),
       dataUrl: z.string().optional().describe("Base64 data URL of an image to write to clipboard (e.g. 'data:image/png;base64,...')."),
-      mimeType: z.string().optional().describe("MIME type override for image write (auto-detected from dataUrl by default, e.g. 'image/png').")
+      mimeType: z.string().optional().describe("MIME type override for image write (auto-detected from dataUrl by default, e.g. 'image/png')."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_clipboard", async (session, liveConfig) => {
           return await browserClipboard(session, args, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1209,13 +1272,14 @@ server.tool(
     {
       nodeId: z.number().optional().describe("CDP backendNodeId."),
       selector: z.string().optional().describe("CSS Selector."),
-      ref: z.string().optional().describe("Ref ID (e.g. 'w:42').")
+      ref: z.string().optional().describe("Ref ID (e.g. 'w:42')."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_inspect", async (session, liveConfig) => {
           return await agentAction(session, 'reading', () => browserInspect(session, args, liveConfig), 'browser_inspect');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1230,13 +1294,14 @@ server.tool(
       outputDir: z.string().optional().describe("Optional custom directory to write extracted files into. If omitted, uses configured designDir (~/.weavetab/designs/<domain>-<timestamp>/)."),
       name: z.string().optional().describe("Optional custom name for the saved design folder (e.g. 'resend-hero', 'pricing-section')."),
       includeAssets: z.boolean().optional().describe("Whether to capture inline SVGs and asset references (default true)."),
-      hideOverlay: z.boolean().optional().describe("Whether to hide Weavetab overlay during capture (default true).")
+      hideOverlay: z.boolean().optional().describe("Whether to hide Weavetab overlay during capture (default true)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_extract_design", async (session, liveConfig) => {
           return await agentAction(session, 'reading', () => browserExtractDesign(session, args, liveConfig), 'browser_extract_design');
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1251,13 +1316,14 @@ server.tool(
       script: z.string().optional().describe("JavaScript code to inject and run (required for start)."),
       persistent: z.boolean().optional().describe("If true, the script re-runs in a loop (default false)."),
       onResult: z.enum(["notify_agent", "store", "ignore"]).optional().describe("How to handle script results (default 'store')."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_automation", async (session, liveConfig) => {
           const result = await browserAutomation(session, args, liveConfig);
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1273,13 +1339,14 @@ server.tool(
       maxFrames: z.number().optional().describe("Maximum frames to capture (default 500)."),
       format: z.enum(["webp", "gif", "webm", "mp4", "frames"]).optional().describe("Output video format when stopping recording. Default 'webp' (pure Node native compilation)."),
       keepFrames: z.boolean().optional().describe("If true, keeps raw JPEG frames after video compilation (default false)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_recording", async (session, liveConfig) => {
           const result = await browserRecording(session, args, liveConfig);
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1316,13 +1383,15 @@ server.tool(
   server.tool(
     "browser_performance",
     "Retrieve page performance metrics.",
-    {},
-    async () => {
+    {
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
+    },
+    async (args) => {
       try {
         return await withSecurity(config, "browser_performance", async (session, liveConfig) => {
           const result = await browserPerformance(session, liveConfig);
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1493,15 +1562,17 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       }).optional().describe("Override geolocation coordinates"),
       timezoneId: z.string().optional().describe("Override browser timezone (e.g. 'America/New_York')"),
       userAgent: z.string().optional().describe("Override User Agent string"),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_emulate", async (session, liveConfig) => {
           return await browserEmulate(session, args as any, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
+
 
   // ── Prompts ──────────────────────────────────────────────────────────────────
   // page_context: zero-shot context injection. Invoke with /page_context

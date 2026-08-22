@@ -119,3 +119,93 @@ export function getSessionProfile(cookies: boolean, customProfileDir?: string, s
   return sessionProfile;
 }
 
+// ─── Electron App Profile Resolver & Safety Guard ─────────────────────────────
+
+export function sanitizeAppName(appName: string): string {
+  const cleaned = appName.trim().replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
+  return cleaned || "app";
+}
+
+// Real application data directories that should NEVER be used directly
+const REAL_DESKTOP_APP_ROOTS: string[] = [];
+
+if (PLATFORM === 'win32') {
+  REAL_DESKTOP_APP_ROOTS.push(
+    path.join(HOME, "AppData", "Roaming"),
+    path.join(HOME, "AppData", "Local"),
+    path.join(HOME, "AppData", "LocalLow")
+  );
+} else if (PLATFORM === 'darwin') {
+  REAL_DESKTOP_APP_ROOTS.push(
+    path.join(HOME, "Library", "Application Support"),
+    path.join(HOME, "Library", "Saved Application State"),
+    path.join(HOME, "Library", "Caches")
+  );
+} else {
+  REAL_DESKTOP_APP_ROOTS.push(
+    path.join(HOME, ".config"),
+    path.join(HOME, ".local", "share"),
+    path.join(HOME, ".cache")
+  );
+}
+
+/**
+ * Asserts that the given profile directory is NOT a real desktop app's native user data directory.
+ * Throws a security block error if it matches root or subdirectory of standard app data paths.
+ */
+export function assertNotRealElectronProfile(profileDir: string, appName: string): void {
+  const resolved = path.resolve(profileDir).toLowerCase();
+
+  // First check against browser profiles
+  assertNotRealBrowserProfile(resolved);
+
+  // Check against native desktop app data roots
+  for (const rootPath of REAL_DESKTOP_APP_ROOTS) {
+    const rootResolved = path.resolve(rootPath).toLowerCase();
+    
+    // Direct matches or direct children in %APPDATA%/<appName>
+    const appSpecificRealDir = path.join(rootResolved, sanitizeAppName(appName)).toLowerCase();
+    if (resolved === appSpecificRealDir || resolved.startsWith(appSpecificRealDir + path.sep)) {
+      throw new Error(
+        `[Weavetab] ✗ SECURITY BLOCK: The profileDir "${profileDir}" points to your real ${appName} desktop app data.\n` +
+        `  Weavetab will never read from or write to your personal desktop app data.\n` +
+        `  Please use an isolated directory or let Weavetab manage ~/.weavetab-system/apps/${appName}/.\n` +
+        `  Real app data path detected: ${appSpecificRealDir}`
+      );
+    }
+  }
+}
+
+/**
+ * Resolves the isolated profile directory for a specific Electron application.
+ */
+export function getElectronProfile(appName: string, customProfileDir?: string): string {
+  const sanitized = sanitizeAppName(appName);
+
+  if (customProfileDir && customProfileDir.trim()) {
+    const resolved = path.resolve(customProfileDir.trim());
+    assertNotRealElectronProfile(resolved, appName);
+
+    if (!fs.existsSync(resolved)) {
+      fs.mkdirSync(resolved, { recursive: true });
+      logDebug(`[Weavetab] ✓ Created custom Electron profile directory for ${appName}: ${resolved}`);
+    } else {
+      logDebug(`[Weavetab] ✓ Using custom Electron profile directory for ${appName}: ${resolved}`);
+    }
+    return resolved;
+  }
+
+  const appProfileDir = path.join(HOME, ".weavetab-system", "apps", sanitized);
+  assertNotRealElectronProfile(appProfileDir, appName);
+
+  if (!fs.existsSync(appProfileDir)) {
+    fs.mkdirSync(appProfileDir, { recursive: true });
+    logDebug(`[Weavetab] ✓ Created isolated Electron profile directory for ${appName}: ${appProfileDir}`);
+  } else {
+    logDebug(`[Weavetab] ✓ Using isolated Electron profile directory for ${appName}: ${appProfileDir}`);
+  }
+
+  return appProfileDir;
+}
+
+
