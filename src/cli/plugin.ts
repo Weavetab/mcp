@@ -9,9 +9,9 @@ import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
 function getVersion(): string {
   try {
-    return _require("../../package.json").version || "2.5.0-beta.1";
+    return _require("../../package.json").version || "2.5.0-beta.2";
   } catch {
-    return "2.5.0-beta.1";
+    return "2.5.0-beta.2";
   }
 }
 
@@ -368,7 +368,7 @@ export async function runPluginSearch(query?: string): Promise<void> {
 
   if (results.length === 0) {
     console.log(pc.yellow(`No plugins matching "${q}" found.`));
-    console.log(pc.dim(`Try browsing the registry or visit ${pc.cyan("https://weavetab.pages.dev/plugins")}\n`));
+    console.log(pc.dim(`Try browsing the registry or visit ${pc.cyan("https://github.com/weavetab/mcp/plugins")}\n`));
     return;
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.5.0-beta.1",
+  "version": "2.5.0-beta.2",
   "description": "Direct Layer 0 interface for AI agents across web and desktop applications. No WebDriver. No cloud. Pure control.",
   "author": {
     "name": "fy2ne",
@@ -8,7 +8,7 @@
     "url": "https://fy2ne.me"
   },
   "license": "AGPL-3.0-only",
-  "homepage": "https://weavetab.pages.dev",
+  "homepage": "https://github.com/weavetab/mcp",
   "repository": {
     "type": "git",
     "url": "https://github.com/weavetab/mcp.git"

@@ -17,7 +17,7 @@
 
   <p>
     <a href="https://github.com/weavetab/mcp">GitHub</a> ·
-    <a href="docs/TOOLS.md">Tool Reference</a> ·
+    <a href="docs/tools/overview.md">Tool Reference</a> ·
     <a href="docs/DOCUMENTATION.md">Documentation</a> ·
     <a href="SECURITY.md">Security Policy</a> ·
     <a href="CONTRIBUTING.md">Contributing</a>
@@ -610,12 +610,12 @@ Weavetab connects out-of-the-box via stdio JSON-RPC 2.0 with all major AI coding
 
 | Environment | Setup Method | Guided Web Installer |
 | :--- | :--- | :--- |
-| **Cursor** | `.cursor/mcp.json` | [weavetab.pages.dev/mcp/install/cursor](https://weavetab.pages.dev/mcp/install/cursor) |
-| **Antigravity** | `~/.gemini/antigravity/mcp/` | [weavetab.pages.dev/mcp/install/antigravity](https://weavetab.pages.dev/mcp/install/antigravity) |
-| **Claude Desktop** | `claude_desktop_config.json` | [weavetab.pages.dev/mcp/install/claude-desktop](https://weavetab.pages.dev/mcp/install/claude-desktop) |
-| **Claude Code** | `claude mcp add` | [weavetab.pages.dev/mcp/install/claude-code](https://weavetab.pages.dev/mcp/install/claude-code) |
-| **VS Code / Copilot** | 1-Click Protocol / `settings.json` | [weavetab.pages.dev/mcp/install/vscode](https://weavetab.pages.dev/mcp/install/vscode) |
-| **Windsurf** | `mcp_config.json` | [weavetab.pages.dev/mcp/install/windsurf](https://weavetab.pages.dev/mcp/install/windsurf) |
+| **Cursor** | `.cursor/mcp.json` | [weavetab.pages.dev/mcp/install/cursor](https://github.com/weavetab/mcp/mcp/install/cursor) |
+| **Antigravity** | `~/.gemini/antigravity/mcp/` | [weavetab.pages.dev/mcp/install/antigravity](https://github.com/weavetab/mcp/mcp/install/antigravity) |
+| **Claude Desktop** | `claude_desktop_config.json` | [weavetab.pages.dev/mcp/install/claude-desktop](https://github.com/weavetab/mcp/mcp/install/claude-desktop) |
+| **Claude Code** | `claude mcp add` | [weavetab.pages.dev/mcp/install/claude-code](https://github.com/weavetab/mcp/mcp/install/claude-code) |
+| **VS Code / Copilot** | 1-Click Protocol / `settings.json` | [weavetab.pages.dev/mcp/install/vscode](https://github.com/weavetab/mcp/mcp/install/vscode) |
+| **Windsurf** | `mcp_config.json` | [weavetab.pages.dev/mcp/install/windsurf](https://github.com/weavetab/mcp/mcp/install/windsurf) |
 
 ---
 
@@ -855,14 +855,14 @@ Setting `"devMode": true` in configuration or `WEAVETAB_DEV=1` activates diagnos
 ## Plugin System
 
 > [!NOTE]
-> **PLUGIN ENGINE (v2.5.0-beta.1)**
+> **PLUGIN ENGINE (v2.5.0-beta.2)**
 > 
-> The Weavetab Plugin System and SDK are in **v2.5.0-beta.1**.
+> The Weavetab Plugin System and SDK are in **v2.5.0-beta.2**.
 > Use the official **[`@weavetab/sdk`](https://www.npmjs.com/package/@weavetab/sdk)** to build, scaffold, and publish plugins.
 
 Weavetab supports dynamic tool extension via the **Plugin System**. Any npm package containing a valid `weavetab.json` manifest found in `node_modules` (or official `@weavetab/plugin-*` packages) is automatically discovered and loaded into the MCP server.
 
-### Key Capabilities in v2.5.0-beta.1:
+### Key Capabilities in v2.5.0-beta.2:
 1. **Isolated Configuration Sandbox**: Each plugin maintains its own settings in `~/.weavetab/plugins/<name>/config.json` without modifying core Weavetab config.
 2. **Sandboxed Key-Value & File Storage**: Secure storage inside `~/.weavetab/plugins/<name>/` via `ctx.storage` with path traversal protection.
 3. **Real-time Extension & HUD Visuals**: Floating thought bubbles (`ctx.extension.showThought`), status badges (`setHudState`), and custom CSS injection (`injectStyles`).

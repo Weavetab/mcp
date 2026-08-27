@@ -1127,7 +1127,7 @@ async function main(): Promise<void> {
         await open("https://npmjs.com/package/Weavetab");
       }
       if (k === "w") {
-        await open("https://weavetab.pages.dev");
+        await open("https://github.com/weavetab/mcp");
       }
     };
 
@@ -1188,7 +1188,7 @@ async function main(): Promise<void> {
     console.log(pc.bold("LINKS"));
     console.log(`  ${pc.cyan("GitHub:")}  ${pc.dim("https://github.com/Weavetab")}`);
     console.log(`  ${pc.cyan("npm:")}     ${pc.dim("https://npmjs.com/package/Weavetab")}`);
-    console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://weavetab.pages.dev")}`);
+    console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://github.com/weavetab/mcp")}`);
     console.log();
   }
 }

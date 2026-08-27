@@ -59,7 +59,7 @@ async function printUpdateBox(current: string, latest: string): Promise<void> {
       chalk.bold(`Update available! `) + chalk.dim(current) + chalk.reset(` → `) + chalk.green(latest),
       `Run ${chalk.cyan("npm i -g @weavetab/mcp")} to update.`,
       ``,
-      `Changelog: ${chalk.blue(`https://weavetab.pages.dev/changelog/v${latest}`)}`
+      `Changelog: ${chalk.blue(`https://github.com/weavetab/mcp/changelog/v${latest}`)}`
     ].join("\n");
 
     const box = boxen(msg, {
@@ -75,6 +75,6 @@ async function printUpdateBox(current: string, latest: string): Promise<void> {
     // Fallback if formatting fails
     console.error(`\n[Weavetab MCP] Update available: ${current} -> ${latest}`);
     console.error(`Run "npm i -g @weavetab/mcp" to update.`);
-    console.error(`Changelog: https://weavetab.pages.dev/changelog/v${latest}\n`);
+    console.error(`Changelog: https://github.com/weavetab/mcp/changelog/v${latest}\n`);
   }
 }
