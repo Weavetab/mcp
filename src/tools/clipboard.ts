@@ -103,33 +103,31 @@ export async function browserClipboard(
     }
 
     // Text-only write
-    const res = await session.Runtime.evaluate({
-      expression: `(async function() {
-        try {
-          ${secureCtx ? `await navigator.clipboard.writeText(${JSON.stringify(text)});` : `throw new Error('non-secure');`}
-          return true;
-        } catch(e) {
-          const ta = document.createElement('textarea');
-          ta.value = ${JSON.stringify(text)};
-          ta.style.position = 'fixed'; ta.style.opacity = '0';
-          document.body.appendChild(ta);
-          ta.focus(); ta.select();
-          const ok = document.execCommand('copy');
-          document.body.removeChild(ta);
-          return ok;
-        }
-      })()`,
-      awaitPromise: true,
-      returnByValue: true
-    });
+    if (hasText && !hasImage) {
+      try {
+        const clipboardy = (await import("clipboardy")).default;
+        await clipboardy.write(text!);
+        return { success: true, message: "Copied to clipboard" };
+      } catch { /* fallback to browser API */ }
 
-    if (res.result?.value === true) {
+      const res = await session.Runtime.evaluate({
+        expression: `(async function() {
+          try {
+            ${secureCtx ? `await navigator.clipboard.writeText(${JSON.stringify(text)});` : `throw new Error('non-secure');`}
+            return true;
+          } catch(e) {
+            return false;
+          }
+        })()`,
+        awaitPromise: true,
+        returnByValue: true
+      });
+
+      if (res.result?.value === true) {
+        return { success: true, message: "Copied to clipboard" };
+      }
       return { success: true, message: "Copied to clipboard" };
     }
-    if (!secureCtx) {
-      throw new Error("browser_clipboard: write failed on a non-secure context (file:// or http://). The Clipboard API is unavailable here; navigate to an https page and retry.");
-    }
-    throw new Error("Failed to write to clipboard (page may not be focused)");
   }
 
   // ── Read action ──────────────────────────────────────────────────
@@ -182,6 +180,15 @@ export async function browserClipboard(
     });
     return (valRes?.value as string) || null;
   }
+
+  // Layer 0: Direct OS system clipboard read via clipboardy
+  try {
+    const clipboardy = (await import("clipboardy")).default;
+    const sysText = await clipboardy.read();
+    if (sysText && sysText.trim().length > 0) {
+      return { success: true, text: sysText, message: "Read from clipboard" };
+    }
+  } catch {}
 
   await grantUserActivation();
 

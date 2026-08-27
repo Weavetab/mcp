@@ -261,7 +261,7 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
   "role": "admin",
   "telemetry": false,
   "attachPort": 0,
-  "disableExtensions": false,
+  "extension": true,
   "cookies": false,
   "browserFlags": [],
   "policies": [],
@@ -284,7 +284,7 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
 | `role` | string | "admin" | RBAC role (admin, system, viewer, automation) |
 | `telemetry` | boolean | false | Enable anonymous usage telemetry |
 | `attachPort` | number | 0 | Chrome DevTools Protocol port |
-| `disableExtensions` | boolean | false | Disable Weavetab extension for HUD features |
+| `extension` | boolean | true | Enable Weavetab extension integration |
 | `cookies` | boolean | false | Persist cookies/storage across sessions. When `false`, `document.cookie`, `localStorage`, and `sessionStorage` are all neutered at the browser level (returns empty/null for everything) + a fresh isolated profile is used each session. When `true`, cookies/storage work normally and persist via the profile directory. |
 | `browserFlags` | string[] | `[]` | Extra Chromium command-line flags to append on launch (e.g., `["--disable-web-security"]`). The `--disable-sync` flag is mandatory and cannot be overridden — any conflicting flag is automatically dropped. |
 | `policies` | PolicyEntry[] | `[]` | Domain-level access control policies (see [Domain Policy](#domain-policy) below). Supersedes the legacy `block`/`allow` lists. |
@@ -454,10 +454,10 @@ export default plugin;
 
 ```bash
 # Official plugins
-wt plugin add @weavetab/plugin-sample
+weavetab plugin add @weavetab/plugin-sample
 
 # Community plugins (any npm name)
-wt plugin add wt-my-tool
+weavetab plugin add wt-my-tool
 # or via npm
 npm install wt-my-tool
 ```

@@ -16,7 +16,7 @@ import CDP from "chrome-remote-interface";
 import { readLock, writeLock, clearLock, clearLockIfOwned, isLockValid, isLockPending } from "./lock.js";
 import { getSessionProfile, getElectronProfile, assertNotRealElectronProfile, sanitizeAppName } from "./profiles.js";
 import net from "node:net";
-import { getOutputDir, getDownloadDir, getConfigHeadless, getConfigProxy, getConfigDisableExtensions, getConfigDevMode, getConfigBlock, getConfigAllow, getConfigBrowserType, getConfigBrowserPath, getConfigBrowserFlags, getConfigCookies, getConfigProfileDir, getSystemDir, getElectronAppConfig } from "../config/loader.js";
+import { getOutputDir, getDownloadDir, getConfigHeadless, getConfigProxy, getConfigDevMode, getConfigBlock, getConfigAllow, getConfigBrowserType, getConfigBrowserPath, getConfigBrowserFlags, getConfigCookies, getConfigProfileDir, getSystemDir, getElectronAppConfig, getConfigExtension } from "../config/loader.js";
 import { createBrowserFingerprint, safelyKillWeavetabProcesses } from "./security.js";
 
 function withCDPTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -525,15 +525,6 @@ function getLaunchFlags(config: Config, extPath: string): string[] {
   if (getConfigHeadless(config)) flags.push("--headless=new");
   if (getConfigProxy(config)) flags.push(`--proxy-server=${getConfigProxy(config)}`);
 
-  // disableExtensions: NOTE — --disable-extensions kills ALL extensions including ours.
-  // --load-extension does NOT reliably override --disable-extensions on Edge.
-  // Since we can't disable other extensions while keeping ours (unpacked extensions
-  // have unpredictable IDs), we skip the flag entirely and let other extensions coexist.
-  // The user can manually disable extensions in their browser profile if needed.
-  if (getConfigDisableExtensions(config)) {
-    logDebug("[Weavetab] [SAFETY] disableExtensions=true — cannot safely disable other extensions while keeping Weavetab extension. Loading extension alongside any existing ones.");
-  }
-
   // devMode: enable verbose remote debugging
   if (getConfigDevMode(config)) {
     flags.push("--enable-logging", "--v=1");
@@ -590,7 +581,7 @@ export async function launchWithBridge(
       "  - Google Chrome (https://www.google.com/chrome/)\n" +
       "  - Brave (https://brave.com/)\n" +
       "  - Microsoft Edge (https://www.microsoft.com/edge)\n" +
-      "  If you have a browser installed in a custom location, set it via: wt config browserPath \"/path/to/browser\""
+      "  If you have a browser installed in a custom location, set it via: weavetab config browserPath \"/path/to/browser\""
     );
   }
 
@@ -644,36 +635,48 @@ export async function launchWithBridge(
     }
 
     try {
-      let extPath = path.resolve(__dirname, "../../ext-dist");
-      const systemExtPath = getSystemDir("extension");
+      const enableExtension = getConfigExtension(config) !== false;
+      let extPath = "";
+      let normalizedExtPath = "";
 
-      if (fs.existsSync(extPath)) {
-        try {
-          fs.cpSync(extPath, systemExtPath, { recursive: true, force: true });
-        } catch (e) {
-          logDebug(`[Weavetab] Failed to sync extension to system directory: ${e}`);
-        }
-      } else {
-        if (fs.existsSync(systemExtPath)) {
-          logDebug(`[Weavetab] Local extension missing. Falling back to system extension directory.`);
-          extPath = systemExtPath;
+      if (enableExtension) {
+        extPath = path.resolve(__dirname, "../../ext-dist");
+        const systemExtPath = getSystemDir("extension");
+
+        if (fs.existsSync(extPath)) {
+          try {
+            fs.cpSync(extPath, systemExtPath, { recursive: true, force: true });
+          } catch (e) {
+            logDebug(`[Weavetab] Failed to sync extension to system directory: ${e}`);
+          }
         } else {
-          throw new Error(`[Weavetab] Extension directory does not exist: ${extPath}. Build the extension first.`);
+          if (fs.existsSync(systemExtPath)) {
+            logDebug(`[Weavetab] Local extension missing. Falling back to system extension directory.`);
+            extPath = systemExtPath;
+          } else {
+            throw new Error(`[Weavetab] Extension directory does not exist: ${extPath}. Build the extension first.`);
+          }
         }
-      }
 
-      const manifestPath = path.join(extPath, "manifest.json");
-      const contentPath = path.join(extPath, "content.js");
-      const backgroundPath = path.join(extPath, "background.js");
+        const manifestPath = path.join(extPath, "manifest.json");
+        const contentPath = path.join(extPath, "content.js");
+        const backgroundPath = path.join(extPath, "background.js");
 
-      if (!fs.existsSync(manifestPath)) {
-        throw new Error(`[Weavetab] Extension manifest missing: ${manifestPath}`);
-      }
-      if (!fs.existsSync(contentPath)) {
-        throw new Error(`[Weavetab] Extension content script missing: ${contentPath}`);
-      }
-      if (!fs.existsSync(backgroundPath)) {
-        throw new Error(`[Weavetab] Extension background script missing: ${backgroundPath}`);
+        if (!fs.existsSync(manifestPath)) {
+          throw new Error(`[Weavetab] Extension manifest missing: ${manifestPath}`);
+        }
+        if (!fs.existsSync(contentPath)) {
+          throw new Error(`[Weavetab] Extension content script missing: ${contentPath}`);
+        }
+        if (!fs.existsSync(backgroundPath)) {
+          throw new Error(`[Weavetab] Extension background script missing: ${backgroundPath}`);
+        }
+
+        normalizedExtPath = os.platform() === 'win32'
+          ? extPath.replace(/\//g, '\\')
+          : extPath;
+      } else {
+        logDebug(`[Weavetab] Browser extension loading disabled via config (extension: false).`);
       }
 
       const resolvedDownloadDir = getDownloadDir(config) && getDownloadDir(config).trim()
@@ -682,9 +685,6 @@ export async function launchWithBridge(
 
       // Normalize paths for cross-platform compatibility
       const platform = os.platform();
-      const normalizedExtPath = platform === 'win32'
-        ? extPath.replace(/\//g, '\\')
-        : extPath;
       const normalizedProfileDir = platform === 'win32'
         ? profileDir.replace(/\//g, '\\')
         : profileDir;
@@ -700,28 +700,25 @@ export async function launchWithBridge(
       try { if (fs.existsSync(singletonLock)) fs.unlinkSync(singletonLock); } catch { /* non-fatal */ }
       try { if (fs.existsSync(singletonCookie)) fs.unlinkSync(singletonCookie); } catch { /* non-fatal */ }
 
-      // Wipe the MV3 service worker cache before every launch so Chrome always
-      // executes the latest background.js from disk rather than a stale cached
-      // script stored in the profile. Without this, edits to ext-dist/background.js
-      // have no effect until Chrome manually reloads the extension — the SW cache
-      // (Default/Service Worker/ScriptCache + Default/Service Worker/Database) is
-      // keyed by URL hash and persists across sessions in the user-data-dir.
-      // This ensures any future background.js change takes effect immediately
-      // on all existing profiles without manual cache clearing.
-      try {
-        const swBase = path.join(profileDir, "Default", "Service Worker");
-        const swScriptCache = path.join(swBase, "ScriptCache");
-        const swDatabase = path.join(swBase, "Database");
-        if (fs.existsSync(swScriptCache)) {
-          fs.rmSync(swScriptCache, { recursive: true, force: true });
-          logDebug("[Weavetab] Wiped SW ScriptCache to force background.js reload.");
+      if (enableExtension) {
+        // Wipe the MV3 service worker cache before every launch so Chrome always
+        // executes the latest background.js from disk rather than a stale cached
+        // script stored in the profile.
+        try {
+          const swBase = path.join(profileDir, "Default", "Service Worker");
+          const swScriptCache = path.join(swBase, "ScriptCache");
+          const swDatabase = path.join(swBase, "Database");
+          if (fs.existsSync(swScriptCache)) {
+            fs.rmSync(swScriptCache, { recursive: true, force: true });
+            logDebug("[Weavetab] Wiped SW ScriptCache to force background.js reload.");
+          }
+          if (fs.existsSync(swDatabase)) {
+            fs.rmSync(swDatabase, { recursive: true, force: true });
+            logDebug("[Weavetab] Wiped SW Database to force background.js reload.");
+          }
+        } catch (swErr) {
+          logDebug(`[Weavetab] SW cache wipe failed (non-fatal): ${swErr}`);
         }
-        if (fs.existsSync(swDatabase)) {
-          fs.rmSync(swDatabase, { recursive: true, force: true });
-          logDebug("[Weavetab] Wiped SW Database to force background.js reload.");
-        }
-      } catch (swErr) {
-        logDebug(`[Weavetab] SW cache wipe failed (non-fatal): ${swErr}`);
       }
 
       const args = [
@@ -730,10 +727,7 @@ export async function launchWithBridge(
         `--default-download-dir=${normalizedDownloadDir}`,
         ...getLaunchFlags(config, extPath),
         ...filterBrowserFlags(getConfigBrowserFlags(config) || []),
-        `--load-extension=${normalizedExtPath}`,
-        // NOTE: --disable-extensions-except was removed. It was killing any
-        // extensions the user manually loaded into the Weavetab profile.
-        // --load-extension alone is sufficient to auto-load the Weavetab extension.
+        ...(enableExtension ? [`--load-extension=${normalizedExtPath}`] : []),
         "about:blank",
       ];
 
@@ -805,23 +799,25 @@ export async function launchWithBridge(
       } else {
         logDebug(`[Weavetab] [OK] ${browser.name} ready on :${actualPort} (attempt ${attempt})`);
 
-        // Verify extension loaded by checking for extension pages.
+        // Verify extension loaded by checking for extension pages if extension is enabled.
         // MV3 service workers can take 1-3s to initialize after Chrome starts,
         // so we wait briefly before querying targets.
-        try {
-          await new Promise(r => setTimeout(r, 1500));
-          const testSession = await withCDPTimeout(CDP({ host: "127.0.0.1", port: actualPort }), 4000, "CDP connect");
-          const { targetInfos } = await withCDPTimeout(testSession.Target.getTargets(), 4000, "getTargets");
-          const extensionTargets = targetInfos.filter(t => t.type === "service_worker" || (t.type === "page" && t.url.startsWith("chrome-extension://")));
-          await testSession.close();
+        if (enableExtension) {
+          try {
+            await new Promise(r => setTimeout(r, 1500));
+            const testSession = await withCDPTimeout(CDP({ host: "127.0.0.1", port: actualPort }), 4000, "CDP connect");
+            const { targetInfos } = await withCDPTimeout(testSession.Target.getTargets(), 4000, "getTargets");
+            const extensionTargets = targetInfos.filter(t => t.type === "service_worker" || (t.type === "page" && t.url.startsWith("chrome-extension://")));
+            await testSession.close();
 
-          if (extensionTargets.length > 0) {
-            logDebug(`[Weavetab] [OK] Extension loaded - found ${extensionTargets.length} extension target(s)`);
-          } else {
-            logDebug(`[Weavetab] [!] Extension may not have loaded - no extension targets found. Check chrome://extensions in the browser.`);
+            if (extensionTargets.length > 0) {
+              logDebug(`[Weavetab] [OK] Extension loaded - found ${extensionTargets.length} extension target(s)`);
+            } else {
+              logDebug(`[Weavetab] [!] Extension may not have loaded - no extension targets found. Check chrome://extensions in the browser.`);
+            }
+          } catch (extCheckErr) {
+            logDebug(`[Weavetab] [!] Could not verify extension load: ${extCheckErr}`);
           }
-        } catch (extCheckErr) {
-          logDebug(`[Weavetab] [!] Could not verify extension load: ${extCheckErr}`);
         }
       }
 

@@ -587,29 +587,18 @@ export async function weaveClick(
     result: { success: true, stuck: isStuck },
   });
 
-  if (isStuck) {
-    return {
-      success: false,
-      error_code: "CLICK_NO_EFFECT",
-      message: "The click executed but resulted in no visible changes to the page. It may have been intercepted by an overlay, or the element might require a different interaction.",
-      suggestion: "Try looking for an invisible overlay blocking the click, or try using browser_eval to click it directly.",
-      tab_id: targetId,
-      url: finalUrl,
-    } as WeaveError;
-  }
-
   return {
     success: true,
-    clicked: element_.label,
-    ref: element_.id,
+    clicked: element_?.label || (coords ? `coords(${coords.x},${coords.y})` : (args.label || args.id || "")),
+    ref: element_?.id || (coords ? "coords" : (args.id || "unknown")),
     execution_ms: executionMs,
     tab_id: targetId,
     url: finalUrl,
     title: newMap?.title || "",
     url_changed: finalUrl !== initialUrl,
     ...(args.include_map ? { page_map: newMap ? toMarkdownTable(newMap.elements, finalUrl, newMap.title) : "" } : {}),
-    dom_changed: true,
-    stuck_warning: false,
+    dom_changed: !isStuck,
+    stuck_warning: isStuck,
     ...(stuckHint ? { stuck_hint: stuckHint } : {}),
     ...(sniperWarning ? { sniper_warning: sniperWarning } : {}),
     ...((postCheck as any).canvas_hint ? { canvas_hint: (postCheck as any).canvas_hint } : {})

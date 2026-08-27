@@ -39,14 +39,13 @@ export interface Config {
   browserPath: string;
   browserType: BrowserEngine;
   headless: boolean;
-  visuals: boolean;
-  darkMode: boolean;
-  disableExtensions: boolean;
+  extension: boolean;
   browserFlags: string[];
   profileDir: string;
   cookies: boolean;
   syncDataAcrossBrowsers: boolean;
   
+  apps?: Record<string, ElectronAppConfig>;
   electron?: Record<string, ElectronAppConfig>;
   
   role: Role;
@@ -101,14 +100,13 @@ export const DEFAULT_CONFIG: Config = {
   browserPath: "auto",
   browserType: "chromium",
   headless: false,
-  visuals: true,
-  darkMode: true,
-  disableExtensions: false,
+  extension: true,
   browserFlags: [],
   profileDir: "",
   cookies: false,
   syncDataAcrossBrowsers: false,
   
+  apps: undefined,
   electron: undefined,
   
   role: "admin",
@@ -165,7 +163,7 @@ function isSectionedConfig(raw: Record<string, unknown>): boolean {
 /**
  * Migrates old sectioned config to new simplified flat format.
  */
-function migrateToSimple(sectioned: any): Config {
+export function migrateToSimple(sectioned: any): Config {
   return {
     mode: sectioned.general?.mode || "session",
     session: sectioned.general?.session || "default",
@@ -176,14 +174,13 @@ function migrateToSimple(sectioned: any): Config {
     browserPath: sectioned.browser?.path || "auto",
     browserType: sectioned.browser?.type || "chromium",
     headless: sectioned.browser?.headless ?? false,
-    visuals: sectioned.browser?.visuals ?? true,
-    darkMode: sectioned.browser?.darkMode ?? true,
-    disableExtensions: sectioned.browser?.disableExtensions || false,
+    extension: sectioned.browser?.extension ?? sectioned.browser?.visuals ?? true,
     browserFlags: sectioned.browser?.flags || [],
     profileDir: sectioned.browser?.profileDir || "",
     cookies: sectioned.browser?.cookies || false,
     
-    electron: sectioned.electron || undefined,
+    apps: sectioned.apps || sectioned.electron || undefined,
+    electron: sectioned.apps || sectioned.electron || undefined,
     
     role: sectioned.security?.role || "admin",
     block: sectioned.security?.block || ["*.bank.*", "paypal.com"],
@@ -317,15 +314,16 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
     proxy = undefined;
   }
 
-  // Validate electron apps mapping
+  // Validate apps / electron apps mapping
   let electron: Record<string, ElectronAppConfig> | undefined = undefined;
-  if (raw.electron && typeof raw.electron === "object" && !Array.isArray(raw.electron)) {
-    const rawMap = raw.electron as Record<string, unknown>;
+  const rawApps = raw.apps || raw.electron;
+  if (rawApps && typeof rawApps === "object" && !Array.isArray(rawApps)) {
+    const rawMap = rawApps as Record<string, unknown>;
     const validatedMap: Record<string, ElectronAppConfig> = {};
     for (const [rawKey, rawVal] of Object.entries(rawMap)) {
       const sanitizedKey = rawKey.trim();
       if (!/^[a-zA-Z0-9_-]+$/.test(sanitizedKey)) {
-        logDebug(`[Weavetab Config] [WARN] Invalid electron app name "${rawKey}". Must be alphanumeric, dashes, or underscores.`);
+        logDebug(`[Weavetab Config] [WARN] Invalid app name "${rawKey}". Must be alphanumeric, dashes, or underscores.`);
         continue;
       }
       if (typeof rawVal === "string") {
@@ -346,7 +344,7 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
           } catch { /* ignore */ }
           validatedMap[sanitizedKey] = cfg;
         } else {
-          const safePath = safePathField(`electron.${sanitizedKey}`, strVal);
+          const safePath = safePathField(`apps.${sanitizedKey}`, strVal);
           if (safePath) {
             validatedMap[sanitizedKey] = { path: safePath };
           }
@@ -357,7 +355,7 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
         const objVal = rawVal as Record<string, unknown>;
         const appCfg: ElectronAppConfig = {};
         if (typeof objVal.path === "string" && objVal.path.trim()) {
-          const safePath = safePathField(`electron.${sanitizedKey}.path`, objVal.path);
+          const safePath = safePathField(`apps.${sanitizedKey}.path`, objVal.path);
           if (safePath) appCfg.path = safePath;
         }
         if (typeof objVal.port === "number" && Number.isFinite(objVal.port) && objVal.port > 0 && objVal.port <= 65535) {
@@ -373,7 +371,7 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
           appCfg.args = (objVal.args as unknown[]).filter(isStr);
         }
         if (typeof objVal.profileDir === "string" && objVal.profileDir.trim()) {
-          appCfg.profileDir = safePathField(`electron.${sanitizedKey}.profileDir`, objVal.profileDir);
+          appCfg.profileDir = safePathField(`apps.${sanitizedKey}.profileDir`, objVal.profileDir);
         }
         if (appCfg.path || appCfg.port || appCfg.url) {
           validatedMap[sanitizedKey] = appCfg;
@@ -395,13 +393,12 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
     browserPath,
     browserType:         validateField("browserType", raw.browserType, isStr, d.browserType, v => (VALID_ENGINES as readonly string[]).includes(v)) as BrowserEngine,
     headless:            validateField("headless", raw.headless, isBool, d.headless),
-    visuals:             validateField("visuals", raw.visuals, isBool, d.visuals),
-    darkMode:            validateField("darkMode", raw.darkMode, isBool, d.darkMode),
-    disableExtensions:   validateField("disableExtensions", raw.disableExtensions, isBool, d.disableExtensions),
+    extension:           validateField("extension", raw.extension, isBool, d.extension),
     browserFlags:        isArr(raw.browserFlags) ? (raw.browserFlags as unknown[]).filter(isStr) : d.browserFlags,
     profileDir,
     cookies:             validateField("cookies", raw.cookies, isBool, d.cookies),
     
+    apps:                electron,
     electron,
     
     role:                validateField("role", raw.role, isStr, d.role, v => (VALID_ROLES as readonly string[]).includes(v)) as Role,
@@ -550,7 +547,7 @@ function resolveConfigMerge(): { config: Config; activeDir: string } {
     logDebug(`[Weavetab Config] [OK] Using global config only: ${globalFile}`);
     logDebug(`[Weavetab Config] [OK] Active directory: ${activeDir}`);
   } else {
-    logDebug(`[Weavetab Config] [WARN] No config found — using built-in defaults. Run: wt config`);
+    logDebug(`[Weavetab Config] [WARN] No config found — using built-in defaults. Run: weavetab config`);
     logDebug(`[Weavetab Config] [OK] Active directory: ${activeDir}`);
     // Write a starter global config so user isn't surprised
     ensureConfigDir(globalDir);
@@ -772,16 +769,8 @@ export function getConfigHeadless(config: Config): boolean {
   return config.headless;
 }
 
-export function getConfigVisuals(config: Config): boolean {
-  return config.visuals;
-}
-
-export function getConfigDarkMode(config: Config): boolean {
-  return config.darkMode;
-}
-
-export function getConfigDisableExtensions(config: Config): boolean {
-  return config.disableExtensions;
+export function getConfigExtension(config: Config): boolean {
+  return config.extension !== false;
 }
 
 export function getConfigBrowserFlags(config: Config): string[] {
@@ -856,26 +845,44 @@ export function getConfigDevMode(config: Config): boolean {
   return config.devMode;
 }
 
+export function getConfigApps(config: Config): Record<string, ElectronAppConfig> | undefined {
+  return config.apps || config.electron;
+}
+
 export function getConfigElectron(config: Config): Record<string, ElectronAppConfig> | undefined {
-  return config.electron;
+  return config.apps || config.electron;
+}
+
+export function getAppConfig(appName: string, config?: Config): ElectronAppConfig | null {
+  const cfg = config ?? getCachedConfig();
+  const map = cfg.apps || cfg.electron;
+  if (!map) return null;
+  const sanitized = appName.trim();
+  return map[sanitized] || null;
 }
 
 export function getElectronAppConfig(appName: string, config?: Config): ElectronAppConfig | null {
+  return getAppConfig(appName, config);
+}
+
+export function getAppNames(config?: Config): string[] {
   const cfg = config ?? getCachedConfig();
-  if (!cfg.electron) return null;
-  const sanitized = appName.trim();
-  return cfg.electron[sanitized] || null;
+  const map = cfg.apps || cfg.electron;
+  if (!map) return [];
+  return Object.keys(map);
 }
 
 export function getElectronAppNames(config?: Config): string[] {
+  return getAppNames(config);
+}
+
+export function getApps(config?: Config): Record<string, ElectronAppConfig> {
   const cfg = config ?? getCachedConfig();
-  if (!cfg.electron) return [];
-  return Object.keys(cfg.electron);
+  return cfg.apps || cfg.electron || {};
 }
 
 export function getElectronApps(config?: Config): Record<string, ElectronAppConfig> {
-  const cfg = config ?? getCachedConfig();
-  return cfg.electron || {};
+  return getApps(config);
 }
 
 // ─── Additional Helper Functions for Code Compatibility ─────────────────────────

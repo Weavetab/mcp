@@ -24,13 +24,16 @@ export async function initOmniBroker(parentSession: CDP.Client, parentTargetId: 
 
   parentSession.Target.on("attachedToTarget", async (event) => {
     const { targetInfo } = event;
-    if (targetInfo.type === 'iframe') {
+    if (targetInfo && targetInfo.targetId !== parentTargetId && (targetInfo.type === 'iframe' || targetInfo.type === 'webview' || targetInfo.type === 'page' || targetInfo.type === 'app')) {
       try {
-        // Connect a flat session to the iframe target
-        const iframeSession = await CDP({ host: "127.0.0.1", port, target: targetInfo.targetId });
-        await iframeSession.Runtime.enable();
-        await iframeSession.DOM.enable();
-        omniSessions.get(parentTargetId)!.set(targetInfo.targetId, iframeSession);
+        // Connect a flat session to the child iframe/webview target
+        const childSession = await CDP({ host: "127.0.0.1", port, target: targetInfo.targetId });
+        await Promise.all([
+          childSession.Runtime.enable().catch(() => {}),
+          childSession.DOM.enable().catch(() => {}),
+          childSession.Page.enable().catch(() => {})
+        ]);
+        omniSessions.get(parentTargetId)!.set(targetInfo.targetId, childSession);
       } catch (e) {
         // Fallback or ignore
       }
@@ -111,6 +114,10 @@ function parseJSON(str: string) {
   try { return JSON.parse(str); } catch { return str; }
 }
 
+export function getOmniSessions(parentTargetId: string): Map<string, CDP.Client> | undefined {
+  return omniSessions.get(parentTargetId);
+}
+
 export function cleanupOmniBroker(parentTargetId: string) {
   const iframeMap = omniSessions.get(parentTargetId);
   if (iframeMap) {
@@ -120,3 +127,4 @@ export function cleanupOmniBroker(parentTargetId: string) {
     omniSessions.delete(parentTargetId);
   }
 }
+

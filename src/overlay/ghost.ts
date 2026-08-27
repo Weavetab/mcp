@@ -6,7 +6,7 @@ import { logDebug } from "../audit/logger.js";
 
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
-import { getConfigHeadless, getConfigVisuals } from "../config/loader.js";
+import { getConfigHeadless } from "../config/loader.js";
 
 export interface CursorOptions {
   trail?: "off" | "subtle" | "full";
@@ -457,7 +457,7 @@ export async function ghostMove(
   }
 
   wtCursor(session, currentX, currentY, label && distance >= 150 ? "searching" : "idle", cursorOpts);
-  if (label && distance >= 150 && getConfigVisuals(config) !== false) {
+  if (label && distance >= 150) {
     wtThought(session, `moving to ${label.slice(0, 40)}...`);
     await sleep(60 + Math.random() * 80);
   }

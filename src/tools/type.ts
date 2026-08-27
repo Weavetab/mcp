@@ -767,10 +767,10 @@ export async function weaveType(
       // Vue/React controlled inputs re-render the DOM node during focus, making
       // Ctrl+V land on the old (detached) node. If el.value is still empty,
       // fallback to Input.insertText which targets the currently-focused element.
-      if (selector && selector !== 'document.activeElement') {
+      if (selector) {
         const pasteCheck = await session.Runtime.evaluate({
           expression: `(function(sel) {
-            var el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+            var el = (sel === 'document.activeElement') ? document.activeElement : (document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null));
             if (!el) return null;
             return el.value !== undefined ? el.value : (el.textContent || null);
           })(${JSON.stringify(selector)})`,

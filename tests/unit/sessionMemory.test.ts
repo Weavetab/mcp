@@ -15,7 +15,7 @@ import {
 } from "../../src/intelligence/sessionMemory.js";
 import { getSystemDir } from "../../src/config/loader.js";
 
-const hostname = "test.weavetab.dev";
+const hostname = "test.weavetab.pages.dev";
 let profilePath: string;
 
 before(() => {

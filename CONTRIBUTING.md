@@ -511,8 +511,8 @@ If you need help contributing:
 
 - **GitHub Issues**: Use for bug reports and feature requests
 - **GitHub Discussions**: Use for questions and community discussion
-- **Email**: conduct@Weavetab.dev for Code of Conduct matters
-- **Security**: security@Weavetab.dev for security vulnerabilities
+- **Email**: conduct@weavetab.pages.dev for Code of Conduct matters
+- **Security**: security@weavetab.pages.dev for security vulnerabilities
 
 ---
 

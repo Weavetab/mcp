@@ -1,310 +1,211 @@
 # Weavetab Plugin Developer Guide: Build from Scratch
 
+> [!NOTE]
+> **PLUGIN ENGINE (v2.5.0-beta.1)**
+>
+> All plugins should use the official **`@weavetab/sdk`** package (`v2.5.0-beta.1`) for type definitions, isolated configurations, visual HUD extensions, and CLI validation tools.
+
 Welcome to the **Weavetab Plugin Developer Guide**. This comprehensive guide teaches you how to build, test, validate, and publish an enterprise-grade Model Context Protocol (MCP) plugin for the **Weavetab** browser automation runtime.
 
 ---
 
 ## 1. Architecture Overview
 
-Weavetab plugins extend the capabilities of AI coding assistants (like Antigravity, Claude, Gemini, Cursor) by exposing specialized browser automation tools, DOM inspection scripts, and API connectors.
+Weavetab plugins extend AI coding assistants (like Antigravity, Claude, Gemini, Cursor, Copilot) by exposing specialized browser automation tools, isolated configs, DOM inspection scripts, and rich visual HUD feedback.
 
 ```mermaid
 flowchart LR
-    AI["AI Agent\n(Claude / Gemini / Antigravity)"] <-->|MCP Protocol| WT["Weavetab MCP Runtime"]
-    WT <-->|Dynamic Plugins| P["Your Plugin\n(@org/my-plugin)"]
-    P <-->|CDP Session| Chrome["Active Chrome Tab\n(DOM / Telemetry)"]
+    AI["AI Agent\n(Claude / Gemini / Antigravity)"] <-->|MCP Protocol| Runtime["Weavetab MCP Runtime\n(v2.5.0-beta.1)"]
+    Runtime <-->|Isolated Config & Storage| Storage["~/.weavetab/plugins/<name>/"]
+    Runtime <-->|CDP & Extension Bridge| Chrome["Active Chrome Tab\n(DOM / Visual HUD / CSS)"]
 ```
 
 ### Key Plugin Capabilities:
 1. **Expose MCP Tools**: Define custom tools with TypeScript parameter schemas.
-2. **Execute In-Browser JavaScript**: Evaluate live DOM scripts via Chrome DevTools Protocol (CDP).
-3. **Automate User Actions**: Click elements, inspect stylesheets, extract structured data, or interact with web apps.
-4. **Zero Configuration**: Zero-friction distribution via standard NPM packages.
+2. **Isolated Plugin Configuration**: Store settings in `~/.weavetab/plugins/<name>/config.json`.
+3. **Sandboxed Key-Value & File Storage**: Store credentials, counters, and JSON files inside `~/.weavetab/plugins/<name>/`.
+4. **Visual HUD Feedback**: Show floating thought bubbles (`showThought`), update status badges (`setHudState`), and inject CSS stylesheets (`injectStyles`).
+5. **Tool Overrides & Wrapping**: Wrap built-in tools (like `browser_eval` or `browser_click`) with security gates or metrics.
+6. **Execution Lifecycle Hooks**: Intercept all tool actions with `beforeToolCall` and `afterToolCall`.
 
 ---
 
 ## 2. Quickstart: 3-Minute Plugin Creation
 
-The fastest way to start is with the interactive Weavetab CLI wizard:
+The fastest way to start is using `@weavetab/sdk`:
 
 ```bash
-# 1. Initialize a new plugin directory
-mkdir my-tab-plugin && cd my-tab-plugin
+# Initialize a new plugin template
+npx -y @weavetab/sdk init my-custom-plugin
+cd my-custom-plugin
 
-# 2. Run the interactive scaffolding wizard
-npx weavetab init
+# Install dependencies and build
+npm install
+npm run build
 ```
-
-The CLI wizard will prompt you for:
-- **Package Identifier**: e.g., `@myorg/wt-plugin` or `wt-plugin`
-- **Display Name**: e.g., `Tab Inspector`
-- **Description**: A short summary of your plugin's capabilities
-- **Author Handle / URL**: Your name, GitHub handle (e.g. `username`), or NPM profile
-- **Author Role**: Any custom title $\ge 3$ characters (e.g. `Creator`, `Maintainer`, `Lead Architect`)
-- **Template Architecture**:
-  - `CDP Browser Automation`: Evaluates DOM scripts and automates browser actions
-  - `External API Connector`: Exposes specialized MCP data tools
-  - `Minimal Starter`: Clean, barebones TypeScript scaffold
 
 ---
 
-## 3. Project File Tree Breakdown
-
-After running `weavetab init`, your project contains a production-ready structure:
+## 3. Project File Structure
 
 ```text
-my-tab-plugin/
+my-custom-plugin/
 ├── src/
-│   └── index.ts          # Plugin logic and MCP tool definitions
-├── images/
-│   ├── logo.svg          # Plugin logo (displayed in marketplace)
-│   └── banner.svg        # Marketplace header banner
-├── test/
-│   └── plugin.test.js    # Unit test suite
+│   └── index.ts          # Plugin logic, tools, hooks, and visuals
 ├── package.json          # Standard NPM package manifest
 ├── tsconfig.json         # Strict TypeScript compiler configuration
-├── weavetab.json         # Weavetab MCP security manifest
-└── README.md             # Documentation with live tools table
+├── weavetab.json         # Weavetab MCP security & capability manifest
+└── README.md             # Documentation
 ```
 
 ---
 
 ## 4. Understanding `weavetab.json`
 
-The `weavetab.json` file serves as the plugin's metadata, capability specification, and security contract.
+The `weavetab.json` file serves as the plugin's metadata, capability specification, and security contract:
 
-### Example Manifest:
 ```json
 {
-  "$schema": "https://weavetab.dev/schema/plugin.json",
-  "name": "Tab Inspector",
+  "$schema": "https://weavetab.pages.dev/schema/plugin.json",
+  "name": "weavetab-plugin-inspector",
   "version": "1.0.0",
-  "description": "Inspects live DOM telemetry and active tab metadata.",
-  "authors": [
-    {
-      "name": "Alex River",
-      "role": "Lead Architect",
-      "url": "https://github.com/alexriver"
-    }
-  ],
-  "logo": "images/logo.svg",
-  "banner": "images/banner.svg",
-  "license": "MIT",
-  "tags": ["Automation", "Developer Tools", "MCP", "CDP"],
-  "compatibility": {
+  "description": "Inspects live DOM telemetry and displays visual HUD feedback.",
+  "entry": "dist/index.js",
+  "engines": {
     "weavetab": "^2.5.0",
     "node": ">=18.0.0"
   },
+  "environments": ["mcp"],
+  "defaultConfig": {
+    "showVisualHud": true,
+    "maxDepth": 5
+  },
   "permissions": {
-    "network": {
-      "domains": ["*"],
-      "reason": "Required to inspect web tabs and telemetry."
+    "config": {
+      "read": true,
+      "write": true,
+      "reason": "Allows isolated config storage in .weavetab/plugins/."
+    },
+    "extension": {
+      "hud": true,
+      "styles": true,
+      "reason": "Displays visual HUD badges and thought bubble feedback."
     },
     "cdp": {
       "evaluate": true,
-      "click": true,
-      "reason": "Evaluates DOM scripts and queries tab metadata via Chrome DevTools Protocol."
+      "reason": "Evaluates DOM scripts via Chrome DevTools Protocol."
     }
   },
   "tools": [
     {
       "name": "inspect_tab",
-      "description": "Inspects live DOM telemetry and active tab properties.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "Optional CSS selector or keyword filter."
-          }
-        }
-      }
+      "description": "Inspects live DOM telemetry and active tab properties."
     }
   ]
 }
 ```
 
-### Manifest Fields Reference:
-
-| Field | Type | Rules & Validation | Description |
-| :--- | :--- | :--- | :--- |
-| `name` | `string` | Required, non-empty | Human-readable plugin name. |
-| `version` | `string` | Required, SemVer format | Semantic version (e.g. `1.0.0`). |
-| `description` | `string` | Recommended $\ge 10$ chars | Overview shown on the registry. |
-| `authors` | `array` | At least 1 author | List of maintainers and creators. |
-| `authors[].name` | `string` | Required ($\ge 2$ chars) | Name or handle. |
-| `authors[].role` | `string` | Custom ($\ge 3$ chars) | Any title (e.g. `Creator`, `Maintainer`, `Core Contributor`). |
-| `authors[].url` | `string` | Optional (HTTP/HTTPS) | Profile URL (GitHub or NPM handle for auto avatar). |
-| `authors[].avatar` | `string` | Optional | Custom image fallback if profile URL is omitted. |
-| `compatibility` | `object` | `weavetab` and `node` | Environment runtime semver range. |
-| `permissions` | `object` | Requires `reason` | Security declarations explaining access needs. |
-| `tools` | `array` | Alphanumeric tool names | List of exposed MCP tools. |
-
 ---
 
-## 5. Writing MCP Tools in TypeScript (`src/index.ts`)
-
-Inside `src/index.ts`, define your tools and export the `plugin` object:
+## 5. Writing MCP Tools with Visuals & Storage (`src/index.ts`)
 
 ```typescript
-export interface WeavetabSession {
-  evaluate<T = any>(script: string): Promise<T>;
-  click?(selector: string): Promise<any>;
-  navigate?(url: string): Promise<any>;
-}
+import { definePlugin, type PluginContext } from "@weavetab/sdk";
 
-export interface PluginToolArgs {
-  selector?: string;
-}
+export default definePlugin({
+  name: "weavetab-plugin-inspector",
 
-export interface WeavetabPluginTool {
-  name: string;
-  description: string;
-  schema?: Record<string, any>;
-  handler: (args: PluginToolArgs, session?: WeavetabSession, config?: any) => Promise<any>;
-}
+  defaultConfig: {
+    showVisualHud: true,
+    maxDepth: 5,
+  },
 
-export interface WeavetabPluginDefinition {
-  name: string;
-  version: string;
-  description: string;
-  tools: WeavetabPluginTool[];
-}
+  async onLoad(ctx: PluginContext) {
+    ctx.logger.info("Inspector plugin loaded with config:", ctx.config);
 
-export const plugin: WeavetabPluginDefinition = {
-  name: "tab-inspector",
-  version: "1.0.0",
-  description: "Inspects live DOM telemetry and active tab metadata.",
-  tools: [
-    {
-      name: "inspect_elements",
+    // Register a custom MCP tool
+    ctx.mcp.registerTool({
+      name: "inspect_tab",
       description: "Extracts title, URL, and matching DOM elements from the active tab.",
       schema: {
         type: "object",
         properties: {
           selector: {
             type: "string",
-            description: "Optional CSS selector to query elements on the page."
-          }
-        }
+            description: "Optional CSS selector to query elements on the page.",
+          },
+        },
       },
-      handler: async (args: PluginToolArgs, session?: WeavetabSession) => {
-        if (!session || typeof session.evaluate !== "function") {
-          return {
-            status: "error",
-            error: "No active Chrome DevTools Protocol (CDP) session attached."
-          };
+      handler: async (args: { selector?: string }, session: any) => {
+        // Track invocations in isolated persistent storage
+        const runs = (await ctx.storage.get<number>("inspectRuns", 0)) || 0;
+        await ctx.storage.set("inspectRuns", runs + 1);
+
+        // Render animated visual thought bubble in the browser
+        if (ctx.config.showVisualHud && session) {
+          await ctx.extension.showThought(
+            session,
+            `🔍 Inspecting selector: ${args.selector || "body"}`
+          );
+          await ctx.extension.setHudState(session, {
+            badge: "Inspecting",
+            badgeColor: "#3b82f6",
+          });
         }
 
-        try {
-          const result = await session.evaluate(`
-            (() => {
-              const targetSelector = ${JSON.stringify(args?.selector || "body")};
-              const elements = Array.from(document.querySelectorAll(targetSelector)).slice(0, 10);
-              return {
-                title: document.title,
-                url: window.location.href,
-                matches: elements.map(el => ({
-                  tag: el.tagName.toLowerCase(),
-                  id: el.id || null,
-                  className: el.className || null,
-                  text: el.textContent?.trim().substring(0, 100) || ""
-                }))
-              };
-            })()
-          `);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Inspected selector: ${args.selector || "body"} (Run #${runs + 1})`,
+            },
+          ],
+        };
+      },
+    });
 
-          return {
-            status: "success",
-            data: result
-          };
-        } catch (err: any) {
-          return {
-            status: "error",
-            error: err.message || String(err)
-          };
-        }
-      }
-    }
-  ]
-};
+    // Lifecycle hooks
+    ctx.hooks.beforeToolCall((toolName, toolArgs) => {
+      ctx.logger.debug(`[Inspector] Before tool: ${toolName}`, toolArgs);
+    });
+  },
 
-export default plugin;
+  async onUnload(ctx: PluginContext) {
+    ctx.logger.info("Inspector plugin unloaded.");
+  },
+});
 ```
 
 ---
 
-## 6. Building & Syncing: `npx weavetab build`
+## 6. Building & Validating: `weavetab build` & `weavetab validate`
 
-Whenever you write or modify tool code, run:
+Whenever you write or modify tool code, compile and audit your project:
 
 ```bash
-npx weavetab build
-```
+# Build TypeScript and synchronize weavetab.json
+npm run build
 
-### What `weavetab build` does:
-1. **TypeScript Compilation**: Compiles `src/` to `dist/index.js` using `tsc`.
-2. **Dynamic Code Introspection**: Reads your exported tools and extracts names, descriptions, and parameter schemas.
-3. **Auto-Manifest Synchronization**: Automatically updates `weavetab.json` with any newly added tools and synced `package.json` versions.
-4. **Validation & Security Audit**:
-   - Validates that tool names match `^[a-zA-Z0-9_-]+$`.
-   - Ensures author roles are at least 3 characters.
-   - Validates SemVer version formatting.
-   - Checks that referenced logo and banner files exist on disk.
-   - Verifies that permission justifications (`reason`) are provided.
-
-### Example Build Output:
-```text
-✔ Built TypeScript source files to dist/.
-✔ Discovered 1 MCP tool(s).
-
-╭────────────────────── WEAVETAB PLUGIN BUILD COMPLETED ──────────────────────╮
-│                                                                             │
-│  Package:        tab-inspector (v1.0.0)                                     │
-│  Entrypoint:     dist/index.js                                              │
-│  Permissions:    CDP (Browser Automation), Network (*)                      │
-│  Manifest:       weavetab.json (Synced & Validated)                         │
-│                                                                             │
-│ Exposed MCP Tools:                                                          │
-│     • inspect_elements - Extracts title, URL, and matching DOM elements     │
-│                                                                             │
-│ Ready to publish to NPM:                                                    │
-│   npm publish --access public                                               │
-╰─────────────────────────────────────────────────────────────────────────────╯
+# Or validate manifest directly
+npx weavetab validate
 ```
 
 ---
 
-## 7. Testing Your Plugin
-
-Run the included Node.js test suite to verify your tool exports:
-
-```bash
-npm test
-```
-
-The test runner ensures your entrypoint loads cleanly, exports valid MCP tool signatures, and contains the required properties.
-
----
-
-## 8. Publishing & Marketplace Distribution
+## 7. Publishing & Marketplace Distribution
 
 ### 1. Publish to NPM
-Weavetab plugins are standard NPM packages:
-
 ```bash
 npm publish --access public
 ```
 
-### 2. Immediate Community Availability
-Once published to NPM, anyone using Weavetab can install your plugin immediately:
-
+### 2. Installation into Weavetab
 ```bash
-npx weavetab add <your-package-name>
+weavetab plugin add <your-package-name>
 ```
 
-### 3. Submitting for Verification (Optional)
-To obtain the **`✔ [Verified]`** badge on the official Weavetab registry:
+### 3. Submitting for Verification
+To receive the **`✔ [Verified]`** badge on the official Weavetab registry:
 1. Open a Pull Request to [weavetab/registry](https://github.com/weavetab/registry).
 2. Add your package name to `verified.json`.
 3. Once merged, your plugin displays the verified badge in both the CLI and online marketplace!

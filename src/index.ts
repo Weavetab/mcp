@@ -2,7 +2,7 @@
 // src/index.ts — Weavetab V3 CLI entrypoint
 
 import { assertNotRoot } from "./security/guard.js";
-import { loadConfig, saveConfig, getCachedConfig, GLOBAL_CONFIG_PATH, GLOBAL_CONFIG_DIR, getConfigMode, getConfigAttachPort, getConfigAgentId, getConfigBrowserType, getConfigBrowserPath, getConfigRole, getConfigHeadless, getConfigVisuals, getConfigDarkMode, getConfigMaxTabs, getConfigSessionTimeout, getConfigNavigationTimeout, getConfigIdleTimeout, getConfigMaxActionsPerMinute, getConfigTelemetry, getConfigBlock, getConfigAllow, getConfigPolicies, getConfigProxy, getDownloadDir, getOutputDir, getConfigDevMode } from "./config/loader.js";
+import { loadConfig, saveConfig, getCachedConfig, GLOBAL_CONFIG_PATH, GLOBAL_CONFIG_DIR, getConfigMode, getConfigAttachPort, getConfigAgentId, getConfigBrowserType, getConfigBrowserPath, getConfigRole, getConfigHeadless, getConfigExtension, getElectronApps, getConfigMaxTabs, getConfigSessionTimeout, getConfigNavigationTimeout, getConfigIdleTimeout, getConfigMaxActionsPerMinute, getConfigTelemetry, getConfigBlock, getConfigAllow, getConfigPolicies, getConfigProxy, getDownloadDir, getOutputDir, getConfigDevMode } from "./config/loader.js";
 import { startServer } from "./server.js";
 import { checkForUpdates } from "./cli/updater.js";
 import fs from "node:fs";
@@ -138,14 +138,11 @@ async function main(): Promise<void> {
       await runPluginCli(args.slice(1));
       process.exit(0);
     }
-    if (cmd === "init" || cmd === "create") {
-      const { runPluginInit } = await import("./cli/plugin.js");
-      await runPluginInit(args.slice(1));
-      process.exit(0);
-    }
-    if (cmd === "build" || cmd === "manifest") {
-      const { runPluginBuild } = await import("./cli/plugin.js");
-      await runPluginBuild(args.slice(1));
+    if (cmd === "init" || cmd === "create" || cmd === "build" || cmd === "manifest") {
+      console.log(pc.yellow(`\n[Weavetab] Plugin authoring commands are part of the developer SDK (@weavetab/sdk).`));
+      console.log(pc.dim("To scaffold a new plugin:   ") + pc.cyan("npx -y @weavetab/sdk init <name>"));
+      console.log(pc.dim("To build/validate a plugin: ") + pc.cyan("npx @weavetab/sdk build"));
+      console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://github.com/weavetab/sdk\n"));
       process.exit(0);
     }
   }
@@ -210,7 +207,7 @@ async function main(): Promise<void> {
 
   function generateMCPConfigEntry(configPath: string): string {
     const entry = {
-      command: "wt",
+      command: "weavetab",
       args: [],
       env: {}
     };
@@ -431,8 +428,8 @@ async function main(): Promise<void> {
                 { value: "webkit", label: "WebKit", hint: "Experimental" },
               ]
             }, "browserType"),
+            S.cf("Enable Weavetab browser extension?", "extension", true),
             S.cf("Persist cookies across sessions?", "cookies", false),
-            S.cf("Disable ALL external extensions?", "disableExtensions", false),
             S.tx("Extra browser flags (space-separated)", "browserFlagsRaw", ""),
             S.tx("Custom browser profile directory", "profileDir", ""),
           ])) === "back") process.exit(0);
@@ -452,11 +449,10 @@ async function main(): Promise<void> {
           ])) === "back") process.exit(0);
         }
 
-        // Section C: Developer & Theming
+        // Section C: Developer & Telemetry
         if (sectionChoice === "C") {
-          console.log(boxen(pc.cyan("SECTION C: DEVELOPER & THEMING"), { padding: 1, borderStyle: 'round', borderColor: 'cyan' }));
+          console.log(boxen(pc.cyan("SECTION C: DEVELOPER & TELEMETRY"), { padding: 1, borderStyle: 'round', borderColor: 'cyan' }));
           if ((await run([
-            S.cf("Use dark mode theme?", "darkMode", true),
             S.cf("Send anonymous telemetry?", "telemetry", false),
             S.tx("GitHub cache TTL (ms)", "githubCacheTtlMs", "1800000", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 0) return "Positive integer."; }),
           ])) === "back") process.exit(0);
@@ -514,8 +510,8 @@ async function main(): Promise<void> {
       if (a.advanced) {
         Object.assign(partialConfig, {
           browserType: a.browserType || "chromium",
+          extension: a.extension !== undefined ? a.extension : true,
           cookies: a.cookies || false,
-          disableExtensions: a.disableExtensions || false,
           browserFlags: a.browserFlags || [],
           profileDir: a.profileDir || "",
           sessionTimeout: parseInt(a.sessionTimeout as string) || 3600,
@@ -523,7 +519,6 @@ async function main(): Promise<void> {
           idleTimeout: parseInt(a.idleTimeout as string) || 60000,
           maxActionsPerMinute: parseInt(a.maxActionsPerMinute as string) || 60,
           actionabilityTimeout: parseInt(a.actionabilityTimeout as string) || 500,
-          darkMode: a.darkMode ?? true,
           telemetry: a.telemetry || false,
           githubCacheTtlMs: parseInt(a.githubCacheTtlMs as string) || 1800000,
           downloadDir: a.downloadDir || "",
@@ -591,7 +586,7 @@ async function main(): Promise<void> {
 
                     if (!existingConfig.mcpServers) existingConfig.mcpServers = {};
                     existingConfig.mcpServers.weavetab = {
-                      command: "wt",
+                      command: "weavetab",
                       args: []
                     };
 
@@ -606,7 +601,7 @@ async function main(): Promise<void> {
                   const configSnippet = JSON.stringify({
                     mcpServers: {
                       weavetab: {
-                        command: "wt",
+                        command: "weavetab",
                         args: []
                       }
                     }
@@ -630,7 +625,7 @@ async function main(): Promise<void> {
           const configSnippet = JSON.stringify({
             mcpServers: {
               weavetab: {
-                command: "wt",
+                command: "weavetab",
                 args: []
               }
             }
@@ -661,10 +656,10 @@ async function main(): Promise<void> {
       p.note(summary.join("\n"), "SUMMARY");
 
       if (!mcpConfigured) {
-        console.log(pc.dim("\nTo configure MCP manually, run: wt config-mcp"));
+        console.log(pc.dim("\nTo configure MCP manually, run: weavetab config-mcp"));
       }
 
-      p.outro(`${pc.green("Weavetab is ready!")}  ${pc.dim("Run")} ${pc.cyan("wt help")} ${pc.dim("to see available commands.")}`);
+      p.outro(`${pc.green("Weavetab is ready!")}  ${pc.dim("Run")} ${pc.cyan("weavetab help")} ${pc.dim("to see available commands.")}`);
     } catch (err) {
       s.stop(pc.red("Failed to save configuration."));
       throw err;
@@ -926,7 +921,7 @@ async function main(): Promise<void> {
       resolution.push(pc.green("[ACTIVE] Global config: ") + pc.dim(globalConfigPath));
     } else {
       resolution.push(pc.yellow("[WARNING] No config found - using built-in defaults"));
-      resolution.push(pc.dim("Run 'wt config' to create a configuration"));
+      resolution.push(pc.dim("Run 'weavetab config' to create a configuration"));
     }
 
     console.log(resolution.join("\n"));
@@ -942,8 +937,7 @@ async function main(): Promise<void> {
       `${pc.dim("Role:")}              ${getConfigRole(config)}`,
       `${pc.dim("Headless:")}          ${getConfigHeadless(config) ? "yes" : "no"}`,
       `${pc.dim("Dev Mode:")}          ${typeof getConfigDevMode(config) === "boolean" ? (getConfigDevMode(config) ? "yes" : "no") : "advanced"}`,
-      `${pc.dim("Visuals:")}           ${getConfigVisuals(config) ? "yes" : "no"}`,
-      `${pc.dim("Dark Mode:")}         ${getConfigDarkMode(config) ? "yes" : "no"}`,
+      `${pc.dim("Extension:")}         ${getConfigExtension(config) ? "yes" : "no"}`,
       `${pc.dim("Max Tabs:")}          ${getConfigMaxTabs(config)}`,
       `${pc.dim("Session Timeout:")}   ${getConfigSessionTimeout(config)}s`,
       `${pc.dim("Navigation Timeout:")} ${getConfigNavigationTimeout(config)}ms`,
@@ -951,6 +945,12 @@ async function main(): Promise<void> {
       `${pc.dim("Max Actions/Min:")}   ${getConfigMaxActionsPerMinute(config)}`,
       `${pc.dim("Telemetry:")}         ${getConfigTelemetry(config) ? "yes" : "no"}`,
     ];
+
+    const electronApps = getElectronApps(config);
+    const appNames = Object.keys(electronApps);
+    if (appNames.length > 0) {
+      configLines.push(`${pc.dim("Electron Apps:")}    ${appNames.join(", ")}`);
+    }
 
     const blockList = getConfigBlock(config);
     if (blockList?.length) {
@@ -1056,7 +1056,7 @@ async function main(): Promise<void> {
     console.log(pc.bold("LINKS"));
     console.log(`  ${pc.cyan("[G]")}  GitHub    ${pc.dim("github.com/Weavetab")}`);
     console.log(`  ${pc.cyan("[N]")}  NPM       ${pc.dim("npmjs.com/package/Weavetab")}`);
-    console.log(`  ${pc.cyan("[W]")}  Website   ${pc.dim("Weavetab.dev")}`);
+    console.log(`  ${pc.cyan("[W]")}  Website   ${pc.dim("weavetab.pages.dev")}`);
     console.log();
 
     console.log(pc.dim("Awaiting command..."));
@@ -1127,7 +1127,7 @@ async function main(): Promise<void> {
         await open("https://npmjs.com/package/Weavetab");
       }
       if (k === "w") {
-        await open("https://Weavetab.dev");
+        await open("https://weavetab.pages.dev");
       }
     };
 
@@ -1146,41 +1146,38 @@ async function main(): Promise<void> {
     console.log();
 
     console.log(pc.bold("USAGE"));
-    console.log(`  ${pc.cyan("wt <command> [options]")}`);
+    console.log(`  ${pc.cyan("weavetab <command> [options]")}`);
     console.log();
 
     console.log(pc.bold("COMMANDS"));
-    console.log(`  ${pc.cyan("init [name]")}   Scaffold a new enterprise TypeScript Weavetab plugin`);
-    console.log(`  ${pc.cyan("build")}         Compile TypeScript plugin & sync weavetab.json manifest`);
-    console.log(`  ${pc.cyan("plugin")}        Manage Weavetab plugins (add, list, remove, verify, browse)`);
-    console.log(`  ${pc.cyan("config")}        Launch the configuration wizard to configure Weavetab`);
+    console.log(`  ${pc.cyan("plugin")}        Manage Weavetab plugins (add, list, remove, search, browse, verify)`);
+    console.log(`  ${pc.cyan("config")}        Launch the interactive configuration wizard`);
     console.log(`  ${pc.cyan("view")}          Display the current active configuration`);
     console.log(`  ${pc.cyan("reset")}         Purge browser profiles, lockfiles, and orphan processes`);
-    console.log(`  ${pc.cyan("secrets")}       Manage encrypted credentials (set, list, rm)`);
+    console.log(`  ${pc.cyan("secrets")}       Manage blind-injected credentials (set, list, rm)`);
     console.log(`  ${pc.cyan("reload-ext")}    Send a reload signal to the browser extension`);
     console.log(`  ${pc.cyan("help")}          Show this help message`);
     console.log();
 
-    console.log(pc.bold("PLUGIN DEVELOPER COMMANDS"));
-    console.log(`  ${pc.cyan("wt init [name]")}              Scaffold a new enterprise plugin with TypeScript & MCP tools`);
-    console.log(`  ${pc.cyan("wt build")}                    Compile TS sources & synchronize weavetab.json`);
-    console.log(`  ${pc.cyan("wt manifest")}                 Validate & update plugin weavetab.json manifest`);
+    console.log(pc.bold("PLUGIN COMMANDS (User)"));
+    console.log(`  ${pc.cyan("weavetab plugin add <pkg>")}         Install a plugin (resolves official @weavetab/plugin- & community)`);
+    console.log(`  ${pc.cyan("weavetab plugin browse")}            Interactive terminal explorer to browse & 1-click install`);
+    console.log(`  ${pc.cyan("weavetab plugin search <query>")}    Search plugins across registry & npm`);
+    console.log(`  ${pc.cyan("weavetab plugin list")}              List all installed Weavetab plugins and tools`);
+    console.log(`  ${pc.cyan("weavetab plugin remove <pkg>")}      Uninstall a plugin`);
+    console.log(`  ${pc.cyan("weavetab plugin verify <pkg>")}      Check trust tier against Weavetab registry`);
     console.log();
 
-    console.log(pc.bold("PLUGIN USER COMMANDS"));
-    console.log(`  ${pc.cyan("wt plugin add <pkg>")}         Install a plugin (resolves official @weavetab/plugin- & community)`);
-    console.log(`  ${pc.cyan("wt plugin browse")}            Interactive terminal explorer to browse & 1-click install`);
-    console.log(`  ${pc.cyan("wt plugin search <query>")}    Search plugins across registry & npm`);
-    console.log(`  ${pc.cyan("wt plugin list")}              List all installed Weavetab plugins and tools`);
-    console.log(`  ${pc.cyan("wt plugin remove <pkg>")}      Uninstall a plugin`);
-    console.log(`  ${pc.cyan("wt plugin verify <pkg>")}      Check trust tier against Weavetab registry`);
+    console.log(pc.bold("PLUGIN DEVELOPER SDK (@weavetab/sdk)"));
+    console.log(`  ${pc.dim("Scaffold a plugin:")}  ${pc.cyan("npx -y @weavetab/sdk init <name>")}`);
+    console.log(`  ${pc.dim("Build & validate:")}   ${pc.cyan("npx @weavetab/sdk build")}`);
     console.log();
 
     console.log(pc.bold("SECRETS SUBCOMMANDS"));
-    console.log(`  ${pc.cyan("wt secrets set <key>")}        Store a new encrypted secret`);
-    console.log(`  ${pc.cyan("wt secrets list")}             List all stored secrets`);
-    console.log(`  ${pc.cyan("wt secrets rm <key>")}         Remove a secret by key`);
-    console.log(`  ${pc.cyan("wt secrets init --project")}   Initialize project-scoped secrets`);
+    console.log(`  ${pc.cyan("weavetab secrets set <key>")}        Store a new encrypted secret`);
+    console.log(`  ${pc.cyan("weavetab secrets list")}             List all stored secrets`);
+    console.log(`  ${pc.cyan("weavetab secrets rm <key>")}         Remove a secret by key`);
+    console.log(`  ${pc.cyan("weavetab secrets init --project")}   Initialize project-scoped secrets`);
     console.log();
 
     console.log(pc.bold("ENVIRONMENT VARIABLES"));
@@ -1191,7 +1188,7 @@ async function main(): Promise<void> {
     console.log(pc.bold("LINKS"));
     console.log(`  ${pc.cyan("GitHub:")}  ${pc.dim("https://github.com/Weavetab")}`);
     console.log(`  ${pc.cyan("npm:")}     ${pc.dim("https://npmjs.com/package/Weavetab")}`);
-    console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://Weavetab.dev")}`);
+    console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://weavetab.pages.dev")}`);
     console.log();
   }
 }
@@ -1234,7 +1231,7 @@ main().catch((err: unknown) => {
     const p = await import("@clack/prompts");
 
     if (args.length === 0) {
-      console.log(pc.red("[ERROR] Usage: wt secrets <set|list|rm> [key]"));
+      console.log(pc.red("[ERROR] Usage: weavetab secrets <set|list|rm> [key]"));
       process.exit(1);
     }
 
@@ -1264,7 +1261,7 @@ main().catch((err: unknown) => {
     if (subcmd === "rm") {
       const key = args[1];
       if (!key) {
-        console.log(pc.red("[ERROR] Usage: wt secrets rm <key>"));
+        console.log(pc.red("[ERROR] Usage: weavetab secrets rm <key>"));
         process.exit(1);
       }
       const removed = await secretStore.removeSecret(key);
@@ -1279,7 +1276,7 @@ main().catch((err: unknown) => {
     if (subcmd === "set") {
       const key = args[1];
       if (!key) {
-        console.log(pc.red("[ERROR] Usage: wt secrets set <key>"));
+        console.log(pc.red("[ERROR] Usage: weavetab secrets set <key>"));
         process.exit(1);
       }
 
@@ -1320,6 +1317,6 @@ main().catch((err: unknown) => {
     }
 
     console.log(pc.red(`[ERROR] Unknown secrets command: ${subcmd}`));
-    console.log(pc.red("Usage: wt secrets <set|list|rm> [key]"));
+    console.log(pc.red("Usage: weavetab secrets <set|list|rm> [key]"));
     process.exit(1);
   }

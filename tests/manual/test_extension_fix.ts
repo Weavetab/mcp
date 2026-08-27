@@ -20,7 +20,7 @@ const assert = (cond: boolean, msg: string) => {
 
 async function main() {
   const config = loadConfigSync();
-  console.error(`Config: devMode=${config.devMode}, disableExtensions=${config.disableExtensions}, visuals=${config.visuals}`);
+  console.error(`Config: devMode=${config.devMode}, extension=${config.extension}`);
 
   const client = await getOrConnect(config);
   const session: CDP.Client = client.session;

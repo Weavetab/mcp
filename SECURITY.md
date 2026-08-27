@@ -131,7 +131,7 @@ If you discover a security vulnerability in Weavetab, please **do not** open a p
 
 Instead, report via one of the following channels:
 
-- **Email**: security@Weavetab.dev
+- **Email**: security@weavetab.pages.dev
 - **GitHub**: Use the private vulnerability reporting feature on the repository
 
 ### Disclosure Timeline
@@ -185,8 +185,8 @@ To receive security notifications:
 
 For security-related inquiries:
 
-- **Security Vulnerabilities**: security@Weavetab.dev
-- **Security Questions**: conduct@Weavetab.dev
+- **Security Vulnerabilities**: security@weavetab.pages.dev
+- **Security Questions**: conduct@weavetab.pages.dev
 - **GitHub Security**: https://github.com/weavetab/mcp/security
 
 ---

@@ -10,7 +10,7 @@ import type { Config } from "../config/loader.js";
 import { blockStorageAccess } from "../security/guard.js";
 import { launchWithBridge, launchElectronApp, injectStealthScript } from "./bridge.js";
 import { setupOverlay, ensureVisualLayer, INSTALL_EXPR } from "../overlay/injector.js";
-import { onConfigChange, saveConfig, loadConfigSync, getCachedConfig, getConfigAgentId, getConfigCookies, getConfigProfileDir, getConfigMode, getConfigBrowserType, getConfigRole, getElectronAppConfig } from "../config/loader.js";
+import { onConfigChange, saveConfig, loadConfigSync, getCachedConfig, getConfigAgentId, getConfigCookies, getConfigProfileDir, getConfigMode, getConfigBrowserType, getConfigRole, getElectronAppConfig, getConfigExtension } from "../config/loader.js";
 import { clearSnapshot } from "../state/delta.js";
 import { sessionRegistry } from "../state/session.js";
 import { initConsoleBuffering } from "../tools/console.js";
@@ -199,7 +199,7 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
   });
 
   // Diagnostic: verify extension content script loaded (Standard browser only)
-  if (!isElectron && activeEngine === "chromium") {
+  if (!isElectron && activeEngine === "chromium" && getConfigExtension(config) !== false) {
     try {
       // Check for multiple indicators that extension is loaded
       const { result: extCheck } = await session.Runtime.evaluate({
@@ -679,10 +679,10 @@ export async function getTabList(agentId?: string, targetApp?: string): Promise<
     const bctxId = sessionRegistry.getBrowserContextIdForAgent(aid);
 
     return targetInfos
-      .filter(t => (t.type === "page" || t.type === "webview" || t.type === "app") && (!bctxId || t.browserContextId === bctxId))
+      .filter(t => (t.type === "page" || t.type === "webview" || t.type === "app" || t.type === "other" || t.type === "iframe") && (!bctxId || t.browserContextId === bctxId))
       .map(t => ({
         id: t.targetId,
-        title: t.title,
+        title: t.title || t.url || t.type,
         url: t.url,
         type: t.type,
       }));
@@ -693,7 +693,7 @@ export async function getTabList(agentId?: string, targetApp?: string): Promise<
 
 // Only allow the UI to update cosmetic/dev settings via the binding.
 // Never allow overwriting security-critical fields (role, browserPath, block, allow, profileDir, etc.).
-const UI_ALLOWED_FIELDS = new Set(["devMode", "visuals", "darkMode"]);
+const UI_ALLOWED_FIELDS = new Set(["devMode", "extension"]);
 
 async function wireUiConfigBinding(session: CDP.Client): Promise<void> {
   try {
@@ -725,9 +725,26 @@ export async function connectToTab(targetId: string, port?: number, agentId?: st
   const lock = readLock(appName);
   const p = port || (appName ? lock?.port : (actualPort || lock?.port));
   if (!p) throw new Error(`[!] No active ${appName || "browser"} session. Run browser_go first.`);
-  const targets = await withCDPTimeout(CDP.List({ host: "127.0.0.1", port: p }), 5000, "connectToTab CDP.List");
-  const t = targets.find((t: any) => (t.id || t.targetId) === targetId);
-  if (!t) throw new Error("Tab not found");
+
+  let t: any = null;
+  try {
+    const targets = await withCDPTimeout(CDP.List({ host: "127.0.0.1", port: p }), 3000, "connectToTab CDP.List");
+    t = targets.find((item: any) => (item.id || item.targetId) === targetId);
+  } catch {}
+  if (!t) {
+    try {
+      const metaSession = await withCDPTimeout(CDP({ host: "127.0.0.1", port: p }), 3000, "connectToTab meta CDP");
+      const { targetInfos } = await withCDPTimeout(metaSession.Target.getTargets(), 3000, "connectToTab meta getTargets");
+      await metaSession.close();
+      const ti = targetInfos.find(item => item.targetId === targetId);
+      if (ti) {
+        t = { id: ti.targetId, targetId: ti.targetId, url: ti.url, title: ti.title, type: ti.type };
+      }
+    } catch {}
+  }
+  if (!t) {
+    t = { id: targetId, targetId, url: "", title: appName || "Tab", type: "page" };
+  }
 
   const session = await withCDPTimeout(CDP({ host: "127.0.0.1", port: p, target: targetId }), 5000, "connectToTab CDP");
 

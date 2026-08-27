@@ -6,7 +6,7 @@
   "icon": "icon.png",
   "author": "fy2ne",
   "license": "AGPL-3.0-only",
-  "homepage": "https://weavetab.dev",
+  "homepage": "https://weavetab.pages.dev",
   "repository": "https://github.com/weavetab/mcp",
   "keywords": [
     "weavetab",
@@ -716,10 +716,10 @@
         "default": 0,
         "description": "Chrome DevTools Protocol attach port"
       },
-      "disableExtensions": {
+      "extension": {
         "type": "boolean",
-        "default": false,
-        "description": "Disable Weavetab Chrome extension integration"
+        "default": true,
+        "description": "Enable Weavetab Chrome extension integration"
       },
       "maxTabs": {
         "type": "number",

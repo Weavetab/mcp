@@ -7,6 +7,8 @@ import {
   OFFICIAL_PLUGIN_PREFIX,
 } from "../../src/plugin/registry.js";
 import { inspectInstalledPackage, listInstalledPlugins } from "../../src/plugin/loader.js";
+import { PluginStorageManager } from "../../src/plugin/storage.js";
+import { PluginExtensionBridge } from "../../src/plugin/extension_bridge.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -102,7 +104,7 @@ describe("Plugin Loader & Manifest Inspection", () => {
       const info = inspectInstalledPackage(tmpDir);
       assert.ok(info !== null);
       assert.strictEqual(info?.packageName, "custom-scraper");
-      assert.strictEqual(info?.manifest.id, "custom-scraper");
+      assert.strictEqual(info?.manifest.name, "custom-scraper");
       assert.strictEqual(info?.manifest.tools?.length, 1);
       assert.strictEqual(info?.manifest.tools?.[0].name, "scrape_table");
       assert.strictEqual(info?.manifest.permissions?.network?.intercept, true);
@@ -167,5 +169,68 @@ describe("Plugin Loader & Manifest Inspection", () => {
     assert.strictEqual(res.typescript, true);
     assert.deepStrictEqual(res.wrapped, { output: "standard eval: 1 + 1" });
     assert.strictEqual(res.result, "enhanced result for 1 + 1");
+  });
+});
+
+describe("Plugin Isolated Storage & Configuration Sandbox", () => {
+  const testPluginName = "test-plugin-sandbox-" + Date.now();
+  const storage = new PluginStorageManager(testPluginName);
+
+  it("should create isolated plugin directory and load default config", () => {
+    const dir = storage.getDirectory();
+    assert.ok(fs.existsSync(dir), "Plugin isolated directory must exist");
+    assert.ok(dir.includes("plugins"), "Directory must be inside .weavetab/plugins/");
+
+    const cfg = storage.loadConfig({ enabled: true, timeout: 5000 });
+    assert.strictEqual(cfg.enabled, true);
+    assert.strictEqual(cfg.timeout, 5000);
+
+    const configFilePath = storage.getConfigPath();
+    assert.ok(fs.existsSync(configFilePath), "config.json must be written");
+  });
+
+  it("should read and write key-value store", async () => {
+    await storage.set("apiKey", "wt-secret-12345");
+    await storage.set("counter", 42);
+
+    const val = await storage.get<string>("apiKey");
+    const count = await storage.get<number>("counter");
+    assert.strictEqual(val, "wt-secret-12345");
+    assert.strictEqual(count, 42);
+
+    const deleted = await storage.delete("apiKey");
+    assert.strictEqual(deleted, true);
+    const afterDelete = await storage.get("apiKey");
+    assert.strictEqual(afterDelete, null);
+  });
+
+  it("should read and write JSON files safely inside plugin directory", async () => {
+    const sample = { items: ["a", "b", "c"], total: 3 };
+    await storage.setJSON("data/items.json", sample);
+
+    const loaded = await storage.getJSON<{ items: string[]; total: number }>("data/items.json");
+    assert.deepStrictEqual(loaded, sample);
+  });
+
+  it("should reject path traversal attempts", () => {
+    assert.throws(() => {
+      storage.getPath("../../outside.txt");
+    }, /Security Violation/i);
+  });
+});
+
+describe("Plugin Extension Bridge & Visuals", () => {
+  it("should instantiate extension bridge and enforce permissions", async () => {
+    const bridge = new PluginExtensionBridge("test-plugin", {
+      extension: {
+        hud: true,
+        styles: false,
+      },
+    });
+
+    // Styles are denied by permission
+    await assert.rejects(async () => {
+      await bridge.injectStyles({} as any, "body { color: red; }");
+    }, /Permission Denied/i);
   });
 });

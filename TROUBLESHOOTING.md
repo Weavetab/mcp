@@ -199,7 +199,7 @@ browser_click({ id: "w:42" })
 **Cause:** Extension incompatibility or corrupted Chrome profile.
 
 **Solution:**
-- Try running without extension: Set `loadExtension: false` in config
+- Try running without extension: Set `"extension": false` in config
 - Use a fresh Chrome profile: Set `profileDir` to a new directory
 - Check Chrome version compatibility (requires Chrome 90+)
 - Disable hardware acceleration in Chrome settings

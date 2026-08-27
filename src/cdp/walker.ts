@@ -489,10 +489,58 @@ export async function buildActionMap(
           extensionMap = parsed;
         }
       } catch (e) {
-         extensionMap = [];
+        extensionMap = [];
       }
     }
   }
+
+  // Merge elements from child webviews and iframes managed by OmniBroker
+  try {
+    const { getOmniSessions } = await import("./omni_broker.js");
+    const childSessions = getOmniSessions(targetId);
+    if (childSessions && childSessions.size > 0) {
+      for (const [, childSession] of childSessions.entries()) {
+        try {
+          const { result: childResult } = await childSession.Runtime.evaluate({
+            expression: `(function() {
+              var INTERACTIVE_SEL = 'a, button, input, textarea, select, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="combobox"], [role="searchbox"], [role="menuitem"], [role="tab"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+              var els = document.querySelectorAll(INTERACTIVE_SEL);
+              var results = [];
+              for (var i = 0; i < els.length; i++) {
+                var el = els[i];
+                var rect = el.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0 || rect.bottom < 0 || rect.top > window.innerHeight) continue;
+                var id = el.getAttribute('data-wt-id');
+                if (!id) {
+                  id = 'wv_' + Math.random().toString(36).slice(2, 9);
+                  el.setAttribute('data-wt-id', id);
+                }
+                results.push({
+                  id: id,
+                  role: el.getAttribute('role') || el.tagName.toLowerCase(),
+                  label: el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || '',
+                  value: el.value,
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  selector: '[data-wt-id="' + id + '"]',
+                  frameUrl: window.location.href,
+                });
+              }
+              return JSON.stringify(results);
+            })()`,
+            returnByValue: true,
+          });
+          if (childResult && childResult.value) {
+            const childEls = JSON.parse(childResult.value as string);
+            if (Array.isArray(childEls) && childEls.length > 0) {
+              if (!Array.isArray(extensionMap)) extensionMap = [];
+              extensionMap = extensionMap.concat(childEls);
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
 
   if (!extensionMap || !Array.isArray(extensionMap)) {
     return { url, title, elements: [], targetId };

@@ -1,6 +1,16 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+
+const _require = createRequire(import.meta.url);
+function getVersion(): string {
+  try {
+    return _require("../../package.json").version || "2.4.0";
+  } catch {
+    return "2.4.0";
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -178,7 +188,7 @@ export async function checkNpmPackageExists(pkgName: string): Promise<boolean> {
     const res = await fetch(`https://registry.npmjs.org/${encodedName}`, {
       method: "HEAD",
       signal: AbortSignal.timeout(3000),
-      headers: { "User-Agent": "Weavetab-CLI/2.5.0" },
+      headers: { "User-Agent": `Weavetab/${getVersion()}` },
     });
     return res.status === 200;
   } catch {

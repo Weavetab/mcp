@@ -1,6 +1,8 @@
 import type { z } from "zod";
 import type CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
+import type { IPluginStorage } from "./storage.js";
+import type { IPluginExtensionBridge } from "./extension_bridge.js";
 
 export interface WeavetabToolDefinition {
   name: string;
@@ -31,11 +33,26 @@ export interface WeavetabManifestTool {
   name: string;
   description: string;
   inputSchema?: Record<string, any>;
+  parameters?: Record<string, any>;
 }
 
-export interface WeavetabManifestPermissions {
+export interface WeavetabPermissions {
+  config?: {
+    read?: boolean;
+    write?: boolean;
+    default?: Record<string, any>;
+    reason?: string;
+  };
+  extension?: {
+    hud?: boolean;
+    overlay?: boolean;
+    styles?: boolean;
+    scripts?: boolean;
+    reason?: string;
+  };
   network?: {
     domains?: string[];
+    hosts?: string[];
     intercept?: boolean;
     reason?: string;
   };
@@ -45,6 +62,7 @@ export interface WeavetabManifestPermissions {
     click?: boolean;
     input?: boolean;
     screenshot?: boolean;
+    dom?: boolean;
     reason?: string;
     [key: string]: any;
   };
@@ -58,15 +76,20 @@ export interface WeavetabManifestPermissions {
     override?: string[];
     /** List of built-in tool names this plugin is permitted to remove */
     remove?: string[];
+    hooks?: boolean;
     reason?: string;
   };
+  [key: string]: any;
 }
+
+export type WeavetabManifestPermissions = WeavetabPermissions;
 
 export interface WeavetabManifestAuthor {
   name: string;
   role?: string;
   avatar?: string;
   url?: string;
+  email?: string;
 }
 
 export interface WeavetabManifestLinks {
@@ -75,11 +98,6 @@ export interface WeavetabManifestLinks {
   docs?: string;
   issues?: string;
   homepage?: string;
-}
-
-export interface WeavetabCompatibility {
-  weavetab?: string;
-  node?: string;
 }
 
 export interface WeavetabManifest {
@@ -95,9 +113,9 @@ export interface WeavetabManifest {
   author?: string | WeavetabManifestAuthor | (string | WeavetabManifestAuthor)[];
   /** Array of authors */
   authors?: (string | WeavetabManifestAuthor)[];
-  /** Path to plugin logo (e.g. "images/logo.svg" or "images/logo.png") */
+  /** Path to plugin logo */
   logo?: string;
-  /** Path to plugin header banner (e.g. "images/banner.png" or "images/banner.webp") */
+  /** Path to plugin header banner */
   banner?: string;
   /** Path to README markdown file (default: "README.md") */
   readme?: string;
@@ -105,14 +123,19 @@ export interface WeavetabManifest {
   tags?: string[];
   /** External links */
   links?: WeavetabManifestLinks;
-  /** Runtime compatibility requirements */
-  compatibility?: WeavetabCompatibility;
+  /** Engine dependencies */
+  engines?: Record<string, string>;
+  /** Supported environments */
+  environments?: string[];
   /** Tools exposed by this plugin to the MCP server */
   tools?: WeavetabManifestTool[];
+  /** Default configuration template */
+  defaultConfig?: Record<string, any>;
   /** Required permissions with security rationale */
-  permissions?: WeavetabManifestPermissions;
+  permissions?: WeavetabPermissions;
   /** Open source license */
   license?: string;
+  [key: string]: any;
 }
 
 export interface WeavetabPluginTool<TArgs = any> {
@@ -120,18 +143,52 @@ export interface WeavetabPluginTool<TArgs = any> {
   description: string;
   schema?: Record<string, any> | Record<string, z.ZodType<any>>;
   inputSchema?: Record<string, any>;
+  parameters?: Record<string, any>;
   handler: (args: TArgs, session?: any, config?: any) => Promise<any>;
+}
+
+export interface PluginHooksContext {
+  beforeToolCall: (handler: (toolName: string, args: Record<string, any>, session?: any) => Promise<any> | void) => void;
+  afterToolCall: (handler: (toolName: string, args: Record<string, any>, result: any, session?: any) => Promise<any> | void) => void;
+  onPageNavigate?: (handler: (url: string, session?: any) => Promise<void> | void) => void;
+}
+
+export interface PluginMcpContext {
+  registerTool: (tool: WeavetabPluginTool | any) => void;
+  overrideTool?: (toolName: string, overrideHandler: any) => void;
+  removeTool?: (toolName: string) => void;
+  unregisterTool?: (toolName: string) => void;
+  [key: string]: any;
+}
+
+export interface PluginContext {
+  name: string;
+  version?: string;
+  pluginDir: string;
+  config: Record<string, any>;
+  storage: IPluginStorage;
+  extension: IPluginExtensionBridge;
+  mcp: PluginMcpContext;
+  hooks: PluginHooksContext;
+  logger: {
+    info: (...args: any[]) => void;
+    warn: (...args: any[]) => void;
+    error: (...args: any[]) => void;
+    debug: (...args: any[]) => void;
+  };
+  [key: string]: any;
 }
 
 export interface WeavetabPluginDefinition {
   name: string;
-  version: string;
+  version?: string;
   description?: string;
   tools?: WeavetabPluginTool[];
   overrides?: WeavetabToolOverride[];
   removeTools?: string[];
-  onLoad?: () => Promise<void>;
-  onUnload?: () => Promise<void>;
+  defaultConfig?: Record<string, any>;
+  onLoad?: (ctx: PluginContext) => Promise<void> | void;
+  onUnload?: (ctx: PluginContext) => Promise<void> | void;
 }
 
 export interface WeavetabPlugin {
@@ -139,12 +196,20 @@ export interface WeavetabPlugin {
   version: string;
   description?: string;
   /** Add new tools */
-  tools?: WeavetabToolDefinition[];
+  tools?: WeavetabToolDefinition[] | WeavetabPluginTool[];
   /** Override or wrap existing tools */
   overrides?: WeavetabToolOverride[];
   /** Built-in tools to remove or disable */
   removeTools?: string[];
+  defaultConfig?: Record<string, any>;
   manifest?: WeavetabManifest;
-  onLoad?: () => Promise<void>;
-  onUnload?: () => Promise<void>;
+  storage?: IPluginStorage;
+  extension?: IPluginExtensionBridge;
+  hooks?: {
+    beforeToolCall: Array<(toolName: string, args: Record<string, any>, session?: any) => Promise<any> | void>;
+    afterToolCall: Array<(toolName: string, args: Record<string, any>, result: any, session?: any) => Promise<any> | void>;
+    onPageNavigate: Array<(url: string, session?: any) => Promise<void> | void>;
+  };
+  onLoad?: (ctx: PluginContext) => Promise<void> | void;
+  onUnload?: (ctx: PluginContext) => Promise<void> | void;
 }

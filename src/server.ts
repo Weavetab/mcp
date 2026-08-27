@@ -57,7 +57,7 @@ import { browserCaptcha } from "./tools/captcha.js";
 import { browserEmulate } from "./tools/emulation.js";
 import { getActiveEngine } from "./cdp/connector.js";
 import { resetLoopCounter } from "./intelligence/trail.js";
-import { discoverPlugins } from "./plugin/loader.js";
+import { discoverPlugins, listInstalledPlugins, loadPluginByName } from "./plugin/loader.js";
 import type { WeavetabPlugin } from "./plugin/interface.js";
 import { agentAction } from "./sensors/pacing.js";
 import { getCachedConfig } from "./config/loader.js";
@@ -1703,16 +1703,15 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     }
   );
 
-  // ── Plugins Lifecycle (Add / Override / Remove) ───────────────────────────
-  const plugins: WeavetabPlugin[] = discoverPlugins();
+  // ── Plugins Lifecycle & Dynamic Registry ───────────────────────────
   const { getVerifiedPackages, resolvePluginTrust } = await import("./plugin/registry.js");
   const verifiedPackages = await getVerifiedPackages();
 
-  let pluginAddedCount = 0;
-  let pluginOverrideCount = 0;
-  let pluginRemovedCount = 0;
+  const loadedPluginNames = new Set<string>();
 
-  for (const plugin of plugins) {
+  const registerPluginTools = async (plugin: WeavetabPlugin) => {
+    if (loadedPluginNames.has(plugin.name)) return;
+    
     const trust = resolvePluginTrust(plugin.name, verifiedPackages);
     const isOfficial = trust.tier === "official";
 
@@ -1729,7 +1728,6 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       if ((server as any)._registeredTools?.[toolName]) {
         delete (server as any)._registeredTools[toolName];
         removedNames.push(toolName);
-        pluginRemovedCount++;
       }
     }
 
@@ -1772,7 +1770,6 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
         }
       );
       overriddenNames.push(ov.name);
-      pluginOverrideCount++;
     }
 
     // 3. Tool Additions (new tools)
@@ -1784,7 +1781,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       server.tool(
         td.name,
         td.description,
-        td.schema,
+        (td.schema as any) || {},
         async (args: any) => {
           try {
             return await withSecurity(
@@ -1802,42 +1799,88 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
         }
       );
       addedNames.push(td.name);
-      pluginAddedCount++;
     }
 
-    // Execute plugin onLoad hook if present
+    // Pass the SDK context so the plugin can dynamically register tools itself
+    const pluginCtx = {
+        mcp: {
+            registerTool: (tool: any) => {
+                server.tool(tool.name, tool.description, tool.schema, async (args: any) => {
+                    return await tool.handler(args);
+                });
+            }
+        }
+    };
+
     if (typeof plugin.onLoad === "function") {
       try {
-        await plugin.onLoad();
+        await plugin.onLoad(pluginCtx as any);
       } catch (err: any) {
         process.stderr.write(`  \u001b[31m[!] Plugin ${plugin.name} onLoad failed: ${err?.message}\u001b[0m\n`);
       }
     }
-
-    // Build permission and operations warning string
-    const ops: string[] = [];
-    if (addedNames.length > 0) ops.push(`+${addedNames.length} added`);
-    if (overriddenNames.length > 0) ops.push(`⚡overrode [${overriddenNames.join(", ")}]`);
-    if (removedNames.length > 0) ops.push(`✖removed [${removedNames.join(", ")}]`);
-    const opsStr = ops.length > 0 ? ` (${ops.join(", ")})` : "";
-
-    let permWarning = "";
-    if (trust.tier === "unverified" && plugin.manifest?.permissions) {
-      const perms = plugin.manifest.permissions;
-      const flags: string[] = [];
-      if (perms.network) flags.push("network");
-      if (perms.cdp) flags.push("cdp");
-      if (perms.fs) flags.push("fs");
-      if (perms.tools?.override?.length) flags.push(`override:${perms.tools.override.join(",")}`);
-      if (perms.tools?.remove?.length) flags.push(`remove:${perms.tools.remove.join(",")}`);
-      if (flags.length > 0) {
-        permWarning = ` \u001b[33m— requests: ${flags.join(", ")}\u001b[0m`;
-      }
+    
+    loadedPluginNames.add(plugin.name);
+    process.stderr.write(`  [Plugin Loaded] ${plugin.name} v${plugin.version}\n`);
+    
+    // Notify the client that tools have changed
+    try {
+        if ((server as any).server) {
+            (server as any).server.sendToolListChanged();
+        }
+    } catch(e) {
+        // Ignore if client doesn't support it or not connected yet
     }
+  };
 
-    process.stderr.write(
-      `  ${trust.badge} ${plugin.name} v${plugin.version}${opsStr}${permWarning}\n`
-    );
+  // Add the built-in ecosystem tools
+  server.tool(
+    "list_plugins",
+    "List all available Weavetab plugins that can be loaded.",
+    {},
+    async () => {
+        const installed = listInstalledPlugins();
+        const available = installed
+            .filter(info => !loadedPluginNames.has(info.packageName))
+            .map(info => `- ${info.packageName}: ${info.manifest?.description || "No description"}`);
+            
+        if (available.length === 0) {
+            return { content: [{ type: "text", text: "No un-loaded plugins available." }] };
+        }
+        return { content: [{ type: "text", text: `Available plugins:\n${available.join("\n")}\n\nUse load_plugin to load one.` }] };
+    }
+  );
+
+  server.tool(
+    "load_plugin",
+    "Load a Weavetab plugin into the MCP context dynamically.",
+    {
+        name: z.string().describe("The exact name of the plugin to load")
+    },
+    async ({ name }) => {
+        if (loadedPluginNames.has(name)) {
+            return { content: [{ type: "text", text: `Plugin ${name} is already loaded.` }] };
+        }
+        
+        const plugin = loadPluginByName(name);
+        if (!plugin) {
+            return { content: [{ type: "text", text: `Plugin ${name} not found.` }] };
+        }
+        
+        await registerPluginTools(plugin);
+        
+        return { content: [{ type: "text", text: `Successfully loaded plugin ${name}. The tools have been registered in your context.` }] };
+    }
+  );
+
+  // We load official core plugins by default, but leave others lazy.
+  const allPlugins = discoverPlugins();
+  for (const plugin of allPlugins) {
+      const trust = resolvePluginTrust(plugin.name, verifiedPackages);
+      const isLazy = plugin.manifest?.environments?.includes("mcp");
+      if (trust.tier === "official" || !isLazy) {
+          await registerPluginTools(plugin);
+      }
   }
 
   let transport;

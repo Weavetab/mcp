@@ -1777,7 +1777,6 @@ function __wt_handleWeavetabMsg(msg) {
         }
       }
     }
-    if (msg.darkMode !== undefined) document.body.classList.toggle('Weavetab-dark', msg.darkMode);
     if (msg.cursor || msg.hud) {
       controlledIndicator.show('#3B82F6');
     }

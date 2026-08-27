@@ -520,6 +520,7 @@ Weavetab auto-generates a config file at `~/.weavetab/config.json` on first run.
 {
   "browserType": "chromium",
   "headless": false,
+  "extension": true,
   "devMode": false,
   "maxActionsPerMinute": 60,
   "role": "admin",
@@ -537,6 +538,7 @@ Weavetab auto-generates a config file at `~/.weavetab/config.json` on first run.
 |-----|------|---------|-------------|
 | `browserType` | `"chromium"` \| `"firefox"` \| `"webkit"` | `"chromium"` | Which browser to launch/attach |
 | `headless` | boolean | `false` | Run browser without a window |
+| `extension` | boolean | `true` | Enable Weavetab Chrome extension integration |
 | `devMode` | boolean | `false` | Verbose CDP logging |
 | `maxActionsPerMinute` | number | `60` | Rate limit threshold |
 | `role` | `"admin"` \| `"system"` \| `"viewer"` \| `"automation"` | `"admin"` | RBAC role |
@@ -608,12 +610,12 @@ Weavetab connects out-of-the-box via stdio JSON-RPC 2.0 with all major AI coding
 
 | Environment | Setup Method | Guided Web Installer |
 | :--- | :--- | :--- |
-| **Cursor** | `.cursor/mcp.json` | [weavetab.dev/mcp/install/cursor](https://weavetab.dev/mcp/install/cursor) |
-| **Antigravity** | `~/.gemini/antigravity/mcp/` | [weavetab.dev/mcp/install/antigravity](https://weavetab.dev/mcp/install/antigravity) |
-| **Claude Desktop** | `claude_desktop_config.json` | [weavetab.dev/mcp/install/claude-desktop](https://weavetab.dev/mcp/install/claude-desktop) |
-| **Claude Code** | `claude mcp add` | [weavetab.dev/mcp/install/claude-code](https://weavetab.dev/mcp/install/claude-code) |
-| **VS Code / Copilot** | 1-Click Protocol / `settings.json` | [weavetab.dev/mcp/install/vscode](https://weavetab.dev/mcp/install/vscode) |
-| **Windsurf** | `mcp_config.json` | [weavetab.dev/mcp/install/windsurf](https://weavetab.dev/mcp/install/windsurf) |
+| **Cursor** | `.cursor/mcp.json` | [weavetab.pages.dev/mcp/install/cursor](https://weavetab.pages.dev/mcp/install/cursor) |
+| **Antigravity** | `~/.gemini/antigravity/mcp/` | [weavetab.pages.dev/mcp/install/antigravity](https://weavetab.pages.dev/mcp/install/antigravity) |
+| **Claude Desktop** | `claude_desktop_config.json` | [weavetab.pages.dev/mcp/install/claude-desktop](https://weavetab.pages.dev/mcp/install/claude-desktop) |
+| **Claude Code** | `claude mcp add` | [weavetab.pages.dev/mcp/install/claude-code](https://weavetab.pages.dev/mcp/install/claude-code) |
+| **VS Code / Copilot** | 1-Click Protocol / `settings.json` | [weavetab.pages.dev/mcp/install/vscode](https://weavetab.pages.dev/mcp/install/vscode) |
+| **Windsurf** | `mcp_config.json` | [weavetab.pages.dev/mcp/install/windsurf](https://weavetab.pages.dev/mcp/install/windsurf) |
 
 ---
 
@@ -852,58 +854,85 @@ Setting `"devMode": true` in configuration or `WEAVETAB_DEV=1` activates diagnos
 
 ## Plugin System
 
-Weavetab supports dynamic tool extension via the **Plugin System**. Any npm package containing a valid `weavetab.json` manifest found in `node_modules` (or official `@weavetab/plugin-*` packages) is automatically discovered and loaded at startup. Community plugins are not restricted to any prefix—name them anything (e.g., `wt-n8n`, `seo-auditor`, `pdf-extract`).
+> [!NOTE]
+> **PLUGIN ENGINE (v2.5.0-beta.1)**
+> 
+> The Weavetab Plugin System and SDK are in **v2.5.0-beta.1**.
+> Use the official **[`@weavetab/sdk`](https://www.npmjs.com/package/@weavetab/sdk)** to build, scaffold, and publish plugins.
 
-> 📖 See [Developer Plugin Guide](../docs/dev_plugin.md) for a step-by-step tutorial, and [docs/PLUGINS.md](docs/PLUGINS.md) for the complete architecture and manifest specification.
+Weavetab supports dynamic tool extension via the **Plugin System**. Any npm package containing a valid `weavetab.json` manifest found in `node_modules` (or official `@weavetab/plugin-*` packages) is automatically discovered and loaded into the MCP server.
+
+### Key Capabilities in v2.5.0-beta.1:
+1. **Isolated Configuration Sandbox**: Each plugin maintains its own settings in `~/.weavetab/plugins/<name>/config.json` without modifying core Weavetab config.
+2. **Sandboxed Key-Value & File Storage**: Secure storage inside `~/.weavetab/plugins/<name>/` via `ctx.storage` with path traversal protection.
+3. **Real-time Extension & HUD Visuals**: Floating thought bubbles (`ctx.extension.showThought`), status badges (`setHudState`), and custom CSS injection (`injectStyles`).
+4. **Tool Overrides & Wrapping**: Wrap or modify built-in MCP tools (e.g. `browser_eval`, `browser_click`) via `ctx.mcp.overrideTool`.
+5. **Lifecycle Hooks**: Intercept actions before and after tool calls with `ctx.hooks.beforeToolCall` and `ctx.hooks.afterToolCall`.
+
+> 📖 See [Developer Plugin Guide](docs/dev_plugin.md) for a step-by-step tutorial, and [docs/PLUGINS.md](docs/PLUGINS.md) for the complete architecture and manifest specification.
 
 ### Quick Scaffold & Build
 
 ```bash
-# 1. Interactive scaffolding wizard
-npx weavetab init
+# 1. Scaffold a new plugin
+npx @weavetab/sdk init my-custom-plugin
+cd my-custom-plugin
+npm install
 
-# 2. Build, type-check, and auto-sync weavetab.json
-npx weavetab build
+# 2. Build and compile
+npm run build
 ```
 
 ### Installing a Plugin
 
 ```bash
 # Official plugin
-wt plugin add @weavetab/plugin-sample
+weavetab plugin add @weavetab/plugin-youtube
 
-# Community plugin (any npm name)
-wt plugin add seo-auditor
-# or via npm
-npm install wt-n8n
+# Community plugin (any npm package name)
+weavetab plugin add seo-auditor
 ```
 
-Restart `weavetab` — the plugin's tools are automatically registered as additional MCP tools.
+Restart `weavetab` — the plugin's tools are automatically registered into the MCP runtime.
 
-### Developing a Plugin
+### Authoring a Plugin
 
 ```typescript
 // src/index.ts
-import type { WeavetabPlugin } from "@weavetab/mcp";
+import { definePlugin, type PluginContext } from "@weavetab/sdk";
 
-const plugin: WeavetabPlugin = {
-  name: "my-plugin",
-  version: "1.0.0",
-  tools: [
-    {
+export default definePlugin({
+  name: "weavetab-plugin-sample",
+
+  defaultConfig: {
+    showVisualHud: true,
+  },
+
+  async onLoad(ctx: PluginContext) {
+    ctx.mcp.registerTool({
       name: "my_custom_tool",
-      description: "WHAT: Does something | WHEN: Use for X | EXAMPLE: my_custom_tool({ param: 'value' })",
-      schema: { param: { type: "string", description: "Input parameter" } },
-      handler: async (args, session, config) => {
-        // Your tool implementation using Chrome DevTools Protocol session
-        const evalResult = await session.evaluate(() => document.title);
-        return { success: true, title: evalResult };
-      }
-    }
-  ]
-};
+      description: "Custom tool registered into Weavetab runtime",
+      schema: {
+        type: "object",
+        properties: {
+          param: { type: "string", description: "Input parameter" }
+        }
+      },
+      handler: async (args: { param?: string }, session: any) => {
+        // Show thought bubble on active tab
+        if (ctx.config.showVisualHud && session) {
+          await ctx.extension.showThought(session, `✨ Running tool with ${args.param || "default"}`);
+        }
 
-export default plugin;
+        return {
+          content: [
+            { type: "text", text: `Executed with: ${args.param || "default"}` }
+          ]
+        };
+      }
+    });
+  }
+});
 ```
 
 Plugin tools follow the standard MCP contract: structured Zod input, deterministic JSON output, audit logging, and `WeaveError` protocol on failure.
@@ -1020,7 +1049,7 @@ Commit format: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`
 Running Weavetab MCP as an independent process and communicating with it over standard Model Context Protocol transports (`stdio` or WebSocket JSON-RPC) does **not** cause AGPL copyleft obligations to extend to your client application, IDE, or host AI models.
 
 ### Commercial Licensing
-For commercial, proprietary, or embedded distribution without AGPL copyleft requirements, dual-licensing options are available. Inquire at `license@weavetab.dev`.
+For commercial, proprietary, or embedded distribution without AGPL copyleft requirements, dual-licensing options are available. Inquire at `license@weavetab.pages.dev`.
 
 ---
 
@@ -1031,7 +1060,7 @@ For commercial, proprietary, or embedded distribution without AGPL copyleft requ
 | [GitHub Issues](https://github.com/weavetab/mcp/issues) | Bug reports, feature requests |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues and fixes |
 | [docs/](docs/) | Full documentation |
-| security@weavetab.dev | Security vulnerabilities (private) |
+| security@weavetab.pages.dev | Security vulnerabilities (private) |
 
 ---
 

@@ -13,7 +13,7 @@ import { logDebug } from "../audit/logger.js";
 
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
-import { getConfigVisuals, getConfigDevMode } from "../config/loader.js";
+import { getConfigDevMode } from "../config/loader.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -91,7 +91,6 @@ export function getMinimalOverlayScript(): string {
 
     window.__wt_setConfig = function(c) {
       if (c && c.devMode) window.__wt_devMode = true;
-      if (c && c.visuals !== undefined) window.__wt_showVisuals = !!c.visuals;
     };
 
     window.__wt_status = function() { return JSON.stringify({ rootInjected: true }); };
@@ -150,7 +149,6 @@ function buildConfigExpr(config: Config): string {
   return `
 if(window.__wt_setConfig)window.__wt_setConfig(${JSON.stringify({
     ...config,
-    visuals: getConfigVisuals(config) !== false,
   })});
 window.postMessage({type:'Weavetab-msg-in',data:${JSON.stringify(msg)}},'*');
 `;
