@@ -45,35 +45,72 @@ export async function weaveKey(
 ): Promise<KeyResult | WeaveError> {
   const { key, modifiers } = args;
 
+  let effectiveKey = key.trim();
+  const effectiveModifiers: Modifier[] = [...(modifiers || [])];
+
+  // Auto-parse combo strings e.g. "Ctrl+A", "Control+Shift+P", "Cmd+K", "Alt+ArrowDown"
+  if (effectiveKey.includes("+")) {
+    const parts = effectiveKey.split("+").map(p => p.trim());
+    effectiveKey = parts[parts.length - 1] || "Enter";
+    for (let i = 0; i < parts.length - 1; i++) {
+      const mod = parts[i]!.toLowerCase();
+      if ((mod === "ctrl" || mod === "control") && !effectiveModifiers.includes("Ctrl")) effectiveModifiers.push("Ctrl");
+      else if (mod === "shift" && !effectiveModifiers.includes("Shift")) effectiveModifiers.push("Shift");
+      else if ((mod === "alt" || mod === "option") && !effectiveModifiers.includes("Alt")) effectiveModifiers.push("Alt");
+      else if ((mod === "meta" || mod === "cmd" || mod === "command" || mod === "win") && !effectiveModifiers.includes("Meta")) effectiveModifiers.push("Meta");
+    }
+  }
+
+  // Capitalize common key names if needed (e.g. "enter" -> "Enter", "escape" -> "Escape", "tab" -> "Tab")
+  const keyMap: Record<string, string> = {
+    enter: "Enter",
+    escape: "Escape",
+    esc: "Escape",
+    tab: "Tab",
+    backspace: "Backspace",
+    delete: "Delete",
+    space: "Space",
+    arrowup: "ArrowUp",
+    arrowdown: "ArrowDown",
+    arrowleft: "ArrowLeft",
+    arrowright: "ArrowRight",
+    up: "ArrowUp",
+    down: "ArrowDown",
+    left: "ArrowLeft",
+    right: "ArrowRight",
+    home: "Home",
+    end: "End",
+    pageup: "PageUp",
+    pagedown: "PageDown",
+  };
+  if (keyMap[effectiveKey.toLowerCase()]) {
+    effectiveKey = keyMap[effectiveKey.toLowerCase()]!;
+  }
+
   // Allow single printable chars or control keys from the allowlist
-  if (key.length > 1 && !ALLOWED_KEYS.has(key)) {
+  if (effectiveKey.length > 1 && !ALLOWED_KEYS.has(effectiveKey)) {
     return {
       success: false,
       error_code: "INVALID_KEY",
-      message: `[!] Key "${key}" is not a valid control key. Use single characters or: ${[...ALLOWED_KEYS].join(", ")}`,
+      message: `[!] Key "${effectiveKey}" is not a valid control key. Use single characters or: ${[...ALLOWED_KEYS].join(", ")}`,
     };
   }
 
   let modMask = 0;
-  if (modifiers) {
-    if (modifiers.includes("Alt"))   modMask |= 1;
-    if (modifiers.includes("Ctrl"))  modMask |= 2;
-    if (modifiers.includes("Meta"))  modMask |= 4;
-    if (modifiers.includes("Shift")) modMask |= 8;
-  }
+  if (effectiveModifiers.includes("Alt"))   modMask |= 1;
+  if (effectiveModifiers.includes("Ctrl"))  modMask |= 2;
+  if (effectiveModifiers.includes("Meta"))  modMask |= 4;
+  if (effectiveModifiers.includes("Shift")) modMask |= 8;
 
-  const label = modifiers && modifiers.length > 0 ? `${modifiers.join("+")}+${key}` : key;
+  const label = effectiveModifiers.length > 0 ? `${effectiveModifiers.join("+")}+${effectiveKey}` : effectiveKey;
   await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `pressing ${label}` } });
 
-  const { frameTree: beforeFrameTree } = await session.Page.getFrameTree();
+  const { frameTree: beforeFrameTree } = await session.Page.getFrameTree().catch(() => ({ frameTree: { frame: { url: '' } } }));
   const urlBefore = beforeFrameTree.frame.url;
 
-  // Track map before for delta if Enter is pressed
   let targetId = "default";
   const active = sessionRegistry.getActive(getConfigAgentId(_config));
   if (active) targetId = active.targetId;
-  const mapBefore = await buildActionMap(session, { lite: true }, targetId);
-  storeSnapshot(targetId, urlBefore, toRefEntries(mapBefore.elements));
 
   // We removed the direct toast injection here because the extension handles HUD display via Weavetab_STATE (line 66)
 
@@ -118,33 +155,14 @@ export async function weaveKey(
       })();
     `}).catch(() => {});
   }
-  await session.Input.dispatchKeyEvent({ type: "keyUp", key, modifiers: modMask, windowsVirtualKeyCode: key === "Enter" ? 13 : undefined, nativeVirtualKeyCode: key === "Enter" ? 13 : undefined });
+  await session.Input.dispatchKeyEvent({ type: "keyUp", key: effectiveKey, modifiers: modMask, windowsVirtualKeyCode: effectiveKey === "Enter" ? 13 : undefined, nativeVirtualKeyCode: effectiveKey === "Enter" ? 13 : undefined });
 
-  // ── Post-Action Pipeline & Predictive Action Queue ────────────────────────
-
-  const predictiveQueue = async () => {
-    try {
-      const nextMap = await buildActionMap(session, { lite: true }, targetId);
-      cacheActionMap(targetId, nextMap);
-      
-      for (const el of nextMap.elements.slice(0, 10)) {
-        if (el.backendNodeId) {
-          const { nodeIds } = await session.DOM.pushNodesByBackendIdsToFrontend({ backendNodeIds: [el.backendNodeId] }).catch(() => ({ nodeIds: [] }));
-          if (nodeIds[0]) {
-            const box = await session.DOM.getBoxModel({ nodeId: nodeIds[0] }).catch(() => null);
-            if (box) cacheBoxModel(targetId, el.backendNodeId, box.model);
-          }
-        }
-      }
-    } catch { /* ignore pre-fetch errors */ }
-  };
-
-  const settleTimeout = key === "Enter" ? 5000 : 2500;
-  await Promise.all([
-    waitForDOMStable(session, 50, settleTimeout),
-    waitForNetworkIdle(session, 50, settleTimeout).catch(() => {}),
-    predictiveQueue()
-  ]);
+  // Fast return for non-submission keys (Tab, Escape, Arrows, Shortcuts)
+  if (effectiveKey === "Enter") {
+    await new Promise(r => setTimeout(r, 60));
+  } else {
+    await new Promise(r => setTimeout(r, 15));
+  }
 
   // Post-key location context
   let postUrl = "";
@@ -152,12 +170,8 @@ export async function weaveKey(
   try {
     const { frameTree } = await session.Page.getFrameTree();
     postUrl = frameTree.frame.url;
-    try {
-      const titleRes = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
-      postTitle = (titleRes?.result?.value as string) || postUrl;
-    } catch { postTitle = postUrl; }
     const activeSession = sessionRegistry.getActive(getConfigAgentId(_config));
-    if (activeSession) { activeSession.url = postUrl; activeSession.title = postTitle; }
+    if (activeSession) activeSession.url = postUrl;
   } catch { /* ignore */ }
 
   const urlChanged = postUrl !== urlBefore;

@@ -3,7 +3,7 @@ import { logDebug } from "../audit/logger.js";
 // Priority 2: Sub-10ms Typing Path & Predictive Action Queue
 
 import CDP from "chrome-remote-interface";
-import { buildActionMap, findBestMatch, findAllMatches, toRefEntries, safeSelector, toMarkdownTable, resolveByAria } from "../cdp/walker.js";
+import { buildActionMap, findBestMatch, findAllMatches, toRefEntries, safeSelector, toMarkdownTable, resolveByAria, recoverDetachedRef } from "../cdp/walker.js";
 import { checkDomain } from "../security/blacklist.js";
 import { logAction } from "../audit/logger.js";
 import { recordAction, detectLoop, getLoopDiagnostics, trackToolCall, detectStuckLoop } from "../intelligence/trail.js";
@@ -17,7 +17,8 @@ import { saveDomainProfile, getBestSelectorForIntent, logMemorySuccess, logMemor
 import type { Config } from "../config/loader.js";
 import { getConfigAgentId, getConfigHeadless } from "../config/loader.js";
 import type { WeaveError } from "./click.js";
-import { sendToExtension } from "../cdp/helpers.js";
+import { sendToExtension, registerAndHardenSecretField } from "../cdp/helpers.js";
+import { SessionSecretTracker } from "../security/secrets.js";
 import { appendKnowledgeHint } from "../intelligence/hints.js";
 import { verifyActionability, quickHitCheck } from "../sensors/actionability.js";
 
@@ -210,6 +211,15 @@ async function resolveTypingTarget(
   }
 
   let element = id ? map.elements.find((el) => el.id === id || el.id.endsWith(id)) : undefined;
+
+  // SPA Auto-Recovery: if w:NN ref detached due to re-render, attempt fast heuristic recovery
+  if (!element && id && id.startsWith("w:")) {
+    const recovery = await recoverDetachedRef(session, _targetId, id);
+    if (recovery.recovered && recovery.element) {
+      element = recovery.element;
+    }
+  }
+
   // Fast-fail: w:NN IDs not in the current map are stale. Return immediately.
   if (!element && id && id.startsWith("w:")) {
     return {
@@ -317,18 +327,23 @@ async function resolveTypingTarget(
           y: Math.round(r.top + r.height/2)
         };
       };
-      var sel;
-      sel = 'textarea[name="q"], input[name="q"], [aria-label="Search"], [title="Search"]';
+      var el = document.activeElement;
+      var isEditable = el && el !== document.body && (
+        el.isContentEditable ||
+        el.tagName === 'TEXTAREA' ||
+        (el.tagName === 'INPUT' && !['button','submit','checkbox','radio','hidden','file'].includes((el.type||'').toLowerCase())) ||
+        el.getAttribute('role') === 'textbox' || el.getAttribute('role') === 'searchbox' || el.getAttribute('role') === 'combobox'
+      );
+      if (isEditable) {
+        var fromActive = pick(el);
+        if (fromActive) return JSON.stringify(fromActive);
+      }
+
+      var sel = 'textarea[name="q"], input[name="q"], [aria-label="Search"], [title="Search"]';
       var q = document.querySelector(sel);
       var fromQ = pick(q);
       if (fromQ) return JSON.stringify(fromQ);
-      var el = document.activeElement;
-      var isEditable = el && (
-        el.isContentEditable ||
-        el.tagName === 'TEXTAREA' ||
-        (el.tagName === 'INPUT' && !['button','submit','checkbox','radio','hidden','file'].includes((el.type||'').toLowerCase()))
-      );
-      if (isEditable) return JSON.stringify(pick(el));
+
       var sels = ['[contenteditable="true"]','[contenteditable=""]','textarea','input[type="search"]','input[type="text"]','input:not([type])','[role="textbox"]','[role="combobox"]','input[name="q"]'];
       var best = null, bestArea = 0;
       for (var si = 0; si < sels.length; si++) {
@@ -393,6 +408,8 @@ export async function weaveType(
   session: CDP.Client,
   args: {
     id?: string;
+    target?: string;
+    selector?: string;
     label?: string;
     intent?: string;
     backendNodeId?: number;
@@ -410,17 +427,14 @@ export async function weaveType(
   },
   config: Config
 ): Promise<TypeResult | WeaveError> {
-  const { id, label, intent, backendNodeId: directNodeId, text, clearFirst, fast = false } = args;
+  const id = args.id || args.target || args.selector;
+  const { label, intent, backendNodeId: directNodeId, text, clearFirst, fast = false } = args;
   const { Page, DOM } = session;
 
   const startMs = Date.now();
 
   const { frameTree } = await Page.getFrameTree();
   const url = frameTree.frame.url;
-
-  if (!id && !label && !intent && args.x === undefined && args.y === undefined) {
-    return { success: false, error_code: "NO_TARGET", message: `[!] browser_type requires id, label, or intent — no target specified.` };
-  }
 
   const domainCheck = checkDomain(url, config);
   if (!domainCheck.allowed) {
@@ -636,7 +650,29 @@ export async function weaveType(
     }
   }
 
-  const typePreview = text.slice(0, 20).replace(/'/g, "");
+  // Detect password / secret fields early to protect HUD, logs, and register secret
+  const isSecretParam = !!(args as any).isSecret || !!(args as any).secret;
+  const isPassword = isSecretParam || await session.Runtime.evaluate({
+    expression: `(function(sel) {
+      const el = (sel === 'document.activeElement') ? document.activeElement : (document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null));
+      if (!el) return false;
+      const t = (el.getAttribute('type') || '').toLowerCase();
+      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      const name = (el.getAttribute('name') || '').toLowerCase();
+      const id = (el.getAttribute('id') || '').toLowerCase();
+      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+      const isSecAttr = el.hasAttribute('data-wt-secret');
+      const secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+      return isSecAttr || t === 'password' || ac.includes('password') || secretRegex.test(name) || secretRegex.test(id) || secretRegex.test(aria);
+    })(${JSON.stringify(selector)})`,
+    returnByValue: true
+  }).then(r => r.result?.value === true).catch(() => false);
+
+  if (isPassword && text) {
+    SessionSecretTracker.registerSecretValue(targetId, text);
+  }
+
+  const typePreview = isPassword ? "••••••••" : text.slice(0, 20).replace(/'/g, "");
   const typeStatus = ["typing", "entering", "inputting", "writing"][Math.floor(Math.random() * 4)];
   await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `${typeStatus} ${typePreview}...` } });
 
@@ -670,10 +706,31 @@ export async function weaveType(
       }
     }
     
-    if (coords.x !== undefined && coords.y !== undefined) {
+    // Check if element is ALREADY focused before clicking it to prevent unfocusing or toggling
+    const alreadyFocusedRes = await session.Runtime.evaluate({
+      expression: `(function(sel) {
+        if (!sel || sel === 'document.activeElement') return true;
+        const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+        return el ? (document.activeElement === el || el.contains(document.activeElement)) : false;
+      })(${JSON.stringify(selector)})`,
+      returnByValue: true
+    }).catch(() => null);
+    const isAlreadyFocused = alreadyFocusedRes?.result?.value === true;
+
+    if (!isAlreadyFocused && coords.x !== undefined && coords.y !== undefined) {
       await ghostClick(session, coords.x, coords.y);
       await session.Input.dispatchMouseEvent({ type: "mouseReleased", x: coords.x, y: coords.y, button: "left", clickCount: 1 });
-      await new Promise(r => setTimeout(r, fast ? 10 : 100 + Math.random() * 100));
+      await new Promise(r => setTimeout(r, fast ? 10 : 80 + Math.random() * 80));
+    } else if (isAlreadyFocused) {
+      // Ensure focus without hardware click re-trigger
+      await session.Runtime.evaluate({
+        expression: `(function(sel) {
+          if (!sel || sel === 'document.activeElement') return;
+          const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+          if (el && typeof el.focus === 'function') el.focus();
+        })(${JSON.stringify(selector)})`,
+        returnByValue: false
+      }).catch(() => {});
     }
 
     // Manual clear only when explicitly requested (insertText replaces naturally)
@@ -727,21 +784,12 @@ export async function weaveType(
   // When true the post-type event dispatch block is suppressed to prevent
   // the double-onChange triplication bug on React/Vue controlled inputs.
   let nativeSetterUsed = false;
-  
-  // Detect password fields — always ghost type these regardless of profile
-  const isPassword = await session.Runtime.evaluate({
-    expression: `(function(sel) {
-      const el = document.querySelector(sel);
-      return el ? (el.getAttribute('type') || '').toLowerCase() === 'password' : false;
-    })(${JSON.stringify(selector)})`,
-    returnByValue: true
-  }).then(r => r.result?.value === true).catch(() => false);
 
   // Click-to-type delay
   await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
 
-  // Auto-enable paste mode for long inputs to prevent character dropping
-  const shouldPasteForType = args.paste || text.length > 8;
+  // Auto-enable paste mode for long inputs to prevent character dropping (never for secret/password fields)
+  const shouldPasteForType = args.paste || (text.length > 8 && !isPassword);
 
   if (shouldPasteForType && !isPassword) {
     // Paste mode: Use clipboard for reliable long input handling
@@ -763,7 +811,7 @@ export async function weaveType(
       await session.Input.dispatchKeyEvent({ type: "keyUp", key: "v", windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers: 2 });
       await new Promise(r => setTimeout(r, 120));
 
-      // Paste verification: check if the field actually received the text.
+      // Paste verification: check if the field actually received text.
       // Vue/React controlled inputs re-render the DOM node during focus, making
       // Ctrl+V land on the old (detached) node. If el.value is still empty,
       // fallback to Input.insertText which targets the currently-focused element.
@@ -772,6 +820,8 @@ export async function weaveType(
           expression: `(function(sel) {
             var el = (sel === 'document.activeElement') ? document.activeElement : (document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null));
             if (!el) return null;
+            var isSec = el.hasAttribute('data-wt-secret') || (el.tagName === 'INPUT' && el.type === 'password');
+            if (isSec) return (el.value && el.value.length > 0) ? '__HAS_CONTENT__' : '';
             return el.value !== undefined ? el.value : (el.textContent || null);
           })(${JSON.stringify(selector)})`,
           returnByValue: true,
@@ -887,41 +937,40 @@ export async function weaveType(
   if (text) {
     try {
       const isActiveElementRef = selector === "document.activeElement";
-      const getFieldValue = async (): Promise<string | null> => {
+      const checkFieldValue = async (): Promise<boolean> => {
         const expression = isActiveElementRef
-          ? `(function() {
+          ? `(function(expected) {
               var el = document.activeElement;
-              if (!el) return null;
-              return el.value !== undefined ? el.value : (el.textContent || null);
-            })()`
-          : `(function(sel) {
-              var el = document.querySelector(sel);
-              if (!el) return null;
-              return el.value !== undefined ? el.value : (el.textContent || null);
-            })(${JSON.stringify(selector)})`;
-        const { result } = await session.Runtime.evaluate({ expression, returnByValue: true });
-        return result?.value as string | null;
+              if (!el) return false;
+              var val = el.value !== undefined ? el.value : (el.textContent || '');
+              return val === expected || (typeof val === 'string' && val.trim() === expected.trim())
+                     || (typeof val === 'string' && typeof expected === 'string' &&
+                         val.replace(/\\D/g, '') === expected.replace(/\\D/g, '') && expected.length > 3);
+            })(${JSON.stringify(text)})`
+          : `(function(sel, expected) {
+              var el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+              if (!el) return false;
+              var val = el.value !== undefined ? el.value : (el.textContent || '');
+              return val === expected || (typeof val === 'string' && val.trim() === expected.trim())
+                     || (typeof val === 'string' && typeof expected === 'string' &&
+                         val.replace(/\\D/g, '') === expected.replace(/\\D/g, '') && expected.length > 3);
+            })(${JSON.stringify(selector)}, ${JSON.stringify(text)})`;
+        const { result } = await session.Runtime.evaluate({ expression, returnByValue: true }).catch(() => ({ result: { value: false } }));
+        return result?.value === true;
       };
 
-      const val = await getFieldValue();
-      textApplied = val === text || (typeof val === 'string' && val.trim() === text.trim())
-                    // tel/formatted inputs may strip chars (e.g. dashes); also
-                    // accept if the value simply contains the digits we typed.
-                    || (typeof val === 'string' && typeof text === 'string' &&
-                        val.replace(/\D/g, '') === text.replace(/\D/g, '') && text.length > 3);
+      textApplied = await checkFieldValue();
 
       if (!textApplied) {
         await new Promise(r => setTimeout(r, 200));
         await waitForDOMStable(session, 50, 200).catch(() => {});
-        const retryVal = await getFieldValue();
-        textApplied = retryVal === text || (typeof retryVal === 'string' && retryVal.trim() === text.trim());
+        textApplied = await checkFieldValue();
       }
 
       if (!textApplied) {
         await new Promise(r => setTimeout(r, 400));
         await waitForDOMStable(session, 50, 300).catch(() => {});
-        const finalVal = await getFieldValue();
-        textApplied = finalVal === text || (typeof finalVal === 'string' && finalVal.trim() === text.trim());
+        textApplied = await checkFieldValue();
       }
 
       // ghostType may drop characters on busy Windows machines.
@@ -929,16 +978,14 @@ export async function weaveType(
       if (!textApplied && !args.noRetry && (isPassword || args.profile === 'deliberate')) {
         await session.Input.insertText({ text });
         await new Promise(r => setTimeout(r, 300));
-        const retryVal = await getFieldValue();
-        textApplied = retryVal === text || (typeof retryVal === 'string' && retryVal.trim() === text.trim());
+        textApplied = await checkFieldValue();
       }
 
       // Paste mode failed — retry with Input.insertText (already focused, so this lands correctly).
       if (!textApplied && !args.noRetry && shouldPasteForType && !isPassword) {
         await session.Input.insertText({ text });
         await new Promise(r => setTimeout(r, 200));
-        const pasteRetryVal = await getFieldValue();
-        textApplied = pasteRetryVal === text || (typeof pasteRetryVal === 'string' && pasteRetryVal.trim() === text.trim());
+        textApplied = await checkFieldValue();
       }
     } catch { /* non-fatal */ }
   }
@@ -1073,7 +1120,12 @@ export async function weaveType(
     }
   } catch { /* best-effort */ }
 
-  logAction("browser_type", resolvedRef, `[text] into ${resolvedLabel} (exec: ${executionMs}ms)`);
+  // If typing into a password/secret field, register and harden DOM immediately
+  if (isPassword) {
+    await registerAndHardenSecretField(session, targetId, selector, text, target.objectId);
+  }
+
+  logAction("browser_type", resolvedRef, isPassword ? `[secret text] into ${resolvedLabel} (exec: ${executionMs}ms)` : `[text] into ${resolvedLabel} (exec: ${executionMs}ms)`);
   recordAction({
     timestamp: new Date().toISOString(),
     tool: "browser_type",
@@ -1126,15 +1178,17 @@ export async function weaveType(
     suggestedNext = "Typing successful - consider clicking submit or proceeding to next field";
   }
 
-  // Read back the verified field value to report accurate length.
+  // Read back the verified field value to report accurate length (skip DOM value inspect for password fields).
   // Previously this was always text.length, which was misleading when paste failed silently.
   let verifiedLength = text.length;
-  if (selector && selector !== 'document.activeElement') {
+  if (!isPassword && selector && selector !== 'document.activeElement') {
     try {
       const { result: vlRes } = await session.Runtime.evaluate({
         expression: `(function(sel) {
           var el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
           if (!el) return -1;
+          var isSec = el.hasAttribute('data-wt-secret') || (el.tagName === 'INPUT' && el.type === 'password');
+          if (isSec) return -1;
           var v = el.value !== undefined ? el.value : (el.textContent || '');
           return (v || '').length;
         })(${JSON.stringify(selector)})`,

@@ -5,6 +5,7 @@
 
 import { SessionSecretTracker } from "../security/secrets.js";
 import type { ActionElement as _ActionElement } from "../cdp/walker.js";
+import { hookPipeline } from "../plugin/pipeline.js";
 export type ActionElement = _ActionElement;
 
 export interface RefEntry {
@@ -67,15 +68,18 @@ const INTERACTIVE_ROLES = new Set([
 function serializeProps(el: ActionElement, targetId?: string): Record<string, string> {
   const isSecret = (el.backendNodeId !== undefined && targetId &&
     SessionSecretTracker.isNodeSecret(targetId, el.backendNodeId)) ||
-    el.label === '[REDACTED]';
+    el.label === '[REDACTED]' ||
+    el.value === '[REDACTED]' ||
+    el.role === 'password' ||
+    el.type === 'password';
   return {
-    label: isSecret ? '[REDACTED]' : (el.label ?? ''),
-    value: isSecret ? '[REDACTED]' : (el.value ?? ''),
+    label: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.label ?? '') : (el.label ?? '')),
+    value: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.value ?? '') : (el.value ?? '')),
     disabled: String(!!el.disabled),
     role: el.role,
     href: el.href ?? '',
-    placeholder: el.placeholder ?? '',
-    textContent: isSecret ? '[REDACTED]' : (el.textContent ?? ''),
+    placeholder: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.placeholder ?? '') : (el.placeholder ?? '')),
+    textContent: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.textContent ?? '') : (el.textContent ?? '')),
     className: (el.className ?? '').split(' ').filter(Boolean).sort().join(' '),
   };
 }
@@ -83,7 +87,13 @@ function serializeProps(el: ActionElement, targetId?: string): Record<string, st
 /**
  * Store a full snapshot for a tab target.
  */
-export function storeSnapshot(targetId: string, url: string, refs: RefEntry[]): void {
+export function storeSnapshot(
+  targetId: string,
+  urlOrRefs: string | RefEntry[],
+  maybeRefs?: RefEntry[]
+): void {
+  const url = typeof urlOrRefs === 'string' ? urlOrRefs : '';
+  const refs = Array.isArray(urlOrRefs) ? urlOrRefs : (maybeRefs || []);
   const map = new Map<string, RefEntry>();
   for (const r of refs) map.set(r.id, r);
   snapshots.set(targetId, { url, refs: map });
@@ -92,7 +102,13 @@ export function storeSnapshot(targetId: string, url: string, refs: RefEntry[]): 
 /**
  * Eagerly initialize the property snapshot cache for a tab.
  */
-export function seedRichSnapshot(targetId: string, url: string, elements: ActionElement[]): void {
+export function seedRichSnapshot(
+  targetId: string,
+  urlOrElements: string | ActionElement[],
+  maybeElements?: ActionElement[]
+): void {
+  const url = typeof urlOrElements === 'string' ? urlOrElements : '';
+  const elements = Array.isArray(urlOrElements) ? urlOrElements : (maybeElements || []);
   const propMap = new Map<string, Record<string, string>>();
   const snapMap = new Map<string, RefEntry>();
   const frameMap = new Map<string, number>();
@@ -121,11 +137,14 @@ export function seedRichSnapshot(targetId: string, url: string, elements: Action
  */
 export function computeDelta(
   targetId: string,
-  url: string,
-  newRefs: RefEntry[]
+  urlOrNewRefs: string | RefEntry[],
+  maybeNewRefs?: RefEntry[]
 ): SnapshotDiff | null {
+  const url = typeof urlOrNewRefs === 'string' ? urlOrNewRefs : '';
+  const newRefs = Array.isArray(urlOrNewRefs) ? urlOrNewRefs : (maybeNewRefs || []);
   const prevWrapper = snapshots.get(targetId);
-  if (!prevWrapper || prevWrapper.url !== url) return null;
+  if (!prevWrapper) return null;
+  if (url && prevWrapper.url && prevWrapper.url !== url) return null;
   const prev = prevWrapper.refs;
 
   const next = new Map<string, RefEntry>();
@@ -167,7 +186,21 @@ export function computeDelta(
 
   snapshots.set(targetId, { url, refs: next });
 
-  return { added, removed, changed, stable_count };
+  const diff: SnapshotDiff = { added, removed, changed, stable_count };
+  if (added.length > 0 || removed.length > 0 || changed.length > 0) {
+    hookPipeline.dispatchDOMMutation({
+      type: "dom_diff",
+      timestamp: Date.now(),
+      url,
+      added,
+      removed,
+      changed,
+      stable_count,
+      significantChange: added.length > 0 || changed.length > 0,
+    }).catch(() => {});
+  }
+
+  return diff;
 }
 
 /**
@@ -175,12 +208,15 @@ export function computeDelta(
  */
 export async function computeRichDelta(
   targetId: string,
-  url: string,
-  newElements: ActionElement[]
+  urlOrNewElements: string | ActionElement[],
+  maybeNewElements?: ActionElement[]
 ): Promise<RichDelta | { delta_timeout: true } | null> {
+  const url = typeof urlOrNewElements === 'string' ? urlOrNewElements : '';
+  const newElements = Array.isArray(urlOrNewElements) ? urlOrNewElements : (maybeNewElements || []);
+
   // Wrap computation in a 5-second race against a timeout to avoid O(n^2) hangs
   const computePromise = new Promise<RichDelta | null>((resolve) => {
-    if (!propSnapshots.has(targetId) || propSnapshots.get(targetId)!.url !== url) {
+    if (!propSnapshots.has(targetId) || (url && propSnapshots.get(targetId)!.url && propSnapshots.get(targetId)!.url !== url)) {
       seedRichSnapshot(targetId, url, newElements);
       resolve(null);
       return;
@@ -283,13 +319,29 @@ export async function computeRichDelta(
     }
     propSnapshots.set(targetId, { url, props: newPropMap });
 
-    resolve({
+    const richResult: RichDelta = {
       added: basicDiff.added,
       removed: basicDiff.removed,
       changed: richChanged,
       stable_count: basicDiff.stable_count,
       ...(iframeChanges.length > 0 ? { iframes: iframeChanges } : {}),
-    });
+    };
+
+    if (basicDiff.added.length > 0 || basicDiff.removed.length > 0 || richChanged.length > 0) {
+      hookPipeline.dispatchDOMMutation({
+        type: "rich_delta",
+        timestamp: Date.now(),
+        url,
+        added: basicDiff.added,
+        removed: basicDiff.removed,
+        changed: richChanged,
+        stable_count: basicDiff.stable_count,
+        iframes: iframeChanges,
+        significantChange: basicDiff.added.length > 0 || richChanged.some(c => c.actionable),
+      }).catch(() => {});
+    }
+
+    resolve(richResult);
   });
 
   const timeoutPromise = new Promise<{ delta_timeout: true }>((resolve) => {
@@ -315,3 +367,18 @@ export function clearAllSnapshots(): void {
   propSnapshots.clear();
   frameSnapshots.clear();
 }
+
+/**
+ * Get stored ref entry from snapshot for recovery of detached nodes.
+ */
+export function getStoredRef(targetId: string, refId: string): RefEntry | undefined {
+  return snapshots.get(targetId)?.refs.get(refId);
+}
+
+/**
+ * Get stored element properties from rich snapshot for recovery.
+ */
+export function getStoredProps(targetId: string, refId: string): Record<string, string> | undefined {
+  return propSnapshots.get(targetId)?.props.get(refId);
+}
+

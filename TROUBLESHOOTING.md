@@ -360,6 +360,6 @@ If you continue to experience issues:
 ## Additional Resources
 
 - [Architecture Documentation](ARCHITECTURE.md)
-- [Tool Reference](docs/TOOLS.md)
+- [Tool Reference](docs/tools/tools.md)
 - [Security Policy](SECURITY.md)
 - [Contributing Guidelines](CONTRIBUTING.md)

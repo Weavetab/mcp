@@ -230,6 +230,41 @@ test("electron tabs: throws informative error when electron app is not launched"
   }, /No active session for Electron app "offline-app"/);
 });
 
+test("electron discovery: identifyElectronAppName infers known apps from targets and version info", async () => {
+  const { identifyElectronAppName } = await import("../../src/desktop/discovery.js");
+
+  const slackApp = identifyElectronAppName(
+    { Browser: "Chrome/120.0.6099.291", "User-Agent": "Mozilla/5.0 Slack/4.36.140" },
+    [{ title: "Slack | Engineering Channel", url: "https://app.slack.com/client" }]
+  );
+  assert.equal(slackApp, "Slack");
+
+  const discordApp = identifyElectronAppName(
+    { Browser: "Discord/1.0.9036" },
+    [{ title: "Discord", url: "https://discord.com/channels/@me" }]
+  );
+  assert.equal(discordApp, "Discord");
+
+  const vscodeApp = identifyElectronAppName(
+    { Browser: "Visual Studio Code/1.87.0" },
+    [{ title: "index.ts - Weavetab - Visual Studio Code", url: "vscode-file://vscode-app" }]
+  );
+  assert.equal(vscodeApp, "VS Code");
+
+  const fallbackApp = identifyElectronAppName(
+    { Browser: "Electron/28.0.0" },
+    [{ type: "page", title: "My Custom Desktop Tool", url: "app://main" }]
+  );
+  assert.equal(fallbackApp, "My Custom Desktop Tool");
+});
+
+test("electron discovery: discoverElectronApps probes candidate ports without throwing", async () => {
+  const { discoverElectronApps } = await import("../../src/desktop/discovery.js");
+  // Test probing empty/closed port safely with fast timeout
+  const discovered = await discoverElectronApps([19876]);
+  assert.ok(Array.isArray(discovered));
+});
+
 
 
 

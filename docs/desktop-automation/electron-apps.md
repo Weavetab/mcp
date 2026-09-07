@@ -47,7 +47,7 @@ Add an `"electron"` object to your local `./.weavetab/config.json` or global `~/
 ```json
 {
   "electron": {
-    "discord": "C:\\Users\\username\\AppData\\Local\\Discord\\app-1.0.9175\\Discord.exe",
+    "discord": "C:\\Users\\username\\AppData\\Local\\Discord\\app-<version>\\Discord.exe",
     "vscode": 9222,
     "figma": {
       "path": "C:\\Users\\username\\AppData\\Local\\Figma\\Figma.exe",
@@ -160,3 +160,58 @@ obsidian --remote-debugging-port=9225
 discord --remote-debugging-port=9223
 ```
 Then in your `config.json`, simply map `"vscode": 9222` or `"obsidian": 9225`.
+
+---
+
+## 6. Environment Discovery Handshake (`browser_detect`)
+
+`browser_detect` is the foundational tool agents invoke upon initial engagement. It inspects local browsers and configured desktop applications, returning their real-time state:
+
+```json
+{
+  "available": [
+    { "engine": "chromium", "name": "Google Chrome", "path": "C:\\Program Files\\...\\chrome.exe" }
+  ],
+  "current": "chromium",
+  "configuredApps": [
+    {
+      "name": "discord",
+      "status": "running_no_debug",
+      "configuredPath": "C:\\Users\\username\\AppData\\Local\\Discord\\app-1.0.9256\\Discord.exe"
+    },
+    {
+      "name": "slack",
+      "status": "connected",
+      "port": 9222,
+      "configuredPath": "C:\\Users\\username\\AppData\\Local\\slack\\app-4.38.125\\slack.exe",
+      "activeTabs": [
+        { "id": "PAGE_1", "title": "general - Slack", "url": "https://app.slack.com/client/..." }
+      ]
+    },
+    {
+      "name": "vscode",
+      "status": "offline",
+      "configuredPath": "C:\\Users\\username\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+    }
+  ]
+}
+```
+
+### Application Lifecycle States:
+- **`connected`**: The app is running with CDP remote debugging active and Weavetab is attached. Agents can immediately operate tabs/windows using `"app": "<name>"`.
+- **`running_no_debug`**: The app process is currently running on the OS, but was opened by the user without `--remote-debugging-port`. Weavetab alerts the agent that DOM interactions are blocked until the app is launched or restarted with debugging flags.
+- **`offline`**: The process is not running. Calling `browser_navigate(app: "<name>")` launches and connects the app automatically.
+
+### Windows Squirrel Auto-Path Resolution:
+On Windows, applications like Discord and Slack install inside versioned folders (e.g. `Discord\app-1.0.9256\Discord.exe`) that change on every background update. Weavetab dynamically resolves the newest `app-1.0.xxxx` version at launch time, eliminating broken path errors after silent background updates.
+
+---
+
+## 7. Smart Domain Routing & Sticky Context
+
+To ensure external AI agents do not accidentally trigger a web browser launch when intending to control an Electron application:
+
+1. **Automatic Domain Routing**: When `browser_navigate` or `browser_tabs(action: "open")` receives an app domain (e.g. `discord.com`, `slack.com`, `linear.app`, `notion.so`), Weavetab automatically routes the target to the configured desktop application.
+2. **Sticky App Sessions**: When an agent operates inside an Electron app, the target session context remains sticky. Subsequent calls to `browser_tabs` or DOM tools stick to that active desktop app without spawning an unwanted Chrome window.
+3. **Explicit Browser Targeting**: When the agent specifically intends to use the web browser, passing `"app": "browser"` overrides desktop routing and directs operations to the web browser.
+

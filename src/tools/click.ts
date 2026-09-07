@@ -2,7 +2,7 @@
 // Priority 2: Sub-10ms Click Path & Predictive Action Queue
 
 import CDP from "chrome-remote-interface";
-import { buildActionMap, findAllMatches, safeSelector, toMarkdownTable, resolveByAria, type ActionElement } from "../cdp/walker.js";
+import { buildActionMap, findAllMatches, safeSelector, toMarkdownTable, resolveByAria, recoverDetachedRef, type ActionElement } from "../cdp/walker.js";
 import { checkDomain } from "../security/blacklist.js";
 import { logAction } from "../audit/logger.js";
 import { recordAction, detectLoop, getLoopDiagnostics } from "../intelligence/trail.js";
@@ -97,8 +97,8 @@ export async function weaveClick(
     if (memHit) {
       const actCheck = await verifyActionability(session, memHit.selector, {
         fingerprint: fpToOpts(memHit.fingerprint),
-        stabilityTimeoutMs: config.actionabilityTimeoutMs ?? 400,
-        totalTimeoutMs: (config.actionabilityTimeoutMs ?? 400) * 3,
+        stabilityTimeoutMs: config.actionabilityTimeoutMs ?? 200,
+        totalTimeoutMs: (config.actionabilityTimeoutMs ?? 200) * 3,
       });
       if (actCheck.status === 'ACTIONABLE') {
         args.id = memHit.selector;
@@ -143,6 +143,15 @@ export async function weaveClick(
         map = await buildActionMap(session, { lite: true }, targetId);
         cacheActionMap(targetId, map);
         element = map.elements.find((el) => el.id === reqId);
+      }
+
+      // If still not found, trigger the SPA auto-recovery heuristic before hard-failing
+      if (!element && reqId.startsWith("w:")) {
+        const recovery = await recoverDetachedRef(session, targetId, reqId);
+        if (recovery.recovered && recovery.element) {
+          element = recovery.element;
+          sniperWarning = recovery.warning || "";
+        }
       }
 
       // Fast-fail if still not found
@@ -263,8 +272,8 @@ export async function weaveClick(
       const selector = safeSelector(element);
       if (selector) {
         const actCheck = await verifyActionability(session, selector, {
-          stabilityTimeoutMs: config.actionabilityTimeoutMs ?? 400,
-          totalTimeoutMs: (config.actionabilityTimeoutMs ?? 400) * 4,
+          stabilityTimeoutMs: config.actionabilityTimeoutMs ?? 200,
+          totalTimeoutMs: (config.actionabilityTimeoutMs ?? 200) * 3,
         });
 
         if (actCheck.status === 'ACTIONABLE') {
@@ -277,7 +286,18 @@ export async function weaveClick(
             return { success: false, error_code: "ELEMENT_OCCLUDED_BY", message: `[!] ${describeOccluder(actCheck.occludedBy!)} — ${selector} is blocked.` };
           }
         } else if (actCheck.status === 'NOT_FOUND') {
-          return { success: false, error_code: "ELEMENT_NOT_FOUND", message: `[!] Element ${selector} was in the cached map but no longer exists in the DOM. Run browser_map again to refresh refs.` };
+          if (element.id.startsWith("w:")) {
+            const recovery = await recoverDetachedRef(session, targetId, element.id, element);
+            if (recovery.recovered && recovery.element) {
+              element = recovery.element;
+              coords = { x: element.x, y: element.y, visible: true };
+              sniperWarning = recovery.warning || "";
+            } else {
+              return { success: false, error_code: "ELEMENT_NOT_FOUND", message: `[!] Element ${selector} was in the cached map but no longer exists in the DOM. Run browser_map again to refresh refs.` };
+            }
+          } else {
+            return { success: false, error_code: "ELEMENT_NOT_FOUND", message: `[!] Element ${selector} was in the cached map but no longer exists in the DOM. Run browser_map again to refresh refs.` };
+          }
         } else if (actCheck.status === 'INVISIBLE') {
           return { success: false, error_code: "ELEMENT_INVISIBLE", message: `[!] Element ${selector} has zero dimensions (hidden or collapsed). Use browser_inspect to check display/visibility, or scroll to reveal it.` };
         } else if (actCheck.status === 'FINGERPRINT_MISMATCH') {
@@ -313,15 +333,15 @@ export async function weaveClick(
     await ghostMove(session, cx, cy, config, element_.label);
     sendToExtension(session, { type: 'Weavetab_STATE', cursor: { x: cx, y: cy }, state: 'clicking', ripple: { cx, cy } }).catch(() => {});
 
-    // ── Pre-dispatch hit-target check (Playwright Step 6) ──────────────────
-    // Verify the coordinate is still clear right before the event fires.
-    // This catches overlays/modals that appeared since verifyActionability ran.
+    // ── Pre-dispatch hit-target check (lightweight) ─────────────────────────
+    // verifyActionability already confirmed actionable; this is a last-chance race guard.
+    // We do NOT throw here — transient tooltips/overlays cause false positives.
+    // If genuinely blocked, the post-click stuck detection handles the fallback.
     const targetSel = safeSelector(element_) ?? "";
     if (targetSel) {
       const hitCheck = await quickHitCheck(session, cx, cy, targetSel);
       if (!hitCheck.clear) {
-        // Raise to performClick caller so the retry loop can try another alignment
-        throw Object.assign(new Error(hitCheck.blockerDescription ?? "hit-target blocked"), { code: "HIT_TARGET_BLOCKED" });
+        logAction("browser_click", targetSel, `[quickHitCheck] soft-blocked by ${hitCheck.blockerDescription ?? "unknown"} — proceeding anyway`);
       }
     }
 
@@ -341,14 +361,14 @@ export async function weaveClick(
     // Check if a dialog was opened by the click immediately. If a dialog is open,
     // the click succeeded in triggering an action. Waiting for DOM stable will
     // just hang for 5-10s because Runtime.evaluate blocks on JS dialogs.
-    await new Promise(r => setTimeout(r, 100)); // give dialog time to trigger
+    await new Promise(r => setTimeout(r, 30)); // give dialog time to trigger
     if (hasOpenDialog(session)) {
       return { stuck: false, url: currentUrl, newMap: null, dialog_open: true };
     }
 
     await Promise.all([
-      waitForDOMStable(session, 50, 300),
-      waitForNetworkIdle(session, 50, 200).catch(() => {})
+      waitForDOMStable(session, 20, 150),
+      waitForNetworkIdle(session, 30, 150).catch(() => {})
     ]);
     const finalUrl = (await Page.getFrameTree()).frameTree.frame.url;
 
@@ -492,62 +512,16 @@ export async function weaveClick(
     return { stuck, url: finalUrl, newMap };
   }
 
-  let { x: clickX, y: clickY } = coords;
-  let hitTargetBlocked = false;
-  try {
-    await performClick(clickX, clickY);
-  } catch (err: any) {
-    if (err?.code === "HIT_TARGET_BLOCKED") {
-      hitTargetBlocked = true;
-    } else {
-      throw err;
-    }
-  }
+  const { x: clickX, y: clickY } = coords;
+  await performClick(clickX, clickY);
+
   // ── Post-click: get page state (URL, map, DOM delta) ─────────────────────
   // The 'stuck' flag is purely informational — it powers stuck_warning in the
-  // result. A dispatched, non-blocked click is NOT retried based on DOM delta
-  // alone, because: (a) many real interactions produce no measurable DOM delta
-  // (static buttons, CSS-only toggles, anchor scrolls); (b) retrying doubles the
-  // click on checkboxes/accordions, net-zeroing the primary action.
-  let postCheck = hitTargetBlocked
-    ? { stuck: true, url: initialUrl, newMap: null }
-    : await isClickStuck(initialUrl);
-
-  // SPA JS-click fallback: only when the first click was genuinely hit-blocked
-  if (hitTargetBlocked && element_) {
-    const sel = safeSelector(element_);
-    if (sel) {
-      try {
-        const { result: isButton } = await session.Runtime.evaluate({
-          expression: `(function(s) {
-            var el = document.querySelector(s);
-            if (!el) return false;
-            var tag = el.tagName.toLowerCase();
-            var role = (el.getAttribute('role') || '').toLowerCase();
-            if (tag === 'button' || tag === 'a' || tag === 'input' || tag === 'label' || tag === 'select') return true;
-            if (['button','link','menuitem','menuitemcheckbox','menuitemradio',
-                 'radio','checkbox','tab','option','treeitem','gridcell','switch'].includes(role)) return true;
-            if (el.onclick || el.getAttribute('onclick')) return true;
-            if (el.isContentEditable || tag === 'summary') return true;
-            return false;
-          })(${JSON.stringify(sel)})`,
-          returnByValue: true,
-        }).catch(() => ({ result: { value: false } }));
-
-        if (isButton?.value) {
-          await session.Runtime.evaluate({
-            expression: `(function(s) {
-              var el = document.querySelector(s);
-              if (el) { el.focus(); el.click(); }
-            })(${JSON.stringify(sel)})`,
-            returnByValue: false,
-          }).catch(() => {});
-          await new Promise(r => setTimeout(r, 300));
-          postCheck = { stuck: false, url: initialUrl, newMap: null };
-        }
-      } catch { /* non-fatal */ }
-    }
-  }
+  // result. A dispatched click is NOT retried based on DOM delta alone, because:
+  // (a) many real interactions produce no measurable DOM delta (static buttons,
+  //     CSS-only toggles, anchor scrolls);
+  // (b) retrying doubles the click on checkboxes/accordions, net-zeroing it.
+  const postCheck = await isClickStuck(initialUrl);
 
   const executionMs = Date.now() - startMs;
   const { stuck: isStuck, url: finalUrl, newMap } = postCheck;

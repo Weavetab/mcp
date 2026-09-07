@@ -227,7 +227,7 @@ The HUD (`src/sensors/thoughts.ts`) provides real-time visual feedback:
 - Execution time and token estimates
 - Loop warnings
 - User chat messages
-- Mission progress (when using `browser_plan`)
+- Mission progress
 
 ### Audit & Telemetry
 

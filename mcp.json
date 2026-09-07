@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
   "mcpName": "io.github.weavetab/mcp",
-  "version": "2.5.0-beta.2",
+  "version": "2.5.0-beta.3",
   "description": "Weavetab MCP — Direct Layer 0 interface for AI agents across web and desktop applications. Direct socket transport, zero wrapper overhead, deterministic state execution.",
   "icon": "icon.png",
   "author": "fy2ne",
@@ -128,7 +128,7 @@
       },
       "browser_tabs": {
         "category": "tabs",
-        "description": "Manage browser tabs (open, switch, close, list, consolidate, heal, list_windows, focus_window). Full CRUD lifecycle management for tabs and windows.",
+        "description": "Manage browser and Electron app tabs/windows (open, switch, close, list). Specify 'app' when targeting desktop apps (e.g. app: 'discord') to avoid opening web browser.",
         "features": [
           "Single and batch tab operations",
           "Duplicate tab consolidation",
@@ -145,6 +145,15 @@
           "Configurable timeout thresholds",
           "Per-tab asynchronous execution target",
           "Heuristic auto-condition resolution"
+        ]
+      },
+      "browser_captcha": {
+        "category": "safety",
+        "description": "Autonomous zero-API detection and solving of Turnstile, reCAPTCHA, GeeTest, and hCaptcha bot challenges using local CDP behavioral solvers.",
+        "features": [
+          "Zero-API autonomous solving",
+          "Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha support",
+          "Human oversight fallback via wait_for_user"
         ]
       },
       "browser_thoughts": {
@@ -221,6 +230,17 @@
           "localStorage and sessionStorage scope targeting",
           "Atomic key-value retrieval and mutation",
           "Origin storage purging"
+        ]
+      },
+      "browser_checkpoint": {
+        "category": "storage_and_cookies",
+        "description": "Snapshot and restore browser state (cookies, localStorage, sessionStorage, and scroll/URL) into named checkpoints to time-travel and rollback failed automation branches.",
+        "features": [
+          "Session state time-travel and rollback",
+          "Cookies backup and restoration (HttpOnly and Secure via CDP)",
+          "LocalStorage and SessionStorage snapshotting",
+          "URL, page title, and viewport scroll position persistence",
+          "Optional lightweight DOM snapshot capture"
         ]
       },
       "browser_network_intercept": {
@@ -379,7 +399,7 @@
       },
       "browser_detect": {
         "category": "tabs",
-        "description": "Detect available browsers on the machine and report CDP feature coverage per engine (Chromium, Firefox, WebKit).",
+        "description": "CRITICAL INITIALIZATION TOOL. Detect available browsers and configured desktop apps (Discord, Slack, etc.). Call this FIRST before interacting with the environment to know if apps are online/offline and what tabs they have open.",
         "features": [
           "Local browser engine discovery",
           "Engine CDP API coverage analysis",
@@ -439,6 +459,42 @@
           "Pull request metadata parsing",
           "Changed file list enumeration",
           "Review comment thread extraction"
+        ]
+      },
+      "browser_office": {
+        "category": "documents",
+        "description": "Read and extract structured content from office documents (Excel, Word, PDF, CSV) via live browser session cookies or local downloads directory.",
+        "features": [
+          "In-session authenticated document fetching",
+          "Structured tabular extraction (.xlsx, .csv)",
+          "Document text and metadata extraction (.docx, .pdf)"
+        ]
+      },
+      "browser_emulate": {
+        "category": "environment",
+        "description": "Emulate browser environmental conditions over CDP: network throttling profiles, CPU slowdown multipliers, geolocation overrides, timezone IDs, and custom User-Agent strings.",
+        "features": [
+          "Network throttling (Offline, Slow 3G, Fast 3G, 4G)",
+          "CPU throttling multipliers",
+          "Geolocation and timezone overrides"
+        ]
+      },
+      "list_plugins": {
+        "category": "plugins",
+        "description": "Inspect installed Weavetab SDK plugins, available unloadable plugins, tool overrides, custom schemas, and capability manifests.",
+        "features": [
+          "Installed plugin discovery",
+          "Manifest and schema introspection",
+          "Ecosystem capability listing"
+        ]
+      },
+      "load_plugin": {
+        "category": "plugins",
+        "description": "Dynamically load any published Weavetab plugin by npm package name into the active runtime with isolated sandboxing and hot tool registration.",
+        "features": [
+          "Dynamic npm package loading",
+          "Hot tool registration with client notification",
+          "Isolated plugin execution context"
         ]
       }
     },
@@ -554,7 +610,7 @@
       "rbac": {
         "description": "Role-Based Access Control enforcing tool execution boundaries based on configured session role.",
         "roles": {
-          "admin": "Full access to all 42 tools and system operations",
+          "admin": "Full access to all 47 tools and system operations",
           "system": "Full tool access excluding system-level operations",
           "viewer": "Read-only access (browser_map, browser_find, browser_scrape, browser_screenshot, browser_inspect, browser_snapshot, browser_console, browser_pdf, browser_storage, browser_cookies, browser_tabs, browser_wait, github_*)",
           "automation": "Restricted execution set for non-interactive automated workflows"
@@ -771,7 +827,7 @@
     }
   },
   "metadata": {
-    "total_tools": 42,
+    "total_tools": 48,
     "tool_categories": 15,
     "latency": "3-8ms mean",
     "token_efficiency": "Up to 97% reduction via semantic delta engine + DOM pruner",

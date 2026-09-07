@@ -68,6 +68,7 @@ class OperationMonitor {
     const diagnosticsTimer = setInterval(() => {
       this.checkOperationHealth(operationId);
     }, 1000); // Check every 1 second (reduced from 2s for faster detection)
+    diagnosticsTimer.unref();
     
     this.activeOperations.get(operationId)!.diagnosticsTimer = diagnosticsTimer;
   }

@@ -5,7 +5,7 @@
  * Falls back to ffmpeg if installed for .mp4/.webm video encoding.
  * Weavetab by fy2ne
  */
-import { exec, execSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -28,13 +28,12 @@ export interface CompileVideoResult {
 }
 
 /**
- * Checks if ffmpeg is available on the system PATH.
+ * Checks if ffmpeg is available on the system PATH without using a shell.
  */
 export function isFFmpegAvailable(): boolean {
   try {
-    const cmd = process.platform === "win32" ? "where ffmpeg" : "which ffmpeg";
-    execSync(cmd, { stdio: "ignore" });
-    return true;
+    const res = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" });
+    return res.status === 0;
   } catch {
     return false;
   }
@@ -156,20 +155,19 @@ export async function compileVideo(options: CompileVideoOptions): Promise<Compil
         const concatContent = files.map(f => `file '${f.replace(/'/g, "'\\''")}'\nduration ${1 / fps}`).join("\n");
         fs.writeFileSync(concatFilePath, concatContent);
 
-        let codecFlags = "";
+        let ffmpegArgs: string[] = ["-y", "-f", "concat", "-safe", "0", "-i", concatFilePath];
         if (format === "webm") {
-          codecFlags = "-c:v libvpx-vp9 -pix_fmt yuv420p -b:v 1M";
+          ffmpegArgs.push("-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-b:v", "1M");
         } else if (format === "mp4") {
-          codecFlags = "-c:v libx264 -pix_fmt yuv420p -vf \"trunc(iw/2)*2:trunc(ih/2)*2\"";
+          ffmpegArgs.push("-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "trunc(iw/2)*2:trunc(ih/2)*2");
         } else if (format === "gif") {
-          codecFlags = `-vf "fps=${fps},scale=640:-1:flags=lanczos"`;
+          ffmpegArgs.push("-vf", `fps=${fps},scale=640:-1:flags=lanczos`);
         } else {
-          codecFlags = "-c:v libvpx-vp9 -pix_fmt yuv420p -b:v 1M";
+          ffmpegArgs.push("-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-b:v", "1M");
         }
+        ffmpegArgs.push(videoPath);
 
-        const cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFilePath}" ${codecFlags} "${videoPath}"`;
-
-        exec(cmd, { cwd: recordingDir }, (error) => {
+        execFile("ffmpeg", ffmpegArgs, { cwd: recordingDir }, (error) => {
           try { fs.unlinkSync(concatFilePath); } catch {}
           if (error) reject(error);
           else resolve();

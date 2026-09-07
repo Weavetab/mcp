@@ -11,6 +11,9 @@
  */
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
+import { getConfigAgentId } from "../config/loader.js";
+import { SessionSecretTracker } from "../security/secrets.js";
+import { sessionRegistry } from "../state/session.js";
 
 export interface ScrapeOptions {
   query: string;
@@ -60,14 +63,20 @@ export async function browserScrape(
       }
 
       const attrs = ${JSON.stringify(attributes)};
+      var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
       nodes.forEach(node => {
         const item = {};
 
         // Secret containment: redact any element marked as sensitive.
-        // data-wt-secret is set by browser_type_secret at injection time.
         const isSecret = node.hasAttribute && (
           node.hasAttribute('data-wt-secret') ||
-          (node.tagName === 'INPUT' && node.type === 'password')
+          (node.tagName === 'INPUT' && (
+            node.type === 'password' ||
+            secretRegex.test(node.getAttribute('autocomplete') || '') ||
+            secretRegex.test(node.getAttribute('name') || '') ||
+            secretRegex.test(node.getAttribute('id') || '') ||
+            secretRegex.test(node.getAttribute('aria-label') || '')
+          ))
         );
 
         if (isSecret) {
@@ -79,6 +88,9 @@ export async function browserScrape(
               item[attr] = node[attr]?.trim() || '';
             } else if (attr === 'outerHTML') {
               item[attr] = node.outerHTML;
+            } else if (attr === 'value') {
+              // Read live DOM property (not HTML attribute) so getter overrides work
+              item[attr] = node.value !== undefined ? String(node.value) : '';
             } else {
               item[attr] = node.getAttribute(attr) || node[attr] || '';
             }
@@ -129,6 +141,7 @@ export async function browserScrape(
       const fullExpr = type === 'xpath'
         ? `(function(){
             var attrs = ${JSON.stringify(attributes)};
+            var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
             var snap = document.evaluate(${JSON.stringify(query)}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
             var limit = ${multiple} ? snap.snapshotLength : Math.min(snap.snapshotLength, 1);
             var results = [];
@@ -136,11 +149,25 @@ export async function browserScrape(
               var node = snap.snapshotItem(i);
               if (!node || node.nodeType !== 1) continue;
               var item = {};
-              attrs.forEach(function(attr) {
-                if (attr === 'textContent' || attr === 'innerText') { item[attr] = (node[attr] || '').trim(); }
-                else if (attr === 'outerHTML') { item[attr] = node.outerHTML; }
-                else { item[attr] = node.getAttribute ? (node.getAttribute(attr) || node[attr] || '') : ''; }
-              });
+              var isSecret = node.hasAttribute && (
+                node.hasAttribute('data-wt-secret') ||
+                (node.tagName === 'INPUT' && (
+                  node.type === 'password' ||
+                  secretRegex.test(node.getAttribute('autocomplete') || '') ||
+                  secretRegex.test(node.getAttribute('name') || '') ||
+                  secretRegex.test(node.getAttribute('id') || '') ||
+                  secretRegex.test(node.getAttribute('aria-label') || '')
+                ))
+              );
+              if (isSecret) {
+                attrs.forEach(function(attr) { item[attr] = '[REDACTED]'; });
+              } else {
+                attrs.forEach(function(attr) {
+                  if (attr === 'textContent' || attr === 'innerText') { item[attr] = (node[attr] || '').trim(); }
+                  else if (attr === 'outerHTML') { item[attr] = node.outerHTML; }
+                  else { item[attr] = node.getAttribute ? (node.getAttribute(attr) || node[attr] || '') : ''; }
+                });
+              }
               results.push(item);
             }
             return { data: results };
@@ -151,13 +178,28 @@ export async function browserScrape(
               try { nodes = Array.from(window.__Weavetab_shadowQuery_all(${JSON.stringify(query)})); } catch(_){}
             }
             var attrs = ${JSON.stringify(attributes)};
+            var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
             return { data: nodes.map(function(node) {
               var item = {};
-              attrs.forEach(function(attr) {
-                if (attr === 'textContent' || attr === 'innerText') { item[attr] = (node[attr] || '').trim(); }
-                else if (attr === 'outerHTML') { item[attr] = node.outerHTML; }
-                else { item[attr] = node.getAttribute(attr) || node[attr] || ''; }
-              });
+              var isSecret = node.hasAttribute && (
+                node.hasAttribute('data-wt-secret') ||
+                (node.tagName === 'INPUT' && (
+                  node.type === 'password' ||
+                  secretRegex.test(node.getAttribute('autocomplete') || '') ||
+                  secretRegex.test(node.getAttribute('name') || '') ||
+                  secretRegex.test(node.getAttribute('id') || '') ||
+                  secretRegex.test(node.getAttribute('aria-label') || '')
+                ))
+              );
+              if (isSecret) {
+                attrs.forEach(function(attr) { item[attr] = '[REDACTED]'; });
+              } else {
+                attrs.forEach(function(attr) {
+                  if (attr === 'textContent' || attr === 'innerText') { item[attr] = (node[attr] || '').trim(); }
+                  else if (attr === 'outerHTML') { item[attr] = node.outerHTML; }
+                  else { item[attr] = node.getAttribute(attr) || node[attr] || ''; }
+                });
+              }
               return item;
             })};
           })()`;
@@ -169,5 +211,18 @@ export async function browserScrape(
     }
   }
 
-  return { success: true, data: val?.data || [], message: `Extracted ${val?.data?.length || 0} elements` };
+  let targetId = "default";
+  const active = sessionRegistry.getActive(getConfigAgentId(_config));
+  if (active) targetId = active.targetId;
+
+  const rawData = (val?.data || []) as Record<string, any>[];
+  const sanitizedData = rawData.map(item => {
+    const sanitizedItem: Record<string, any> = {};
+    for (const [k, v] of Object.entries(item)) {
+      sanitizedItem[k] = typeof v === 'string' ? SessionSecretTracker.redact(targetId, v) : v;
+    }
+    return sanitizedItem;
+  });
+
+  return { success: true, data: sanitizedData, message: `Extracted ${sanitizedData.length} elements` };
 }

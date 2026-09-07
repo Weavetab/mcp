@@ -71,6 +71,8 @@ export interface BrowserClient {
   isElectron?: boolean;
   /** Sticky pruning state: if true, all subsequent DOM reads by action tools (click, type, etc.) will also apply pruning. */
   pruneActive?: boolean;
+  /** Port the CDP session is connected to */
+  port?: number;
 }
 
 // ─── Navigation readiness: loadEventFired + networkIdle with 5s cap ───────────
@@ -260,7 +262,11 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
 
 export async function getOrConnect(config: Config, targetApp?: string): Promise<BrowserClient> {
   if (getConfigMode(config) === "attach" && !targetApp) {
-    throw new Error("[!] Attach mode (connect to your real browser) coming soon. Use session mode for now.");
+    // TODO: Attach mode (connect to an already-running real browser) is not yet implemented.
+    // Tracked as a known limitation — use session mode in the meantime.
+    const err = new Error("[!] Attach mode is not yet supported. Use session mode (default) instead.");
+    (err as any).code = "NOT_IMPLEMENTED";
+    throw err;
   }
 
   // 1. Check existing active session for this agent & app

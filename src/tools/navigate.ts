@@ -138,7 +138,7 @@ export async function weaveNavigate(
       expression: `new Promise((resolve) => {
         let done = false;
         const finish = (val) => { if (!done) { done = true; resolve(val); } };
-        setTimeout(() => finish(false), 500);
+        setTimeout(() => finish(false), 30);
         try {
           const browserAPI = typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null);
           if (browserAPI && browserAPI.runtime && browserAPI.runtime.id) {
@@ -152,7 +152,7 @@ export async function weaveNavigate(
       })`,
       awaitPromise: true,
       returnByValue: true
-    });
+    }).catch(() => null);
     isAnchor = res?.result?.value === true;
   } catch (e) {
     logDebug(`[weaveNavigate] Failed to check anchor status: ${e}`);
@@ -178,51 +178,47 @@ export async function weaveNavigate(
 
   await session.Page.navigate({ url: parsed.href });
 
-  // Proper navigation wait — DOM stability after load
+  // Fast navigation wait
   try {
     await awaitNavigation(session, config.navigationTimeout || 30000);
   } catch (navErr) {
     logDebug(`[weaveNavigate] Navigation timeout: ${navErr}`);
-    // Continue — page may be partially loaded
   }
 
-  // Clear delta snapshot — next weave_read will be a fresh full read
+  // Clear delta snapshot & caches
   clearSnapshot(resolvedTargetId);
   resetLoopCounter("navigation");
-  clearToolCallWindow();  // prevents cross-page STUCK_LOOP bricks
+  clearToolCallWindow();
   resetFallbackIdCounter();
   clearShadowDomCache(resolvedTargetId);
   clearAXTreeCache(resolvedTargetId);
   clearTabCache(resolvedTargetId);
 
-  // Dismiss common cookie banners / popups inline (popups.ts was removed)
-  await session.Runtime.evaluate({
-    expression: `
-      (function(){
-        var selectors = [
-          '[id*="cookie"] button','[class*="cookie"] button',
-          '[id*="consent"] button','[class*="consent"] button',
-          '[id*="gdpr"] button','[class*="gdpr"] button',
-          '[aria-label*="Accept"]','[aria-label*="Agree"]',
-          'button[data-cookiebanner]'
-        ];
-        for(var i=0;i<selectors.length;i++){
-          var el=document.querySelector(selectors[i]);
-          if(el){try{el.click();}catch(e){}break;}
-        }
-      })()
-    `
-  }).catch(() => {});
+  // Parallelize post-navigation metadata & cookie banner dismissal
+  const [frameRes, titleRes] = await Promise.all([
+    session.Page.getFrameTree().catch(() => ({ frameTree: { frame: { url: parsed.href } } })),
+    session.Runtime.evaluate({ expression: 'document.title', returnByValue: true }).catch(() => null),
+    session.Runtime.evaluate({
+      expression: `
+        (function(){
+          var selectors = [
+            '[id*="cookie"] button','[class*="cookie"] button',
+            '[id*="consent"] button','[class*="consent"] button',
+            '[id*="gdpr"] button','[class*="gdpr"] button',
+            '[aria-label*="Accept"]','[aria-label*="Agree"]',
+            'button[data-cookiebanner]'
+          ];
+          for(var i=0;i<selectors.length;i++){
+            var el=document.querySelector(selectors[i]);
+            if(el){try{el.click();}catch(e){}break;}
+          }
+        })()
+      `
+    }).catch(() => {})
+  ]);
 
-  const { frameTree } = await session.Page.getFrameTree();
-  const finalUrl = frameTree.frame.url;
-  let title = parsed.hostname;
-  try {
-    const titleRes = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
-    if (titleRes?.result?.value) {
-      title = titleRes.result.value as string;
-    }
-  } catch {}
+  const finalUrl = frameRes?.frameTree?.frame?.url || parsed.href;
+  const title = (titleRes?.result?.value as string) || parsed.hostname;
 
   // Keep session registry in sync with the new URL
   if (active) active.url = finalUrl;

@@ -28,6 +28,10 @@ class AgentStateManager {
     this.session = session;
   }
 
+  getSession(): CDP.Client | null {
+    return this.session;
+  }
+
   setIdleTimeout(ms: number) {
     this.idleTimeoutMs = ms;
   }

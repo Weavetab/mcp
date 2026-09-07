@@ -15,7 +15,7 @@ test("browserSelect throws when both selector and nodeId are missing", async () 
   const config: any = {};
   await assert.rejects(
     () => browserSelect(session, { value: "test" } as SelectOptions, config),
-    /browser_select requires either selector or nodeId/
+    /browser_select requires either selector/
   );
 });
 

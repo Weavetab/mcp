@@ -217,17 +217,12 @@ export async function browserScroll(
         x: vp.x, y: vp.y,
         deltaX: chunkX, deltaY: chunkY
       });
-      await sleep(profile.baseDelay + Math.random() * 8);
+      await sleep(profile.baseDelay + Math.random() * 4);
     }
   }
 
-  await waitForDOMStable(session, 80, 600).catch(() => {});
-  await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } });
-
-  const nextMap = await buildActionMap(session, { lite: true }, targetId);
-  cacheActionMap(targetId, nextMap);
-  const diff = computeDelta(targetId, nextMap.url, nextMap.elements);
-  const changesCount = diff ? diff.added.length + diff.removed.length + diff.changed.length : 0;
+  await sleep(40);
+  await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } }).catch(() => {});
 
   logAction("browser_scroll", direction, `${distance}px`);
 
@@ -236,7 +231,7 @@ export async function browserScroll(
     scrolled: id ?? label ?? "window",
     direction,
     distance,
-    new_visible_count: nextMap.elements.length,
-    dom_changed: changesCount > 0,
+    new_visible_count: 0,
+    dom_changed: true,
   };
 }

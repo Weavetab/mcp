@@ -1,89 +1,97 @@
 <div align="center">
-  
-![WeaveTab MCP Logo](icon.png)
 
-  <h1>WeaveTab MCP</h1>
-  <p><strong>Direct Layer 0 interface for AI agents across web and desktop applications.</strong></p>
-  <p><em>No WebDriver. No Cloud. Pure Control.</em></p>
+<img src="icon.png" width="96" alt="Weavetab" /><br /><br />
 
-  <p>
-    <img src="https://img.shields.io/badge/version-2.5.0-3b82f6?style=flat-square" alt="Version" />
-    <img src="https://img.shields.io/badge/status-beta-f59e0b?style=flat-square" alt="Beta" />
-    <img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6?style=flat-square" alt="License" />
-    <img src="https://img.shields.io/badge/protocol-MCP-10b981?style=flat-square" alt="MCP" />
-    <img src="https://img.shields.io/badge/node-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node" />
-    <img src="https://img.shields.io/badge/tools-45-ec4899?style=flat-square" alt="Tools" />
-  </p>
+<h1>Weavetab MCP</h1>
 
-  <p>
-    <a href="https://github.com/weavetab/mcp">GitHub</a> ·
-    <a href="docs/tools/overview.md">Tool Reference</a> ·
-    <a href="docs/DOCUMENTATION.md">Documentation</a> ·
-    <a href="SECURITY.md">Security Policy</a> ·
-    <a href="CONTRIBUTING.md">Contributing</a>
-  </p>
+<p>A local <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server that gives AI agents<br />direct, physical control over browsers and desktop applications via the Chrome DevTools Protocol.</p>
+
+<p>
+  <a href="https://github.com/weavetab/mcp/releases"><img src="https://img.shields.io/github/v/release/weavetab/mcp?label=version&style=flat-square&color=3b82f6" alt="version" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6?style=flat-square" alt="license" /></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
+  <img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square" alt="Node" />
+  <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-48-ec4899?style=flat-square" alt="tools" /></a>
+  <a href="https://github.com/sponsors/fy2ne"><img src="https://img.shields.io/badge/sponsor-fy2ne-ea4aaa?style=flat-square&logo=github-sponsors" alt="sponsor" /></a>
+</p>
+
+<p>
+  <a href="docs/tools/tools.md">Tool Reference</a> &nbsp;&middot;&nbsp;
+  <a href="docs/DOCUMENTATION.md">Documentation</a> &nbsp;&middot;&nbsp;
+  <a href="ARCHITECTURE.md">Architecture</a> &nbsp;&middot;&nbsp;
+  <a href="SUPPORT.md">Support</a> &nbsp;&middot;&nbsp;
+  <a href="SECURITY.md">Security</a>
+</p>
+
 </div>
 
 ---
 
-**Weavetab** is a local, high-performance [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server providing AI agents with direct, physical control across Chromium browsers and Electron desktop applications (Discord, VS Code, Antigravity, Figma, Slack, and local projects). Communicating directly over the **Chrome DevTools Protocol (CDP) WebSocket at Layer 0**, Weavetab eliminates WebDriver binaries, browser wrappers, and cloud middleware for deterministic **3–8ms tool execution latency**.
+Weavetab is a local, production-grade MCP server that connects AI agents directly to Chromium browsers and Electron desktop applications through the **Chrome DevTools Protocol (CDP) WebSocket at Layer 0** — no WebDriver binaries, no Playwright processes, no cloud relay.
 
-Built by **fy2ne**, Weavetab is engineered for autonomous AI agents operating in production environments where latency, security, and token efficiency are non-negotiable.
+Tool invocations resolve in **3–8 ms of mean latency**. DOM state is compressed into agent-readable semantic maps and diffed across turns, cutting prompt token usage by **up to 95%**. Security is enforced locally via per-domain policies, 4-tier RBAC, and cryptographic blind credential injection.
+
+Built by [fy2ne](https://github.com/fy2ne).
 
 ---
 
-## Table of Contents
+## Why not Playwright or Puppeteer?
 
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [Core Features](#core-features)
-- [Electron & Desktop App Automation](#electron--desktop-app-automation)
-- [Tool Categories](#tool-categories)
-- [CLI Reference](#cli-reference)
-- [Configuration](#configuration)
-- [Secrets Management](#secrets-management)
-- [MCP Client Integration](#mcp-client-integration)
-- [Development Environment](#development-environment)
-- [Plugin System](#plugin-system)
-- [Weavetab Skills Ecosystem](#weavetab-skills-ecosystem)
-- [Security Model](#security-model)
-- [Feature Comparison](#feature-comparison)
-- [Contributing](#contributing)
+> The standard approach — Playwright over MCP — works. But it carries fundamental architectural costs that compound at scale.
+
+|  | Playwright / Puppeteer | **Weavetab** |
+|---|---|---|
+| **Protocol layer** | WebDriver BiDi or CDP via browser binary | Raw CDP WebSocket, Layer 0 |
+| **Tool execution latency** | 50–300 ms (binary + IPC overhead) | **3–8 ms** |
+| **Desktop app control** | Browser only | Chrome + any Electron app (Discord, VS Code, Figma…) |
+| **DOM representation** | Full HTML dump to LLM | Semantic Map 3.0 with delta diffing |
+| **Token cost per map** | ~2,000–8,000 tokens | **~80–400 tokens** (95% reduction via delta) |
+| **CAPTCHA** | API service required | **Zero-API** via CDP mouse physics |
+| **Credential safety** | Secrets passed in plaintext | **Blind Injection** — never in LLM context |
+| **Extension access** | Limited | Full Chrome Extension API surface |
+
+---
+
+## Architecture
+
+```
+MCP Client (Claude / Cursor / Antigravity / Copilot / Windsurf)
+       |
+       |  JSON-RPC 2.0  (stdio or WebSocket :3000)
+       v
++-------------------------------------------------------------+
+|                   Weavetab MCP Server                       |
+|                                                             |
+|  +-----------------+   +---------------------------------+  |
+|  | Security Layer  |-->|  Intelligence Engine            |  |
+|  | Rate · RBAC     |   |  Map 3.0 · Delta · Memory       |  |
+|  | Policy · Audit  |   |  Pruner · Framework Detector    |  |
+|  +-----------------+   +----------------+----------------+  |
+|                                         |                   |
+|                              +----------v----------------+  |
+|                              |  CDP Bridge               |  |
+|                              |  Ghost Cursor · Typing    |  |
+|                              |  App Router · Loop Guard  |  |
+|                              +----------+----------------+  |
++-------------------------------------------------------------+
+                                          |  CDP WebSocket (127.0.0.1)
+              +---------------------------+-----------------------------+
+              v                           v                            v
+       Chrome / Edge               VS Code / Discord          Your Electron App
+       (any tab)                   (Electron apps)            (local dev)
+```
+
+No cloud. No external process. The CDP WebSocket connection is strictly bound to `127.0.0.1`.
 
 ---
 
 ## Quick Start
 
-### Quick Run with npx (Recommended)
-
 ```bash
-# Run directly with npx
 npx -y @weavetab/mcp
 ```
 
-### Or Install Globally via npm
-
-```bash
-# Install globally
-npm install -g @weavetab/mcp
-
-# Launch the MCP server
-weavetab
-```
-
-### Verify Installation
-
-```bash
-weavetab --version
-# → @weavetab/mcp 2.5.0
-
-weavetab help
-# → Full CLI usage
-```
-
-### Connect to an MCP Client
-
-Add to your MCP client configuration (e.g., `claude_desktop_config.json`):
+Add to your MCP client config:
 
 ```json
 {
@@ -96,979 +104,168 @@ Add to your MCP client configuration (e.g., `claude_desktop_config.json`):
 }
 ```
 
----
-
-## Architecture
-
-Weavetab operates as the execution layer between an MCP client and a live Chromium browser. Every tool invocation travels through a security-hardened, multi-stage pipeline before a single byte touches the browser.
-
-```mermaid
-flowchart LR
-    Client["**MCP Client**<br/>(Claude / Cursor / Copilot)"]
-
-    subgraph Server ["WeaveTab MCP Server"]
-        direction LR
-        
-        subgraph Security ["Security Pipeline"]
-            direction LR
-            Rate["Rate Limiter"] --> Domain["Domain Policy"]
-            Domain --> RBAC["RBAC Check"]
-        end
-        
-        subgraph Intel ["Intelligence Engine"]
-            direction TB
-            I1["Delta Engine · Session Memory"]
-            I2["DOM Pruner · Trail/Loop Detect"]
-            I3["Knowledge Hints · Vision Fallback"]
-        end
-        
-        subgraph Bridge ["CDP Bridge Layer"]
-            direction LR
-            B1["Ghost Cursor · Keystroke Engine"]
-            B2["DOM Walker · Shadow DOM Injector"]
-        end
-
-        Security --> Intel
-        Intel --> Bridge
-    end
-
-    Browser["**Chromium Browser**<br/>(Chrome / Edge / Brave)"]
-
-    Client -- "JSON-RPC<br/>(stdio OR WebSocket :3000)" --> Server
-    Bridge -- "CDP WebSocket<br/>(127.0.0.1 — localhost only)" --> Browser
-```
-
-### Five Architectural Layers
-
-| Layer | Components | Responsibility |
-|-------|-----------|----------------|
-| **Transport** | stdio (JSON-RPC), WebSocket (port 3000) | MCP client communication |
-| **Security & Governance** | Domain blacklist, Rate limiter, RBAC (4 roles), Root guard, Storage blocker | Pre-flight security checks |
-| **Intelligence** | Session memory, Semantic Delta engine, DOM pruner, Trail/loop detection, Knowledge hints, Vision fallback | Token optimization, self-learning |
-| **Sensor Systems** | Network telemetry, DOM mutations, Human pacing, Agent state machine, Thought HUD | Runtime awareness |
-| **CDP Bridge** | DOM walker, Ghost cursor, Keystroke engine, Pruner, Shadow DOM injector, Tab manager, Browser launcher | Raw browser control |
-
-### Transport Modes
-
-| Mode | Protocol | Use Case |
-|------|----------|----------|
-| **stdio** (default) | JSON-RPC over stdin/stdout | Claude Desktop, Cursor, Copilot, all standard MCP clients |
-| **WebSocket** (`--ws`) | JSON-RPC over WebSocket, port 3000 | Custom integrations, remote agent pipelines |
+| Client | Config path |
+|---|---|
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude Code | `claude mcp add weavetab -- npx -y @weavetab/mcp` |
+| Cursor | `.cursor/mcp.json` |
+| Antigravity | `~/.gemini/antigravity/mcp/weavetab/` |
+| VS Code Copilot | `.vscode/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 
 ---
 
-## Core Features
+## Core Technology
 
-### Semantic Delta Engine
-Instead of dumping the full DOM on every `browser_map` call, the Delta Engine stores a per-tab snapshot and returns **only what changed**. This reduces token consumption by **5–10× on repeated reads**. Combined with the Semantic DOM Pruner (which drops hidden non-interactive elements and collapses SVG icons to `[SVG Icon: label]` tokens), agents receive minimal, actionable context.
+### Semantic Map 3.0
+
+The primary bottleneck in browser-based agents is DOM representation. Full HTML dumps are noisy, large, and structurally meaningless to language models. Weavetab's `browser_map` runs an in-browser CDP walker that produces a compact semantic map:
 
 ```
-browser_map({ prune: true, delta: true })  →  Maximum token efficiency
+╔═ ACTIVE DIALOG: "Confirm Payment" ═╗
+  [w:3] button "Confirm"  [w:4] button "Cancel"
+
+┌ "Pro Plan — $49/mo"
+  [w:12] button "Upgrade"   [w:13] button "View Details"
+  [w:14] input val:"john@example.com"  ph:"Email address"  FOCUSED
+
+[w:20...w:38] 18 nav links: "Dashboard" ... "Sign out"
 ```
+
+Key properties:
+
+- **Ref IDs** (`w:N`) are stable within a session and used by all interaction tools
+- **Container binding** — buttons and inputs are grouped under their parent card, row, or section header
+- **Modal hoisting** — open dialogs are isolated at the top so agents cannot miss them
+- **Link collapsing** — repeated nav/footer runs of 4+ links compress into a single token line
+- **Semantic delta** — on re-reads, only changed nodes are transmitted (`~` modified, `+` added, `−` removed), cutting re-read cost by up to 95%
 
 ### Ghost Cursor
-Every click dispatches a physics-realistic **Bézier curve trajectory** — not a raw coordinate warp. Acceleration, jitter, and hold-duration are sampled from a human motion profile, making automation indistinguishable from human input at the DOM event level.
 
-### Human Typing Engine
-Keystrokes are dispatched with **per-character jitter**, **burst-pattern profiling** (humans type fast in bursts, slow at boundaries), and natural inter-word pauses. The engine includes real-time DOM-diffing to detect and break stuck-typing loops.
+Clicks are not dispatched as synthetic DOM events. They are delivered as a physical sequence of `Input.dispatchMouseEvent` CDP calls along a Bezier curve trajectory with randomized acceleration, natural jitter, and hold durations. Anti-bot fingerprinting that flags event-based automation does not trigger.
 
-### Blind Injection (`browser_type_secret`)
-> [!IMPORTANT]
-> Enterprise-grade credential injection that **never exposes secret values to the LLM context**. Secrets are resolved from `~/.weavetab/secrets.json` (or a project-scoped `.weavetab/secrets.json`) with per-domain scoping. The injected value is permanently masked as `[REDACTED]` in all subsequent DOM snapshots, delta maps, and audit logs.
-
-### Session Memory
-Each domain visited builds a persistent profile on disk at `~/.weavetab-system/memory/`. The system auto-detects frontend frameworks (React, Vue, Angular, Lit, Svelte, Next, Nuxt, Gatsby) via `Runtime.evaluate`. Strategies and known inputs accumulate across sessions, enabling progressive improvement.
+`browser_pointer` supports `hover_chain` for multi-level menu traversal in a single tool call:
 
 ```json
 {
-  "framework": "react",
-  "shadowDom": true,
-  "strategies": ["click_nav_menu", "type_search"],
-  "knownInputs": [{ "label": "Search", "selector": "#search" }],
-  "visitCount": 12,
-  "updatedAt": "2026-07-20T..."
+  "hover_chain": ["File", "Export As", "PNG"],
+  "click_final": true
 }
 ```
 
-### Loop Detection & Trail System
-> [!WARNING]
-> A rolling window of the last 50 tool actions is maintained in `~/.weavetab-system/sessions/context.json`. A strike-based algorithm detects stuck loops:
+### Blind Credential Injection
 
-| Strikes | Severity | Behavior |
-|---------|----------|----------|
-| < 5 | None | Normal operation |
-| 5–9 | Warning | HUD reports potential loop |
-| 10+ | Critical | Agent state → "stuck"; auto-recovery attempted |
-
-Use `browser_reset_loop_counter` to manually clear the counter.
-
-### Vision Fallback System
-When the CDP Accessibility Tree returns zero elements (canvas-heavy pages, fully custom UIs), Weavetab falls back to local pixel analysis via the `sharp` library — **zero external API calls, zero ML dependencies**:
-
-```
-CDP AX Tree Empty → Capture Screenshot → Grayscale Conversion
-→ 4×4 Grid Heatmap → Text Density Calculation → Clickable Zone Detection
-→ Page State Classification
-```
-
-### ⚡ Burst Mode
-Chain N actions in a single MCP round-trip with `browser_burst`. Supports macro steps: `type_and_send`, `navigate_and_read`, `click_and_wait`, `scroll_and_read`. Eliminates the per-tool JSON-RPC overhead for high-throughput workflows.
-
----
-
-## Electron & Desktop App Automation
-
-Weavetab extends its Layer 0 CDP engine beyond web browsers to **any Electron-based desktop application or locally hosted webview app** (e.g. **Discord**, **Slack**, **VS Code**, **Antigravity IDE**, **Figma**, **Obsidian**, **Postman**, or your own custom Electron projects running from source).
-
-Because Electron is built on Chromium and Blink, Weavetab controls desktop apps using the exact same low-latency CDP primitives (`browser_map`, `browser_click`, `browser_type`, `browser_tabs`, etc.) with zero app-specific hacks or overhead.
-
-### 1. Configuring Installed Desktop Apps
-
-Add your application executable paths to `~/.weavetab/config.json` (or `./.weavetab/config.json`) under the `"electron"` dictionary:
-
-```json
-{
-  "browserType": "chromium",
-  "electron": {
-    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
-    "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
-    "vscode": "C:\\Users\\<user>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-    "figma": "C:\\Users\\<user>\\AppData\\Local\\Figma\\Figma.exe",
-    "obsidian": "C:\\Users\\<user>\\AppData\\Local\\Obsidian\\Obsidian.exe",
-    "slack": "/Applications/Slack.app/Contents/MacOS/Slack"
-  }
-}
-```
-
-### 2. Automating Local / Source-Hosted Electron Projects
-
-If you are developing a local Electron app from source code or running it via Vite / Webpack / Next.js on `localhost`, you can automate it in two ways:
-
-#### Option A: Launch with Remote Debugging Flag
-Start your development process passing the Chrome DevTools Protocol remote debugging port:
+`browser_type_secret` resolves secrets server-side from `~/.weavetab/secrets.json`. The resolved value is never included in the MCP response, never appears in DOM snapshots, and is permanently masked as `[REDACTED]` in all audit logs. The LLM context never sees the credential.
 
 ```bash
-# Standard Electron CLI / npm script
-npx electron . --remote-debugging-port=9222
-
-# Or within your package.json scripts:
-# "dev:debug": "electron . --remote-debugging-port=9222"
-npm run dev:debug
+weavetab secrets set GITHUB_TOKEN
+# Stored. Never echoed, never logged, never surfaced to the agent.
 ```
 
-Then configure `"attachPort": 9222` in `.weavetab/config.json` or register it in `"electron"`:
+### Electron & Desktop App Automation
+
+Any tool accepts an optional `app` parameter that routes the command to a registered Electron process instead of a browser tab:
+
+```json
+{ "app": "discord", "ref": "w:24", "text": "Hey, deploying now" }
+```
+
+Register apps in `~/.weavetab/config.json`:
+
 ```json
 {
   "electron": {
-    "my-dev-app": "npm run dev:debug"
+    "discord":  "C:\\Users\\<user>\\AppData\\Local\\Discord\\Discord.exe",
+    "vscode":   "C:\\Users\\<user>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    "figma":    "C:\\Users\\<user>\\AppData\\Local\\Figma\\Figma.exe"
   }
 }
 ```
 
-#### Option B: Register Local App Executable / Wrapper Script
-Specify your local build binary or launch script in `"electron"`:
-```json
-{
-  "electron": {
-    "my-local-app": "C:\\Users\\<user>\\projects\\my-app\\node_modules\\electron\\dist\\electron.exe"
-  }
-}
-```
+Weavetab auto-attaches via CDP to the registered process. No code changes required in the target application.
 
-### 3. Controlling Desktop Apps via MCP Tools
+### Zero-API CAPTCHA Solving
 
-All Weavetab tools accept an optional `app` parameter specifying which application to target. When specified, Weavetab automatically connects to that app's dedicated CDP session without launching or interfering with your default browser.
-
-#### Launch / Focus Desktop App
-```json
-{
-  "name": "browser_navigate",
-  "arguments": {
-    "app": "antigravity"
-  }
-}
-```
-
-#### List & Switch Windows / Workbenches
-Desktop apps often run multiple browser windows or background webviews. Inspect and switch active contexts using `browser_tabs`:
-```json
-{
-  "name": "browser_tabs",
-  "arguments": {
-    "action": "list",
-    "app": "antigravity"
-  }
-}
-```
-
-Switch to a specific window/tab:
-```json
-{
-  "name": "browser_tabs",
-  "arguments": {
-    "action": "switch",
-    "tabId": "D8832CBF1FEF413B6E09E96EF8C82DFF",
-    "app": "antigravity"
-  }
-}
-```
-
-#### Inspect DOM & Interact with UI Elements
-Generate actionable Ref IDs (`w:NN`) and interact directly with native desktop UI components:
-```json
-// 1. Snapshot the Desktop App UI
-{
-  "name": "browser_map",
-  "arguments": {
-    "app": "antigravity"
-  }
-}
-
-// 2. Click Settings or Menus
-{
-  "name": "browser_click",
-  "arguments": {
-    "ref": "w:14",
-    "app": "antigravity"
-  }
-}
-
-// 3. Type text into Desktop inputs
-{
-  "name": "browser_type",
-  "arguments": {
-    "ref": "w:28",
-    "text": "Hello from WeaveTab automation!",
-    "app": "discord"
-  }
-}
-```
+`browser_captcha` solves Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha by orchestrating CDP mouse events that replicate human behavioral signatures — velocity curves, micro-pauses, scroll inertia — with no third-party API, no external service, and no API key required.
 
 ---
 
-## Tool Categories
+## Tool Suite
 
-Weavetab exposes **44+ MCP tools** organized into functional categories. See the complete reference in [`docs/TOOLS.md`](docs/TOOLS.md).
+48 tools across 9 categories. Full parameter reference: [`docs/tools/tools.md`](docs/tools/tools.md)
 
-### Vision & Reading (7 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_map` | DOM enumeration with volatile `w:NN` ref IDs that invalidate after DOM mutations. Supports delta mode, semantic pruning, AX tree fallback, scope & query filtering |
-| `browser_find` | Native CDP text search — ~10× cheaper than map |
-| `browser_scrape` | CSS/XPath (Note: XPath lacks shadow-DOM support) structured data extraction |
-| `browser_inspect` | Computed CSS styles + event listener types |
-| `browser_snapshot` | MHTML capture/restore of full DOM state |
-| `browser_screenshot` | PNG/JPEG capture, full-page + clip region, returns base64 (no file pollution) |
-| `browser_console` | Read/clear buffered console logs & exceptions |
+| Category | Tools |
+|---|---|
+| **Vision & DOM** | `browser_map` `browser_find` `browser_scrape` `browser_inspect` `browser_snapshot` `browser_screenshot` `browser_console` `browser_extract_design` |
+| **Input & Interaction** | `browser_click` `browser_type` `browser_type_secret` `browser_key` `browser_pointer` `browser_select` `browser_fill` `browser_upload` `browser_scroll` |
+| **Navigation & Environment** | `browser_navigate` `browser_tabs` `browser_detect` `browser_viewport` `browser_emulate` |
+| **Mission & Automation** | `browser_burst` `browser_automation` `browser_macro_compile` `browser_recording` |
+| **Safety & Human Oversight** | `browser_dialog` `browser_thoughts` `browser_clipboard` `browser_wait` `browser_reset_loop_counter` |
+| **Autonomous CAPTCHA** | `browser_captcha` |
+| **Network & Storage** | `browser_network_intercept` `browser_storage` `browser_cookies` `browser_checkpoint` `browser_performance` |
+| **GitHub & Documents** | `github_analyze` `github_read` `github_issues` `github_get_pr` `browser_office` |
+| **Canvas, Eval & Plugins** | `browser_eval` `browser_pdf` `browser_canvas` `browser_highlight` `list_plugins` `load_plugin` |
 
-### Navigation (1 tool)
-| Tool | Description |
-|------|-------------|
-| `browser_navigate` | Navigate to URL with domain blocklist enforcement & `weavetab://` protocol support |
+---
 
-### Input (9 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_click` | Ghost Cursor (Bézier) click with multi-strategy fallback and intent memory |
-| `browser_type` | Human keystroke engine with jitter, burst patterns, and stuck-loop detection |
-| `browser_type_secret` | **Blind Injection** — resolves credentials from `secrets.json`, never exposes to LLM |
-| `browser_key` | Native keyboard dispatch with modifier keys (Ctrl, Shift, Alt, Meta) |
-| `browser_pointer` | Hover, double-click, drag-and-drop with Ghost Cursor trajectory |
-| `browser_select` | Native `<select>` dropdown selection (React/Vue safe via prototype setter) |
-| `browser_fill` | Smart multi-field form fill with per-field type detection |
-| `browser_upload` | Bypass file dialogs via CDP `DOM.setFileInputFiles` |
-| `browser_scroll` | Directional + element-relative scroll via CDP wheel events |
+## Security
 
-### Tabs & Windows (2 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_tabs` | Open/switch/close/list/consolidate/heal tabs and windows |
-| `browser_detect` | Detect installed browsers + CDP feature coverage per engine |
+- **Transport**: CDP WebSocket strictly bound to `127.0.0.1`. No listener on external interfaces.
+- **Policy Engine**: Per-domain `allow` / `read-only` / `deny` / `audit` rules in `~/.weavetab/policy.json`
+- **RBAC**: Four roles — `admin`, `operator`, `viewer`, `automation` — enforce tool-level permission gates
+- **Blind Injection**: Credentials resolved server-side, masked in all outputs and audit logs
+- **Loop Breaker**: Strike-based stuck-loop detector halts runaway autonomous sequences
+- **Audit Log**: All tool invocations, policy decisions, and errors written to `~/.weavetab/logs/audit.log`
 
-### Mission Execution (3 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_burst` | Chain N actions in 1 MCP call — highest throughput mode |
-| `browser_plan` | Live task dashboard in browser Shadow DOM overlay |
-| `browser_automation` | Inject persistent self-running background scripts |
-
-### Dialog & User Interaction (3 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_dialog` | Accept/dismiss JavaScript alert/confirm/prompt dialogs |
-| `browser_thought` | Green thought-bubble HUD: `feedback` (one-way) or `question` (with input) |
-| `browser_clipboard` | System clipboard R/W (text + images) |
-
-### Wait & Timing (2 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_wait` | Wait for element/text/URL/stable/network/auto |
-| `browser_reset_loop_counter` | Manual loop detection override |
-
-### Storage & Cookies (2 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_storage` | `localStorage` & `sessionStorage` get/set/clear |
-| `browser_cookies` | Cookies get/set/delete/get_all |
-
-### Device & Environment (1 tool)
-| Tool | Description |
-|------|-------------|
-| `browser_viewport` | Viewport resize, mobile emulation, geolocation, timezone, locale, color scheme |
-
-### Network (1 tool)
-| Tool | Description |
-|------|-------------|
-| `browser_network_intercept` | Mock API responses, block tracking, and retrieve raw protocol network telemetry (TLS/SSL certificate metadata, microsecond timing breakdown, OS-level failure reasons) |
-
-### Canvas & Visual (2 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_canvas` | Get image data or draw points on `<canvas>` elements |
-| `browser_highlight` | Visual CDP overlay highlight — zero token cost |
-
-### Output (2 tools)
-| Tool | Description |
-|------|-------------|
-| `browser_pdf` | Print page to PDF (landscape, scale, page ranges) |
-| `browser_recording` | Compile browser screencast frames into video (.webp, .gif, .mp4, .webm) |
-
-### Evaluation (1 tool)
-| Tool | Description |
-|------|-------------|
-| `browser_eval` | Run arbitrary JS via `CDP Runtime.evaluate` |
-
-### Performance (1 tool)
-| Tool | Description |
-|------|-------------|
-| `browser_performance` | FCP, LCP, TTI metrics and resource timings |
-
-### Macro (1 tool)
-| Tool | Description |
-|------|-------------|
-| `browser_macro_compile` | Compile successful trails into reusable burst macros |
-
-### GitHub (4 tools)
-| Tool | Description |
-|------|-------------|
-| `github_analyze` | Repo metadata, file tree, README snippet |
-| `github_read` | Read file contents via raw.githubusercontent.com (no API rate limit) |
-| `github_issues` | List/search/fetch issues with comments |
-| `github_get_pr` | PR details + changed files + comments |
-
-### Utility (1 tool + Plugin System)
-| Tool | Description |
-|------|-------------|
-| `Weavetab_logs` | Append agent feedback to mission log |
-| Plugins | Dynamic tool loading from any npm package with `weavetab.json` (or `@weavetab/plugin-*`) |
+Security vulnerabilities: `security@fy2ne.me` (do not use public issues).
 
 ---
 
 ## CLI Reference
 
-The `weavetab` CLI provides server management, secrets handling, and diagnostics.
-
-### Server Commands
-
 ```bash
-# Start the MCP server (stdio mode — default for MCP clients)
-# Start the MCP server
-Weavetab
-
-# Interactive configuration wizard
-Weavetab config
-
-# View current state
-Weavetab view
-
-# Reset session cache
-Weavetab reset
+weavetab                        # Start in stdio mode (default)
+weavetab --ws --port 3000       # WebSocket daemon mode
+weavetab config                 # Interactive configuration wizard
+weavetab secrets set KEY_NAME   # Store a secret (never echoed)
+weavetab secrets list           # List stored secret keys (not values)
+weavetab plugin add <name>      # Install a plugin from npm
+weavetab plugin list            # List installed plugins
 ```
 
-### Secrets Management
-
-Credentials are stored in `~/.weavetab/secrets.json` (global) or `.weavetab/secrets.json` (project-scoped). The CLI provides safe management without ever echoing values to the terminal.
-
-```bash
-# Initialize project-scoped secrets store
-Weavetab secrets init --project
-
-# Add or update a secret (prompts securely, value never echoed)
-Weavetab secrets set MY_API_KEY
-
-# List all secrets (names only, values hidden)
-Weavetab secrets list
-
-# Remove a secret
-Weavetab secrets rm MY_API_KEY
-```
-
-### Reset & Diagnostics
-
-```bash
-# Clear all session state (loop counter, memory snapshots)
-Weavetab reset
-```
-
----
-
-## Configuration
-
-Weavetab auto-generates a config file at `~/.weavetab/config.json` on first run. All values can be overridden with a project-scoped `.weavetab/config.json`.
+Configuration file: `~/.weavetab/config.json`
 
 ```json
 {
   "browserType": "chromium",
   "headless": false,
   "extension": true,
-  "devMode": false,
   "maxActionsPerMinute": 60,
   "role": "admin",
-  "telemetry": false,
-  "downloadDir": "~/Downloads",
-  "profileDir": "~/.weavetab/profile",
   "electron": {
-    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
-    "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe"
-  }
-}
-```
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `browserType` | `"chromium"` \| `"firefox"` \| `"webkit"` | `"chromium"` | Which browser to launch/attach |
-| `headless` | boolean | `false` | Run browser without a window |
-| `extension` | boolean | `true` | Enable Weavetab Chrome extension integration |
-| `devMode` | boolean | `false` | Verbose CDP logging |
-| `maxActionsPerMinute` | number | `60` | Rate limit threshold |
-| `role` | `"admin"` \| `"system"` \| `"viewer"` \| `"automation"` | `"admin"` | RBAC role |
-| `telemetry` | boolean | `false` | Opt-in telemetry |
-| `electron` | `Record<string, string>` | `{}` | Named map of Electron desktop apps to executable paths or startup scripts |
-
-### Domain Policy
-
-Configure per-domain policies in `~/.weavetab/policy.json`:
-
-```json
-{
-  "policies": [
-    { "pattern": "*.banking.com", "mode": "deny" },
-    { "pattern": "*.internal.corp", "mode": "read-only" },
-    { "pattern": "staging.myapp.com", "mode": "audit" }
-  ]
-}
-```
-
-Available modes: `allow`, `read-only`, `deny`, `audit`.
-
----
-
-## Secrets Management
-
-Weavetab's **Blind Injection** system keeps credentials permanently out of the LLM context.
-
-### How It Works
-
-1. You store a secret via `Weavetab secrets set MY_KEY` or by editing `secrets.json` directly
-2. The agent calls `browser_type_secret({ id: "w:2", envKey: "MY_KEY" })`
-3. Weavetab resolves the value from `secrets.json` **server-side** — the LLM never sees it
-4. The value is injected directly into the DOM input field
-5. All subsequent `browser_map`, delta, and AX tree outputs show `[REDACTED]` for that node
-
-### Secrets File Format
-
-```json
-{
-  "MY_API_KEY": {
-    "value": "sk-prod-...",
-    "domains": ["api.example.com", "app.example.com"],
-    "description": "Production API key"
-  },
-  "ADMIN_PASSWORD": {
-    "value": "hunter2",
-    "domains": ["admin.example.com"],
-    "description": "Admin panel password"
-  }
-}
-```
-
-### Resolution Priority
-
-| Priority | Location | Purpose |
-|----------|----------|---------|
-| 1st | `./.weavetab/secrets.json` | Project-scoped (opt-in via `Weavetab secrets init --project`) |
-| 2nd | `~/.weavetab/secrets.json` | Global default |
-
-> [!NOTE]
-> The legacy `.env`-based `EnvSecretProvider` is deprecated and no longer supported. All secrets must be stored in `secrets.json`.
-
----
-
-## MCP Client Integration
-
-Weavetab connects out-of-the-box via stdio JSON-RPC 2.0 with all major AI coding assistants and IDEs.
-
-| Environment | Setup Method | Guided Web Installer |
-| :--- | :--- | :--- |
-| **Cursor** | `.cursor/mcp.json` | [weavetab.pages.dev/mcp/install/cursor](https://github.com/weavetab/mcp/mcp/install/cursor) |
-| **Antigravity** | `~/.gemini/antigravity/mcp/` | [weavetab.pages.dev/mcp/install/antigravity](https://github.com/weavetab/mcp/mcp/install/antigravity) |
-| **Claude Desktop** | `claude_desktop_config.json` | [weavetab.pages.dev/mcp/install/claude-desktop](https://github.com/weavetab/mcp/mcp/install/claude-desktop) |
-| **Claude Code** | `claude mcp add` | [weavetab.pages.dev/mcp/install/claude-code](https://github.com/weavetab/mcp/mcp/install/claude-code) |
-| **VS Code / Copilot** | 1-Click Protocol / `settings.json` | [weavetab.pages.dev/mcp/install/vscode](https://github.com/weavetab/mcp/mcp/install/vscode) |
-| **Windsurf** | `mcp_config.json` | [weavetab.pages.dev/mcp/install/windsurf](https://github.com/weavetab/mcp/mcp/install/windsurf) |
-
----
-
-### Cursor
-
-Add to `.cursor/mcp.json` in your project root or in **Cursor Settings > MCP**:
-
-```json
-{
-  "mcpServers": {
-    "weavetab": {
-      "command": "npx",
-      "args": ["-y", "@weavetab/mcp"]
-    }
+    "discord":     "...",
+    "vscode":      "...",
+    "antigravity": "..."
   }
 }
 ```
 
 ---
 
-### Antigravity
+## Extensibility
 
-Register Weavetab in your Antigravity configuration or workspace `.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "weavetab": {
-      "command": "npx",
-      "args": ["-y", "@weavetab/mcp"]
-    }
-  }
-}
-```
-
----
-
-### Claude Desktop
-
-Add to your platform's configuration file:
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux:** `~/.config/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "weavetab": {
-      "command": "npx",
-      "args": ["-y", "@weavetab/mcp"]
-    }
-  }
-}
-```
-
----
-
-### Claude Code
-
-Run the terminal command to register Weavetab globally:
+Weavetab exposes a typed Plugin SDK for authoring custom MCP tools, HUD overlays, and tool lifecycle hooks:
 
 ```bash
-claude mcp add weavetab -- npx -y @weavetab/mcp
+npx @weavetab/sdk init my-plugin
 ```
 
-Or for project-scoped activation:
-
-```bash
-claude mcp add --scope project weavetab -- npx -y @weavetab/mcp
-```
+See [`docs/PLUGINS.md`](docs/PLUGINS.md) for architecture, manifest spec, and SDK API reference.
 
 ---
 
-### Visual Studio Code & Copilot
+## License
 
-Add to `.vscode/settings.json` or User Settings:
+AGPL-3.0-only. Client connections over stdio or WebSocket do not extend copyleft obligations to your client application or models.
 
-```json
-{
-  "mcpServers": {
-    "weavetab": {
-      "command": "npx",
-      "args": ["-y", "@weavetab/mcp"]
-    }
-  }
-}
-```
-
----
-
-### Windsurf
-
-Add to `~/.codeium/windsurf/mcp_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "weavetab": {
-      "command": "npx",
-      "args": ["-y", "@weavetab/mcp"]
-    }
-  }
-}
-```
-
----
-
-### WebSocket Mode (Custom Agent Pipelines & SDKs)
-
-Launch a standalone WebSocket daemon:
-
-```bash
-weavetab --ws --port 3000
-```
-
-```javascript
-// Connect from any custom client or script
-const ws = new WebSocket("ws://localhost:3000");
-ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }));
-```
-
----
-
-## Development Environment
-
-### Prerequisites
-
-- **Node.js 18+** (LTS recommended)
-- **npm 8+**
-- A **Chromium-based browser** (Chrome, Edge, Brave)
-- **Git**
-
-### Source Code Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/weavetab/mcp.git
-cd mcp
-
-# Install dependencies
-npm install
-
-# Start in development mode (tsx watcher — auto-reloads on file changes)
-npm run dev
-
-# Build the project
-npm run build       # Builds extension + HUD + TypeScript
-npm run build:ext   # Extension only
-npm run build:hud   # Shadow DOM HUD only
-
-# Run the MCP server from source
-node dist/index.js
-```
-
-### Project Structure
-
-```
-src/
-├── cdp/            # Chrome DevTools Protocol bridge (walker, connector, lock, pruner, ghost)
-├── intelligence/   # Session memory, delta engine, trail, hints, vision fallback, intent
-├── sensors/        # Network telemetry, DOM mutations, human pacing, wait guards, thoughts HUD
-├── security/       # Domain blacklist, rate limiter, RBAC, Blind Injection secrets
-├── state/          # Delta engine, agent state machine, session registry, mutation cache
-├── tools/          # 44+ individual tool implementations
-│   └── github/     # GitHub API integration tools
-├── overlay/        # Shadow DOM UI injector, Ghost cursor, thought bubble HUD
-├── audit/          # Structured logging & telemetry
-├── plugin/         # Plugin interface and dynamic loader
-├── config/         # Multi-source config merge & live reload
-├── cli/            # CLI utilities and update notifier
-├── anticaptcha/    # CAPTCHA detection and solving strategies
-├── server.ts       # MCP server entry point — all tool registrations
-└── index.ts        # CLI entry point (wizard, reset, main interactive UI)
-```
-
-### Testing
-
-```bash
-# All tests
-npm test
-
-# Unit tests only (fast, no browser required)
-npm run test:unit
-
-# End-to-end smoke test (requires Chrome)
-npm run test:e2e
-```
-
-### Docker (Headless Production)
-
-Run Weavetab in a Docker container with a headless Chromium instance for CI/CD pipelines:
-
-```dockerfile
-FROM node:20-slim
-
-# Install Chromium and dependencies
-RUN apt-get update && apt-get install -y \
-    chromium \
-    --no-install-recommends && rm -rf /var/lib/apt/lists/*
-
-# Install Weavetab MCP
-RUN npm install -g @weavetab/mcp
-
-# Set Chrome path for headless mode
-ENV CHROME_PATH=/usr/bin/chromium
-
-EXPOSE 3000
-
-CMD ["Weavetab", "--ws", "--headless"]
-```
-
-```bash
-docker build -t weavetab-server .
-docker run -p 3000:3000 weavetab-server
-```
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `CHROME_PATH` | Override Chromium binary path |
-| `WEAVETAB_CONFIG` | Path to a custom config file |
-| `WEAVETAB_ROLE` | Override RBAC role at runtime |
-| `WEAVETAB_DEV` | `1` to enable verbose dev logging & developer mode |
-
-### Developer Mode (`devMode`)
-
-Setting `"devMode": true` in configuration or `WEAVETAB_DEV=1` activates diagnostic features:
-* **Payload Extensions**: Adds `execution_ms` (precise latency breakdown) and `toolcalls` traces to MCP tool outputs.
-* **Visual Overlays**: Renders real-time HUD execution badges, target hitboxes, and Bézier cursor trajectory curves in the browser.
-* **Audit Mission Logs**: Automatically generates structured CDP event logs in `~/.weavetab/logs/` for every completed mission.
-
-> 📖 See [docs/DEV_MODE.md](docs/DEV_MODE.md) for complete details.
-
----
-
-## Plugin System
-
-> [!NOTE]
-> **PLUGIN ENGINE (v2.5.0-beta.2)**
-> 
-> The Weavetab Plugin System and SDK are in **v2.5.0-beta.2**.
-> Use the official **[`@weavetab/sdk`](https://www.npmjs.com/package/@weavetab/sdk)** to build, scaffold, and publish plugins.
-
-Weavetab supports dynamic tool extension via the **Plugin System**. Any npm package containing a valid `weavetab.json` manifest found in `node_modules` (or official `@weavetab/plugin-*` packages) is automatically discovered and loaded into the MCP server.
-
-### Key Capabilities in v2.5.0-beta.2:
-1. **Isolated Configuration Sandbox**: Each plugin maintains its own settings in `~/.weavetab/plugins/<name>/config.json` without modifying core Weavetab config.
-2. **Sandboxed Key-Value & File Storage**: Secure storage inside `~/.weavetab/plugins/<name>/` via `ctx.storage` with path traversal protection.
-3. **Real-time Extension & HUD Visuals**: Floating thought bubbles (`ctx.extension.showThought`), status badges (`setHudState`), and custom CSS injection (`injectStyles`).
-4. **Tool Overrides & Wrapping**: Wrap or modify built-in MCP tools (e.g. `browser_eval`, `browser_click`) via `ctx.mcp.overrideTool`.
-5. **Lifecycle Hooks**: Intercept actions before and after tool calls with `ctx.hooks.beforeToolCall` and `ctx.hooks.afterToolCall`.
-
-> 📖 See [Developer Plugin Guide](docs/dev_plugin.md) for a step-by-step tutorial, and [docs/PLUGINS.md](docs/PLUGINS.md) for the complete architecture and manifest specification.
-
-### Quick Scaffold & Build
-
-```bash
-# 1. Scaffold a new plugin
-npx @weavetab/sdk init my-custom-plugin
-cd my-custom-plugin
-npm install
-
-# 2. Build and compile
-npm run build
-```
-
-### Installing a Plugin
-
-```bash
-# Official plugin
-weavetab plugin add @weavetab/plugin-youtube
-
-# Community plugin (any npm package name)
-weavetab plugin add seo-auditor
-```
-
-Restart `weavetab` — the plugin's tools are automatically registered into the MCP runtime.
-
-### Authoring a Plugin
-
-```typescript
-// src/index.ts
-import { definePlugin, type PluginContext } from "@weavetab/sdk";
-
-export default definePlugin({
-  name: "weavetab-plugin-sample",
-
-  defaultConfig: {
-    showVisualHud: true,
-  },
-
-  async onLoad(ctx: PluginContext) {
-    ctx.mcp.registerTool({
-      name: "my_custom_tool",
-      description: "Custom tool registered into Weavetab runtime",
-      schema: {
-        type: "object",
-        properties: {
-          param: { type: "string", description: "Input parameter" }
-        }
-      },
-      handler: async (args: { param?: string }, session: any) => {
-        // Show thought bubble on active tab
-        if (ctx.config.showVisualHud && session) {
-          await ctx.extension.showThought(session, `✨ Running tool with ${args.param || "default"}`);
-        }
-
-        return {
-          content: [
-            { type: "text", text: `Executed with: ${args.param || "default"}` }
-          ]
-        };
-      }
-    });
-  }
-});
-```
-
-Plugin tools follow the standard MCP contract: structured Zod input, deterministic JSON output, audit logging, and `WeaveError` protocol on failure.
-
----
-
-## Weavetab Skills Ecosystem
-
-The **Weavetab Skills** package (`@weavetab/skills`) is an optional companion that provides pre-built workflow patterns and mission templates for AI agents. Skills are automatically discovered by compatible MCP clients and inject context-aware guidance for mission planning.
-
-> 🔗 **Repository:** [github.com/weavetab/skills](https://github.com/weavetab/skills)
-
-### Installation
-
-```bash
-npm install -g @weavetab/skills
-```
-
-### Available Skills
-
-| Skill | Description |
-|-------|-------------|
-| **Multi-step Form Automation** | Complex form filling with validation handling and error recovery |
-| **E-commerce Checkout** | Shopping cart navigation and payment processing workflows |
-| **Data Extraction Pipelines** | Structured data scraping, transformation, and export |
-| **Content Management Systems** | WordPress, Drupal, and CMS-specific interaction patterns |
-| **API Testing & Validation** | Endpoint testing, response verification, and contract checking |
-
-Skills are loaded as an MCP resource layer and provide declarative mission templates that agents can reference during task planning.
-
----
-
-## Security Model
-
-Weavetab implements a defense-in-depth security architecture designed for production deployments.
-
-### Security Mechanisms
-
-| Mechanism | Description |
-|-----------|-------------|
-| **Domain Blacklist** | Hard-blocked high-risk domains (banking portals, IAM providers, cloud consoles) |
-| **Domain Policy Engine** | Per-domain modes: `allow`, `read-only`, `deny`, `audit` — via `~/.weavetab/policy.json` |
-| **Localhost Binding** | CDP WebSocket strictly bound to `127.0.0.1` — no external exposure |
-| **Zero Cloud Dependency** | Executes entirely on local machine (no telemetry unless opted in) |
-| **Rate Limiting** | Configurable actions-per-minute with mutex-based enforcement |
-| **Role-Based Access Control** | 4 roles: `admin`, `operator`, `viewer`, `automation` |
-| **Root Guard** | Prevents execution as root/superuser at startup (Unix) |
-| **Blind Injection** | Credentials from `secrets.json` — never exposed to LLM or audit logs |
-| **Input Filter** | Strips prompt injection patterns, invisible Unicode, oversized labels |
-| **Shadow DOM Isolation** | All injected UIs run in isolated Shadow DOM context |
-| **Storage Blocker** | Optional nullification of `localStorage`, `sessionStorage`, `document.cookie` |
-| **Atomic Config Writes** | Config files written to temp then atomically renamed |
-| **Path Traversal Protection** | `downloadDir` and `profileDir` validated to reject `..` traversal |
-| **Two-Factor Lock Validation** | Browser lock validated by PID liveness + TCP port connectivity |
-
-### RBAC Role Matrix
-
-| Tool Category | admin | operator | viewer | automation |
-|---------------|:-----:|:--------:|:------:|:----------:|
-| All mutation tools | ✅ | ✅ | ❌ | ❌ |
-| Read-only tools (map, find, scrape, screenshot, inspect, github_*, etc.) | ✅ | ✅ | ✅ | ❌ |
-| burst, plan, wait, map | ✅ | ✅ | ❌ | ✅ |
-| System tools (logs, detect, performance, reset_loop_counter) | ✅ | ❌ | ❌ | ❌ |
-
----
-
-## Feature Comparison
-
-| Metric | **Weavetab** | Playwright MCP | Puppeteer | Selenium |
-|--------|:------------:|:--------------:|:---------:|:--------:|
-| **Architecture** | Direct CDP WebSocket (Layer 0) | CDP + Node.js bridge | CDP (heavy wrapper) | WebDriver protocol |
-| **Mean Latency** | **3–8ms** | 15–40ms | 10–25ms | 50–150ms |
-| **Token Efficiency** | **Semantic Deltas (5–10×) + Pruning** | Full DOM dumps | Full DOM dumps | Full DOM dumps |
-| **Input Simulation** | Ghost Cursor + Human Typing | Instant coordinates | Instant coordinates | Instant coordinates |
-| **Cloud Dependency** | **Zero** (localhost only) | Optional | Optional | Grid required |
-| **Security Model** | Blacklist + RBAC + Rate limit + Blind Injection | None | None | None |
-| **Session Memory** | Persistent per-domain profiles | None | None | None |
-| **MCP Native** | ✅ | ✅ | ❌ | ❌ |
-| **Plugin System** | Dynamic `weavetab.json` & `@weavetab/plugin-*` loading | Yes (custom) | Yes (custom) | Yes (custom) |
-| **Tool Count** | **44+ built-in + plugins** | ~25–35 | N/A | N/A |
-| **Loop Detection** | Strike-based + auto-recovery | None | None | None |
-| **Browser Engine** | Chromium (+ detection for Firefox/WebKit) | Chromium + Firefox + WebKit | Chromium only | All major |
-
----
-
-## Contributing
-
-Weavetab is currently in **Beta** and actively welcomes community contributions.
-
-- 🐛 **Bug Reports:** [GitHub Issues](https://github.com/weavetab/mcp/issues)
-- 💡 **Feature Requests:** [GitHub Issues](https://github.com/weavetab/mcp/issues)
-- 🔧 **Pull Requests:** See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
-- 🔒 **Security:** See [SECURITY.md](SECURITY.md) — do **not** open public issues for vulnerabilities
-
-### Quick Contribution Guide
-
-```bash
-git clone https://github.com/weavetab/mcp.git
-cd mcp
-npm install
-npm run dev      # Start dev watcher
-npm test         # Run all tests before submitting a PR
-```
-
-Commit format: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`
-
----
-
-## License & Enterprise Clarification
-
-**AGPL-3.0-only** — See [LICENSE](LICENSE) for full details.
-
-### MCP Transport Clarification
-Running Weavetab MCP as an independent process and communicating with it over standard Model Context Protocol transports (`stdio` or WebSocket JSON-RPC) does **not** cause AGPL copyleft obligations to extend to your client application, IDE, or host AI models.
-
-### Commercial Licensing
-For commercial, proprietary, or embedded distribution without AGPL copyleft requirements, dual-licensing options are available. Inquire at `license@weavetab.pages.dev`.
-
----
-
-## Support
-
-| Channel | Purpose |
-|---------|---------|
-| [GitHub Issues](https://github.com/weavetab/mcp/issues) | Bug reports, feature requests |
-| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues and fixes |
-| [docs/](docs/) | Full documentation |
-| security@weavetab.pages.dev | Security vulnerabilities (private) |
-
----
-
-## Acknowledgments
-
-Built by **fy2ne** with gratitude to the [Model Context Protocol](https://modelcontextprotocol.io) community and the Chrome DevTools Protocol team for making browser automation at Layer 0 possible.
-
----
-
-> [!NOTE]
-> **Beta Release Notice:** This is v2.5.0 Beta. APIs and features may evolve as we approach stable release. Report issues on [GitHub](https://github.com/weavetab/mcp/issues).
+[Sponsor development](https://github.com/sponsors/fy2ne) &nbsp;&middot;&nbsp; [Discussions](https://github.com/weavetab/mcp/discussions) &nbsp;&middot;&nbsp; [SUPPORT.md](SUPPORT.md)

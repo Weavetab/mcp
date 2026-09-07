@@ -71,6 +71,11 @@ export interface WeavetabPermissions {
     write?: string[];
     reason?: string;
   };
+  filesystem?: {
+    read?: string[];
+    write?: string[];
+    reason?: string;
+  };
   tools?: {
     /** List of built-in tool names this plugin is permitted to override */
     override?: string[];
@@ -82,7 +87,7 @@ export interface WeavetabPermissions {
   [key: string]: any;
 }
 
-export type WeavetabManifestPermissions = WeavetabPermissions;
+export type WeavetabManifestPermissions = WeavetabPermissions | string[];
 
 export interface WeavetabManifestAuthor {
   name: string;
@@ -109,6 +114,8 @@ export interface WeavetabManifest {
   version: string;
   /** Short summary of what this plugin provides */
   description?: string;
+  /** Entry point file relative to the plugin root (e.g., 'dist/index.js') */
+  entry?: string;
   /** Single author or multiple authors with roles */
   author?: string | WeavetabManifestAuthor | (string | WeavetabManifestAuthor)[];
   /** Array of authors */
@@ -127,12 +134,14 @@ export interface WeavetabManifest {
   engines?: Record<string, string>;
   /** Supported environments */
   environments?: string[];
+  /** Whether the plugin should be lazy-loaded on demand */
+  lazy?: boolean;
   /** Tools exposed by this plugin to the MCP server */
   tools?: WeavetabManifestTool[];
   /** Default configuration template */
   defaultConfig?: Record<string, any>;
   /** Required permissions with security rationale */
-  permissions?: WeavetabPermissions;
+  permissions?: WeavetabManifestPermissions;
   /** Open source license */
   license?: string;
   [key: string]: any;
@@ -147,7 +156,59 @@ export interface WeavetabPluginTool<TArgs = any> {
   handler: (args: TArgs, session?: any, config?: any) => Promise<any>;
 }
 
+export interface DOMMutationDelta {
+  type?: "cdp_mutation" | "action_delta" | "page_update" | "dom_diff" | "rich_delta" | string;
+  timestamp?: number;
+  url?: string;
+  added?: Array<{
+    id?: string;
+    role?: string;
+    label?: string;
+    tag?: string;
+    text?: string;
+    backendNodeId?: number;
+    [key: string]: any;
+  }>;
+  removed?: Array<string | { backendNodeId?: number; tag?: string; text?: string; [key: string]: any }>;
+  changed?: Array<{
+    ref?: string;
+    role?: string;
+    label?: string;
+    attribute?: string;
+    oldValue?: any;
+    newValue?: any;
+    changes?: Record<string, { from: any; to: any }>;
+    actionable?: boolean;
+    [key: string]: any;
+  }>;
+  significantChange?: boolean;
+  stable_count?: number;
+  iframes?: any[];
+  [key: string]: any;
+}
+
+export type BeforeActionHook = (
+  tool: string,
+  args: Record<string, any>,
+  session?: any
+) => Promise<Record<string, any> | { __blocked: boolean; reason?: string } | void> | Record<string, any> | { __blocked: boolean; reason?: string } | void;
+
+export type AfterActionHook = (
+  tool: string,
+  result: any,
+  session?: any,
+  args?: Record<string, any>
+) => Promise<any> | any;
+
+export type DOMMutationHook = (
+  delta: DOMMutationDelta,
+  session?: any
+) => Promise<void> | void;
+
 export interface PluginHooksContext {
+  onBeforeAction: (handler: BeforeActionHook) => void;
+  onAfterAction: (handler: AfterActionHook) => void;
+  onDOMMutation: (handler: DOMMutationHook) => void;
   beforeToolCall: (handler: (toolName: string, args: Record<string, any>, session?: any) => Promise<any> | void) => void;
   afterToolCall: (handler: (toolName: string, args: Record<string, any>, result: any, session?: any) => Promise<any> | void) => void;
   onPageNavigate?: (handler: (url: string, session?: any) => Promise<void> | void) => void;
@@ -187,6 +248,9 @@ export interface WeavetabPluginDefinition {
   overrides?: WeavetabToolOverride[];
   removeTools?: string[];
   defaultConfig?: Record<string, any>;
+  onBeforeAction?: BeforeActionHook;
+  onAfterAction?: AfterActionHook;
+  onDOMMutation?: DOMMutationHook;
   onLoad?: (ctx: PluginContext) => Promise<void> | void;
   onUnload?: (ctx: PluginContext) => Promise<void> | void;
 }
@@ -208,8 +272,12 @@ export interface WeavetabPlugin {
   hooks?: {
     beforeToolCall: Array<(toolName: string, args: Record<string, any>, session?: any) => Promise<any> | void>;
     afterToolCall: Array<(toolName: string, args: Record<string, any>, result: any, session?: any) => Promise<any> | void>;
+    onDOMMutation: Array<DOMMutationHook>;
     onPageNavigate: Array<(url: string, session?: any) => Promise<void> | void>;
   };
+  onBeforeAction?: BeforeActionHook;
+  onAfterAction?: AfterActionHook;
+  onDOMMutation?: DOMMutationHook;
   onLoad?: (ctx: PluginContext) => Promise<void> | void;
   onUnload?: (ctx: PluginContext) => Promise<void> | void;
 }

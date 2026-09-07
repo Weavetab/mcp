@@ -8,7 +8,7 @@ import type { Config } from "../config/loader.js";
 import { getOutputDir } from "../config/loader.js";
 import fs from "node:fs";
 import path from "node:path";
-import { hideWeaveTabOverlay, restoreWeaveTabOverlay } from "../cdp/helpers.js";
+import { hideWeaveTabOverlay, restoreWeaveTabOverlay, maskSecretFieldsForCapture, restoreSecretFieldsAfterCapture } from "../cdp/helpers.js";
 
 export interface PdfOptions {
   landscape?: boolean;
@@ -32,20 +32,26 @@ export async function browserPdf(
   if (shouldHide) {
     await hideWeaveTabOverlay(session);
   }
+  await maskSecretFieldsForCapture(session);
 
-  const { data } = await session.Page.printToPDF({
-    landscape: options.landscape ?? false,
-    scale: options.scale ?? 1.0,
-    pageRanges: options.pageRanges ?? "",
-    marginTop: 0.4,    // 1cm ish
-    marginBottom: 0.4,
-    marginLeft: 0.4,
-    marginRight: 0.4,
-    printBackground: true
-  });
-
-  if (shouldHide) {
-    await restoreWeaveTabOverlay(session);
+  let data: string;
+  try {
+    const pdfRes = await session.Page.printToPDF({
+      landscape: options.landscape ?? false,
+      scale: options.scale ?? 1.0,
+      pageRanges: options.pageRanges ?? "",
+      marginTop: 0.4,    // 1cm ish
+      marginBottom: 0.4,
+      marginLeft: 0.4,
+      marginRight: 0.4,
+      printBackground: true
+    });
+    data = pdfRes.data;
+  } finally {
+    await restoreSecretFieldsAfterCapture(session);
+    if (shouldHide) {
+      await restoreWeaveTabOverlay(session);
+    }
   }
 
   // Use configured PDF directory or default

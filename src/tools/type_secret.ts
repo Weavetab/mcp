@@ -22,7 +22,7 @@ import { SessionSecretTracker, secretStore } from "../security/secrets.js";
 import { sessionRegistry } from "../state/session.js";
 import type { Config } from "../config/loader.js";
 import { getConfigAgentId } from "../config/loader.js";
-import { sendToExtension } from "../cdp/helpers.js";
+import { sendToExtension, applySecretHardening } from "../cdp/helpers.js";
 
 import { cacheActionMap, getCachedActionMap } from "../state/cache.js";
 
@@ -97,32 +97,48 @@ export async function weaveTypeSecret(
     map = await buildActionMap(session, { lite: true }, targetId);
     cacheActionMap(targetId, map);
   }
-  const query = args.id || args.target;
+  const query = args.id || args.target || (args as any).selector;
   if (!query) {
-    return { success: false, error_code: "INVALID_ARGS", message: "[!] Must provide id or target" };
+    return { success: false, error_code: "INVALID_ARGS", message: "[!] Must provide id, target, or selector" };
   }
 
-  let target = map.elements.find(el => el.id === query || el.id.endsWith(query.startsWith("w:") ? query.slice(2) : query));
-  if (!target) {
-    const matches = findAllMatches(map.elements, query);
-    if (matches.length === 0) {
-      return {
-        success: false,
-        error_code: "ELEMENT_NOT_FOUND",
-        message: `[!] Could not find input matching "${query}"`,
-      };
+  let target = map.elements.find(el => 
+    el.id === query || 
+    el.id === `w:${query}` || 
+    el.selector === query ||
+    el.id.endsWith(query.startsWith("w:") ? query.slice(2) : query)
+  );
+
+  let selector = "";
+  if (query === "focused") {
+    selector = "document.activeElement";
+  } else if (!target) {
+    if (query.startsWith("#") || query.startsWith(".") || query.startsWith("[") || query.startsWith("input")) {
+      selector = query;
+    } else {
+      const matches = findAllMatches(map.elements, query);
+      if (matches.length === 0) {
+        return {
+          success: false,
+          error_code: "ELEMENT_NOT_FOUND",
+          message: `[!] Could not find input matching "${query}"`,
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          success: false,
+          error_code: "MULTIPLE_ELEMENTS_FOUND",
+          message: `[!] Refusing to guess: found ${matches.length} matches for "${query}". Please use a more specific selector.`,
+        };
+      }
+      target = matches[0];
     }
-    if (matches.length > 1) {
-      return {
-        success: false,
-        error_code: "MULTIPLE_ELEMENTS_FOUND",
-        message: `[!] Refusing to guess: found ${matches.length} matches for "${query}". Please use a more specific selector.`,
-      };
-    }
-    target = matches[0];
   }
 
-  const selector = target.selector || `[data-wt-id="${target.id}"]`;
+  if (!selector && target) {
+    const rawId = (target.id ?? "").replace(/^w:/, "");
+    selector = target.selector || `[data-wt-id="${rawId}"]`;
+  }
 
   await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `injecting [REDACTED]...` } });
 
@@ -190,58 +206,7 @@ export async function weaveTypeSecret(
   await session.Input.insertText({ text: secretValue });
 
   // ── Step 7.5: Hardened Proxy & Shadow DOM Isolation ───────────────────────
-  await session.Runtime.callFunctionOn({
-    functionDeclaration: `function() {
-      try {
-        const el = this;
-        // 1. Redact direct .value access
-        const proto = Object.getPrototypeOf(el);
-        const origDesc = Object.getOwnPropertyDescriptor(proto, 'value');
-        if (origDesc) {
-          Object.defineProperty(el, 'value', {
-            get: function() { return '[REDACTED]'; },
-            set: origDesc.set,
-            configurable: false,
-            enumerable: true
-          });
-        }
-        
-        // 2. Defeat array spread, iteration, and coercion
-        Object.defineProperty(el, Symbol.iterator, {
-          value: function* () { yield '[REDACTED]'; },
-          configurable: false
-        });
-        Object.defineProperty(el, Symbol.toPrimitive, {
-          value: function() { return '[REDACTED]'; },
-          configurable: false
-        });
-        // 2b. Defeat JSON.stringify and structuredClone data leaks
-        Object.defineProperty(el, 'toJSON', {
-          value: function() { return '[REDACTED]'; },
-          configurable: false
-        });
-        
-        // 3. Isolate in closed shadow DOM to prevent outer-world DOM traversal
-        if (el.parentNode && !el.parentNode.shadowRoot) {
-          const wrapper = document.createElement('div');
-          wrapper.className = '__wt_secret_vault';
-          // copy styles so layout doesn't break
-          const compStyle = window.getComputedStyle(el);
-          wrapper.style.display = compStyle.display === 'inline' ? 'inline-block' : compStyle.display;
-          wrapper.style.width = compStyle.width;
-          wrapper.style.height = compStyle.height;
-          
-          el.parentNode.insertBefore(wrapper, el);
-          const shadow = wrapper.attachShadow({ mode: 'closed' });
-          shadow.appendChild(el);
-        }
-      } catch (e) {
-        // fail silently so as not to disrupt the page execution
-      }
-    }`,
-    objectId: nodeInfo.result.objectId,
-    silent: true
-  });
+  await applySecretHardening(session, nodeInfo.result.objectId, selector);
 
   // Immediately zero out the local binding after use
   // (TypeScript doesn't guarantee this but it signals intent to reviewers)
@@ -250,20 +215,22 @@ export async function weaveTypeSecret(
   const executionMs = Date.now() - startTime;
 
   // ── Step 8: Trail — key name + domain only, NEVER value ──────────────────
-  const finalRef = target.id.startsWith('w:') ? target.id : `w:${target.id}`;
-  logAction("browser_type_secret", finalRef, `[secret injected: ${args.envKey}@${currentHostname}] into ${target.label} (exec: ${executionMs}ms)`);
+  const targetLabel = target?.label || selector;
+  const targetIdStr = target?.id || query;
+  const finalRef = targetIdStr.startsWith('w:') ? targetIdStr : `w:${targetIdStr}`;
+  logAction("browser_type_secret", finalRef, `[secret injected: ${args.envKey}@${currentHostname}] into ${targetLabel} (exec: ${executionMs}ms)`);
   recordAction({
     timestamp: new Date().toISOString(),
     tool: "browser_type_secret",
     // input contains key name and domain ONLY — value is excluded intentionally
-    input: { ref: finalRef, label: target.label, envKey: args.envKey, domain: currentHostname },
+    input: { ref: finalRef, label: targetLabel, envKey: args.envKey, domain: currentHostname },
     result: { success: true },
   });
 
   // ── Step 9: Return — no secret value in result ────────────────────────────
   return {
     success: true,
-    typed_into: target.label,
+    typed_into: targetLabel,
     ref: finalRef,
     key: args.envKey,
     domain: currentHostname,

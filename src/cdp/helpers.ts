@@ -1,5 +1,6 @@
 import { logDebug } from "../audit/logger.js";
 import CDP from "chrome-remote-interface";
+import { SessionSecretTracker } from "../security/secrets.js";
 
 // ─── Message queue with backpressure ──────────────────────────────────────────
 
@@ -205,6 +206,202 @@ export async function restoreWeaveTabOverlay(session: CDP.Client): Promise<void>
     expression: `(function(){
       var style = document.getElementById('__wt_hide_overlay_styles');
       if (style) style.remove();
+    })()`,
+    returnByValue: false,
+  }).catch(() => {});
+}
+
+// ─── Secret Hardening & Containment Helpers ──────────────────────────────────
+
+export async function applySecretHardening(
+  session: CDP.Client,
+  objectId?: string,
+  selector?: string
+): Promise<void> {
+  const hardeningScript = `function() {
+    try {
+      const el = this;
+      if (!el) return;
+      // Mark as secret
+      try { el.setAttribute('data-wt-secret', 'true'); } catch (_) {}
+      
+      // 1. Redact direct .value access via instance-level property override
+      const proto = Object.getPrototypeOf(el);
+      const origDesc = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+      if (origDesc) {
+        Object.defineProperty(el, 'value', {
+          get: function() { return '[REDACTED]'; },
+          set: origDesc.set,
+          configurable: true,
+          enumerable: true
+        });
+      }
+      
+      // 2. Defeat array spread, iteration, and coercion
+      try {
+        Object.defineProperty(el, Symbol.iterator, {
+          value: function* () { yield '[REDACTED]'; },
+          configurable: true
+        });
+        Object.defineProperty(el, Symbol.toPrimitive, {
+          value: function() { return '[REDACTED]'; },
+          configurable: true
+        });
+        // Defeat JSON.stringify / structuredClone leaks
+        Object.defineProperty(el, 'toJSON', {
+          value: function() { return '[REDACTED]'; },
+          configurable: true
+        });
+      } catch(_) {}
+    } catch (e) {
+      // fail silently so as not to disrupt the page execution
+    }
+  }`;
+
+  if (objectId) {
+    await session.Runtime.callFunctionOn({
+      functionDeclaration: hardeningScript,
+      objectId,
+      silent: true
+    }).catch(() => {});
+  } else if (selector) {
+    await session.Runtime.evaluate({
+      expression: `(function(sel) {
+        const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+        if (el) {
+          (${hardeningScript}).call(el);
+        }
+      })(${JSON.stringify(selector)})`,
+      returnByValue: false
+    }).catch(() => {});
+  }
+}
+
+export async function registerAndHardenSecretField(
+  session: CDP.Client,
+  targetId: string,
+  selector: string,
+  secretValue?: string,
+  objectId?: string
+): Promise<void> {
+  try {
+    if (secretValue) {
+      SessionSecretTracker.registerSecretValue(targetId, secretValue);
+    }
+
+    let resolvedObjectId = objectId;
+    if (!resolvedObjectId && selector) {
+      const nodeInfo = await session.Runtime.evaluate({
+        expression: `(function(sel) {
+          return document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+        })(${JSON.stringify(selector)})`,
+        returnByValue: false
+      }).catch(() => null);
+      resolvedObjectId = nodeInfo?.result?.objectId;
+    }
+
+    if (resolvedObjectId) {
+      try {
+        const nodeDetails = await session.DOM.requestNode({ objectId: resolvedObjectId });
+        if (nodeDetails?.nodeId) {
+          const desc = await session.DOM.describeNode({ nodeId: nodeDetails.nodeId });
+          if (desc?.node?.backendNodeId) {
+            SessionSecretTracker.markNodeAsSecret(targetId, desc.node.backendNodeId);
+          }
+        }
+      } catch { /* DOM lookup best-effort */ }
+    }
+
+    await applySecretHardening(session, resolvedObjectId, selector);
+  } catch (err) {
+    logDebug(`[Weavetab] registerAndHardenSecretField failed: ${err}`);
+  }
+}
+
+export async function maskSecretFieldsForCapture(session: CDP.Client): Promise<void> {
+  await session.Runtime.evaluate({
+    expression: `(function() {
+      var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+      
+      function queryAllDeep(root, matchFn) {
+        var matched = [];
+        var elements = root.querySelectorAll('*');
+        for (var i = 0; i < elements.length; i++) {
+          var el = elements[i];
+          if (matchFn(el)) matched.push(el);
+          if (el.shadowRoot) {
+            matched = matched.concat(queryAllDeep(el.shadowRoot, matchFn));
+          }
+        }
+        return matched;
+      }
+
+      function isSecretNode(el) {
+        if (!el || !el.tagName) return false;
+        if (el.hasAttribute && el.hasAttribute('data-wt-secret')) return true;
+        var tag = el.tagName.toLowerCase();
+        if (tag === 'input' || tag === 'textarea') {
+          var t = (el.getAttribute('type') || '').toLowerCase();
+          var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+          var name = (el.getAttribute('name') || '').toLowerCase();
+          var id = (el.getAttribute('id') || '').toLowerCase();
+          var aria = (el.getAttribute('aria-label') || '').toLowerCase();
+          return t === 'password' || ac.includes('password') || secretRegex.test(name) || secretRegex.test(id) || secretRegex.test(aria);
+        }
+        return false;
+      }
+
+      var els = queryAllDeep(document, isSecretNode);
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        el.__wt_cap_val_backup = el.value;
+        try { el.value = ''; } catch(e) {}
+        if (el.isContentEditable) {
+          el.__wt_cap_txt_backup = el.textContent;
+          try { el.textContent = ''; } catch(e) {}
+        }
+        el.__wt_cap_sec_backup = el.style.webkitTextSecurity;
+        try { el.style.webkitTextSecurity = 'disc'; } catch(e) {}
+      }
+    })()`,
+    returnByValue: false,
+  }).catch(() => {});
+}
+
+export async function restoreSecretFieldsAfterCapture(session: CDP.Client): Promise<void> {
+  await session.Runtime.evaluate({
+    expression: `(function() {
+      function queryAllDeep(root) {
+        var matched = [];
+        var elements = root.querySelectorAll('*');
+        for (var i = 0; i < elements.length; i++) {
+          var el = elements[i];
+          if (el.__wt_cap_val_backup !== undefined || el.__wt_cap_txt_backup !== undefined || el.__wt_cap_sec_backup !== undefined) {
+            matched.push(el);
+          }
+          if (el.shadowRoot) {
+            matched = matched.concat(queryAllDeep(el.shadowRoot));
+          }
+        }
+        return matched;
+      }
+
+      var els = queryAllDeep(document);
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.__wt_cap_val_backup !== undefined) {
+          try { el.value = el.__wt_cap_val_backup; } catch(e) {}
+          delete el.__wt_cap_val_backup;
+        }
+        if (el.__wt_cap_txt_backup !== undefined) {
+          try { el.textContent = el.__wt_cap_txt_backup; } catch(e) {}
+          delete el.__wt_cap_txt_backup;
+        }
+        if (el.__wt_cap_sec_backup !== undefined) {
+          try { el.style.webkitTextSecurity = el.__wt_cap_sec_backup; } catch(e) {}
+          delete el.__wt_cap_sec_backup;
+        }
+      }
     })()`,
     returnByValue: false,
   }).catch(() => {});

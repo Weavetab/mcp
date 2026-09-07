@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/weavetab/sdk/main/schema/tool.json",
+  "title": "WeavetabToolSchema",
+  "description": "Schema definition for an individual MCP tool registered by a Weavetab plugin",
+  "type": "object",
+  "required": ["name", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique tool name (e.g., 'highlight_elements', 'block_trackers').",
+      "pattern": "^[a-zA-Z0-9_-]+$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description explaining what the tool accomplishes and how the LLM should invoke it."
+    },
+    "parameters": {
+      "type": "object",
+      "description": "JSON Schema object defining the accepted input parameters.",
+      "properties": {
+        "type": { "type": "string", "enum": ["object"] },
+        "properties": { "type": "object" },
+        "required": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "inputSchema": {
+      "type": "object",
+      "description": "MCP standard alias for parameters schema."
+    },
+    "schema": {
+      "type": "object",
+      "description": "Alternative schema definition field."
+    }
+  },
+  "additionalProperties": true
+}

@@ -17,3 +17,7 @@ src/**/*.js.map
 .weavetab/
 *.pem
 *.crx
+
+# Agent-generated audit reports and AI tool config — not product docs
+Reports/
+.clinerules

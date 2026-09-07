@@ -419,6 +419,19 @@ class SessionSecretTrackerImpl {
     return redacted;
   }
 
+  redactAll(text: string): string {
+    if (!text || typeof text !== 'string') return text;
+    let redacted = text;
+    for (const set of this.sessionSecrets.values()) {
+      for (const secret of set) {
+        if (secret && secret.length >= 3) {
+          redacted = redacted.split(secret).join('[REDACTED]');
+        }
+      }
+    }
+    return redacted;
+  }
+
   clearSession(sessionId: string): void {
     this.trackedNodes.delete(sessionId);
     this.sessionSecrets.delete(sessionId);

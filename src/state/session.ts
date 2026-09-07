@@ -97,6 +97,37 @@ export class SessionRegistry {
     }
   }
 
+  private lastActiveApp: string | null = null;
+
+  getLastActiveApp(): string | null {
+    return this.lastActiveApp;
+  }
+
+  setLastActiveApp(app?: string | null): void {
+    if (!app) {
+      this.lastActiveApp = null;
+      return;
+    }
+    const low = app.toLowerCase();
+    if (low !== "browser" && low !== "chrome" && low !== "chromium") {
+      this.lastActiveApp = low;
+    } else {
+      this.lastActiveApp = null;
+    }
+  }
+
+  findClientByTargetId(targetId: string): BrowserClient | null {
+    return this.sessions.get(targetId) || null;
+  }
+
+  getActiveElectronClients(): BrowserClient[] {
+    return Array.from(this.sessions.values()).filter(c => c.isElectron);
+  }
+
+  isBrowserSessionActive(): boolean {
+    return Array.from(this.sessions.values()).some(c => !c.isElectron);
+  }
+
   getAll(): BrowserClient[] {
     return Array.from(this.sessions.values());
   }
@@ -164,6 +195,7 @@ export class SessionRegistry {
         // heartbeat failed — tab may be dead, will be caught by getHealth()
       }
     }, HEARTBEAT_INTERVAL_MS);
+    interval.unref();
     this.heartbeatIntervals.set(targetId, interval);
   }
 

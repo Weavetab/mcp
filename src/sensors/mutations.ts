@@ -1,5 +1,6 @@
 import CDP from "chrome-remote-interface";
 import { Protocol } from "devtools-protocol";
+import { hookPipeline } from "../plugin/pipeline.js";
 
 export type MutationSummary = {
   newElements: { backendNodeId: number; tag: string; text: string; role?: string }[];
@@ -105,6 +106,18 @@ export async function watchMutations(session: CDP.Client, durationMs: number): P
     if (timeoutId) clearTimeout(timeoutId);
     // Disabling the DOM agent automatically removes all listeners.
     await DOM.disable();
+  }
+
+  if (summary.significantChange || summary.newElements.length > 0 || summary.removedElements.length > 0 || summary.attributeChanges.length > 0) {
+    const delta = {
+      type: "cdp_mutation",
+      timestamp: Date.now(),
+      added: summary.newElements.map(e => ({ backendNodeId: e.backendNodeId, tag: e.tag, text: e.text, role: e.role })),
+      removed: summary.removedElements.map(e => ({ backendNodeId: e.backendNodeId, tag: e.tag })),
+      changed: summary.attributeChanges.map(a => ({ backendNodeId: a.backendNodeId, attribute: a.attribute, newValue: a.newValue })),
+      significantChange: summary.significantChange,
+    };
+    hookPipeline.dispatchDOMMutation(delta, session).catch(() => {});
   }
 
   return summary;

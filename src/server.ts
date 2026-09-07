@@ -1,6 +1,6 @@
 /**
  * Weavetab — server.ts
- * MCP server: 43 browser automation tools with security, rate limiting, and visual overlay.
+ * MCP server: 47 browser automation tools with security, rate limiting, and visual overlay.
  * Weavetab by fy2ne
  */
 
@@ -55,13 +55,16 @@ import { detectBrowsers } from "./tools/browser_detect.js";
 import { browserThought } from "./tools/thought.js";
 import { browserCaptcha } from "./tools/captcha.js";
 import { browserEmulate } from "./tools/emulation.js";
+import { browserCheckpoint } from "./tools/checkpoint.js";
 import { getActiveEngine } from "./cdp/connector.js";
 import { resetLoopCounter } from "./intelligence/trail.js";
 import { discoverPlugins, listInstalledPlugins, loadPluginByName } from "./plugin/loader.js";
 import type { WeavetabPlugin } from "./plugin/interface.js";
+import { hookPipeline } from "./plugin/pipeline.js";
 import { agentAction } from "./sensors/pacing.js";
-import { getCachedConfig } from "./config/loader.js";
+import { getCachedConfig, getElectronApps } from "./config/loader.js";
 import { agentState } from "./state/agent.js";
+import { SessionSecretTracker } from "./security/secrets.js";
 import { sessionRegistry } from "./state/session.js";
 
 // GitHub tools
@@ -73,6 +76,7 @@ import { githubGetPr } from "./tools/github/pr.js";
 // Office document tools
 import { browserOfficeParse, browserOfficeList } from "./tools/office/index.js";
 
+const activeLoadedPlugins = new Map<string, WeavetabPlugin>();
 
 type ToolHandler<T> = (session: any, config: Config) => Promise<T>;
 
@@ -81,7 +85,7 @@ const ROLE_TOOL_ALLOW: Record<string, Set<string>> = {
   operator: new Set(["*"]),
   viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait"]),
   automation: new Set(["*"]), // Allowed all except interactive tools (enforced in isToolAllowedForRole)
-  system: new Set(["browser_thoughts", "browser_reset_loop_counter", "browser_detect", "browser_performance"]),
+  system: new Set(["browser_thoughts", "browser_reset_loop_counter", "browser_detect", "browser_performance", "browser_checkpoint"]),
 };
 
 function isToolAllowedForRole(role: Role, toolName: string): { allowed: boolean; reason?: string } {
@@ -127,6 +131,77 @@ function withTimeoutGuard<T>(fn: () => Promise<T>, timeoutMs: number, label: str
   return Promise.race([fn(), timeoutPromise]).finally(() => clearTimeout(timer!));
 }
 
+function inferTargetApp(
+  requestedApp?: string,
+  url?: string,
+  tabId?: string
+): string | undefined {
+  if (requestedApp) {
+    const lower = requestedApp.toLowerCase().trim();
+    if (lower === "browser" || lower === "chrome" || lower === "chromium") {
+      sessionRegistry.setLastActiveApp(null);
+      return undefined;
+    }
+    sessionRegistry.setLastActiveApp(lower);
+    return lower;
+  }
+
+  // 1. Infer from tabId if provided
+  if (tabId) {
+    const registered = sessionRegistry.findClientByTargetId(tabId);
+    if (registered && registered.isElectron && registered.appName) {
+      sessionRegistry.setLastActiveApp(registered.appName);
+      return registered.appName;
+    }
+  }
+
+  // 2. Infer from URL domain if provided
+  if (url) {
+    const config = getCachedConfig();
+    const apps = getElectronApps(config);
+    const u = url.toLowerCase();
+    for (const appKey of Object.keys(apps)) {
+      if (appKey === "discord" && (u.includes("discord.com") || u.startsWith("discord:"))) {
+        logAction("target_router", "auto_route", `Auto-routing URL to Electron app "${appKey}"`);
+        sessionRegistry.setLastActiveApp(appKey);
+        return appKey;
+      }
+      if (appKey === "slack" && (u.includes("slack.com") || u.startsWith("slack:"))) {
+        logAction("target_router", "auto_route", `Auto-routing URL to Electron app "${appKey}"`);
+        sessionRegistry.setLastActiveApp(appKey);
+        return appKey;
+      }
+      if (appKey === "linear" && (u.includes("linear.app") || u.startsWith("linear:"))) {
+        logAction("target_router", "auto_route", `Auto-routing URL to Electron app "${appKey}"`);
+        sessionRegistry.setLastActiveApp(appKey);
+        return appKey;
+      }
+      if (appKey === "notion" && (u.includes("notion.so") || u.startsWith("notion:"))) {
+        logAction("target_router", "auto_route", `Auto-routing URL to Electron app "${appKey}"`);
+        sessionRegistry.setLastActiveApp(appKey);
+        return appKey;
+      }
+    }
+  }
+
+  // 3. Fall back to sticky active session if no web browser is running
+  const hasActiveBrowser = sessionRegistry.isBrowserSessionActive();
+  if (!hasActiveBrowser) {
+    const lastApp = sessionRegistry.getLastActiveApp();
+    if (lastApp) {
+      return lastApp;
+    }
+    const allElectrons = sessionRegistry.getActiveElectronClients();
+    if (allElectrons.length === 1 && allElectrons[0]?.appName) {
+      const soleApp = allElectrons[0].appName;
+      sessionRegistry.setLastActiveApp(soleApp);
+      return soleApp;
+    }
+  }
+
+  return undefined;
+}
+
 async function withSecurity<T>(
   config: Config,
   toolName: string,
@@ -149,7 +224,9 @@ async function withSecurity<T>(
     }
   }
 
-  const { session } = await withTimeoutGuard(() => getOrConnect(liveConfig, targetApp), 15000, `CDP Connection (${toolName}${targetApp ? `:${targetApp}` : ''})`);
+  const resolvedTargetApp = inferTargetApp(targetApp);
+
+  const { session } = await withTimeoutGuard(() => getOrConnect(liveConfig, resolvedTargetApp), 15000, `CDP Connection (${toolName}${resolvedTargetApp ? `:${resolvedTargetApp}` : ''})`);
   agentState.setSession(session);
   (global as any).__wt_live_config = liveConfig;
 
@@ -312,6 +389,11 @@ async function withSecurity<T>(
         { type: "text" as const, text: JSON.stringify(metaOnly) },
         { type: "image" as const, data: base64Data, mimeType },
       ];
+    } else if (resultAny && typeof resultAny === 'object' && Array.isArray(resultAny.content)) {
+      // Passthrough if already conforming McpToolResult (prevents double JSON wrapping)
+      content = resultAny.content;
+    } else if (typeof result === 'string') {
+      content = [{ type: "text" as const, text: result }];
     } else {
       content = [{ type: "text" as const, text: JSON.stringify(result) }];
     }
@@ -402,13 +484,40 @@ async function withSecurity<T>(
 }
 
 function wrapError(err: unknown): { content: [{ type: "text"; text: string }]; isError: true } {
-  const message = err instanceof Error ? err.message : String(err);
+  let message = err instanceof Error ? err.message : String(err);
+  message = SessionSecretTracker.redactAll(message);
   logAction("ERROR", "server", message);
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
 export async function startServer(config: Config, transportMode: "stdio" | "ws" = "stdio", wsPort = 3000): Promise<void> {
   const server = new McpServer({ name: "Weavetab MCP", version: "3.0.0-beta" });
+
+  // Intercept server.tool to inject global plugin middleware hooks (onBeforeAction, onAfterAction)
+  const rawTool = server.tool.bind(server);
+  (server as any).tool = function (name: string, ...rest: any[]) {
+    const rawHandler = rest[rest.length - 1];
+    if (typeof rawHandler === "function") {
+      rest[rest.length - 1] = async (args: any, extra: any) => {
+        try {
+          const session = agentState.getSession() ?? sessionRegistry.getActive(config.agentId)?.session;
+          const dispatchedArgs = await hookPipeline.dispatchBeforeToolCall(name, args || {}, session);
+          const result = await rawHandler(dispatchedArgs, extra);
+          const finalResult = await hookPipeline.dispatchAfterToolCall(name, dispatchedArgs, result, session);
+          return finalResult;
+        } catch (err: any) {
+          if (err?.isBlocked || err?.__blocked) {
+            return {
+              isError: true,
+              content: [{ type: "text" as const, text: `[!] Action '${name}' blocked by plugin: ${err.message}` }],
+            };
+          }
+          throw err;
+        }
+      };
+    }
+    return (rawTool as any)(name, ...rest);
+  };
 
   // Initialize agent state manager
   agentState.setIdleTimeout(config.idleTimeout ?? 60000);
@@ -501,20 +610,23 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
         if (!args.url && !args.app) {
           throw new Error("Either 'url' or 'app' must be provided to browser_navigate.");
         }
+        const resolvedApp = inferTargetApp(args.app, args.url, args.tab_id);
         return await withSecurity(config, "browser_navigate", async (session, liveConfig) => {
           let targetSession = session;
           let targetId = "default";
           if (args.tab_id) {
             const { connectToTab } = await import("./cdp/connector.js");
-            const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
+            const client = await connectToTab(args.tab_id, undefined, undefined, undefined, resolvedApp);
             targetSession = client.session;
             targetId = args.tab_id;
           }
           if (args.url) {
-            return await agentAction(targetSession, 'navigating', () => weaveNavigate(targetSession, args.url!, liveConfig, targetId, args.force), 'browser_navigate');
+            const navResult = await agentAction(targetSession, 'navigating', () => weaveNavigate(targetSession, args.url!, liveConfig, targetId, args.force), 'browser_navigate');
+            await hookPipeline.dispatchPageNavigate(args.url, targetSession);
+            return navResult;
           }
-          return { success: true, app: args.app, message: `Connected to Electron app "${args.app}".` };
-        }, false, args.app);
+          return { success: true, app: resolvedApp, message: `Connected to Electron app "${resolvedApp}".` };
+        }, false, resolvedApp);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -561,19 +673,19 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
 // ── 4. browser_type ────────────────────────────────────────────────────────
 server.tool(
     "browser_type",
-    "Type text into a single input field (use browser_fill for smart multi-field forms). If NOT_EDITABLE, fallback to click + browser_key. Use browser_map if stuck.",
+    "Type text into an input field or currently focused element. If id/selector/label is omitted, automatically types directly into document.activeElement without needing a redundant click or browser_map. If target is already focused, skips click to prevent unfocus bugs.",
   {
-    id: z.string().optional().describe("Ref ID from browser_map. Primary targeting — always prefer this over label when you have a ref ID."),
+    id: z.string().optional().describe("Ref ID from browser_map (e.g. 'w:42'). If omitted, types directly into the currently focused element or single page input."),
     ref: z.string().optional().describe("Alias for id (e.g. 'w:42')."),
-    selector: z.string().optional().describe("CSS selector of the input field. Use when you know the exact selector."),
+    selector: z.string().optional().describe("CSS selector of the input field."),
     target: z.string().optional().describe("CSS selector or query string. Alias for selector."),
     label: z.string().optional().describe("Field label or placeholder text. Used for fuzzy matching."),
     intent: z.string().optional().describe("Semantic description of the field (e.g. 'search box', 'username field'). Checked against learned memory first."),
-    x: z.number().optional().describe("Raw X coordinate to focus before typing. Use as last resort when no id/selector/label is available."),
-    y: z.number().optional().describe("Raw Y coordinate to focus before typing. Use as last resort when no id/selector/label is available."),
-    text: z.string().describe("Text to type. If a NOT_EDITABLE error is returned: (1) use browser_click on the field, then (2) use browser_key with the text as individual keypresses."),
-    clearFirst: z.boolean().optional().describe("Wipe existing field content before typing. May break React/Vue controlled inputs — avoid unless field already has wrong text in it."),
-    paste: z.boolean().optional().describe("Instant paste mode via clipboard. Auto-enabled for text longer than 8 chars. Best for long URLs or multi-word strings."),
+    x: z.number().optional().describe("Raw X coordinate to focus before typing."),
+    y: z.number().optional().describe("Raw Y coordinate to focus before typing."),
+    text: z.string().describe("Text to type into the field."),
+    clearFirst: z.boolean().optional().describe("Wipe existing field content before typing."),
+    paste: z.boolean().optional().describe("Instant paste mode via clipboard. Auto-enabled for text longer than 8 chars."),
     include_map: z.boolean().optional().describe("Set true to include a full updated page_map in the response. Default false."),
     tab_id: z.string().optional().describe("Execute in a specific tab instead of active."),
     app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
@@ -727,7 +839,7 @@ server.tool(
   // ── 9. browser_tabs ───────────────────────────────────────────────────────
   server.tool(
     "browser_tabs",
-    "Manage browser and Electron app tabs/windows (open, switch, close, list).",
+    "Manage browser and Electron app tabs/windows (open, switch, close, list). Specify 'app' when targeting desktop apps (e.g. app: 'discord') to avoid opening web browser.",
     {
       action: z.enum(["list", "open", "close", "switch", "list_windows", "focus_window", "consolidate", "heal"]).describe("Action to perform. 'consolidate' deduplicates tabs. 'heal' recovers crashed tabs."),
       url: z.string().optional().describe("URL to open (required for 'open' action)."),
@@ -740,36 +852,37 @@ server.tool(
     },
     async ({ action, url, app, tabId, tabIds, force, windowId, reuse }) => {
       try {
+        const resolvedApp = inferTargetApp(app, url, tabId || (tabIds && tabIds.length > 0 ? tabIds[0] : undefined));
         return await withSecurity(config, "browser_tabs", async (_, liveConfig) => {
-          if (action === "list") return await WeavetabList(liveConfig, app);
+          if (action === "list") return await WeavetabList(liveConfig, resolvedApp);
           if (action === "open") {
             if (!url) throw new Error("url is required for action: open");
-            return await WeavetabOpen(url, liveConfig, reuse !== false, app);
+            return await WeavetabOpen(url, liveConfig, reuse !== false, resolvedApp);
           }
           if (action === "switch") {
             if (!tabId) throw new Error("tabId is required for action: switch");
-            return await WeavetabSwitch(tabId, liveConfig, app);
+            return await WeavetabSwitch(tabId, liveConfig, resolvedApp);
           }
           if (action === "close") {
-            if (tabIds && tabIds.length > 0) return await WeavetabCloseBatch(tabIds, liveConfig, force, app);
+            if (tabIds && tabIds.length > 0) return await WeavetabCloseBatch(tabIds, liveConfig, force, resolvedApp);
             if (!tabId) throw new Error("tabId or tabIds is required for action: close");
-            return await WeavetabClose(tabId, liveConfig, force, app);
+            return await WeavetabClose(tabId, liveConfig, force, resolvedApp);
           }
           if (action === "list_windows") {
-            return await weaveWindowList(liveConfig, app);
+            return await weaveWindowList(liveConfig, resolvedApp);
           }
           if (action === "focus_window") {
             if (windowId === undefined) throw new Error("windowId is required for action: focus_window");
-            return await weaveFocusWindow(windowId, liveConfig, app);
+            return await weaveFocusWindow(windowId, liveConfig, resolvedApp);
           }
           if (action === "consolidate") {
-            return await WeavetabConsolidate(liveConfig, app);
+            return await WeavetabConsolidate(liveConfig, resolvedApp);
           }
           if (action === "heal") {
-            return await WeavetabHeal(liveConfig, app);
+            return await WeavetabHeal(liveConfig, resolvedApp);
           }
           throw new Error("Invalid action");
-        }, false, app);
+        }, false, resolvedApp);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -867,13 +980,14 @@ server.tool(
   // ── 13. browser_pointer ───────────────────────────────────────────────────────
   server.tool(
     "browser_pointer",
-    "Advanced pointer control (hover, drag).",
+    "Advanced pointer control (hover, click, double_click, drag_and_drop, hover_chain). Use hover_chain for Photoshop/Photopea, Figma, and multi-level flyout submenus.",
     {
-      action: z.enum(["hover", "click", "double_click", "drag_and_drop"]).describe("Action to perform."),
+      action: z.enum(["hover", "click", "double_click", "drag_and_drop", "hover_chain"]).optional().describe("Action to perform (default: click, or hover_chain if hover_chain array is provided)."),
       ref: z.string().optional().describe("Ref ID of the target element (e.g. w:42)."),
       id: z.string().optional().describe("Alternative element ID / Ref ID from browser_map."),
       selector: z.string().optional().describe("CSS Selector of the target element."),
       target: z.string().optional().describe("Alternative target element identifier or query."),
+      label: z.string().optional().describe("Target element label or text."),
       x: z.number().optional().describe("Raw X coordinate (fallback)."),
       y: z.number().optional().describe("Raw Y coordinate (fallback)."),
       end_ref: z.string().optional().describe("Destination Ref ID (only for drag_and_drop)."),
@@ -884,6 +998,9 @@ server.tool(
       end_y: z.number().optional().describe("Destination Y coordinate (only for drag_and_drop)."),
       waitForChild: z.string().optional().describe("CSS Selector of a child element to wait for (only for hover)."),
       holdMs: z.number().optional().describe("Milliseconds to hold the pointer down (only for hover)."),
+      hover_chain: z.array(z.string()).optional().describe("Array of element ref IDs, selectors, or labels to hover sequentially and click the last one (e.g. ['File', 'Export As', 'PNG']). Perfect for Photoshop/Photopea, Figma, Canva, and multi-level flyout submenus."),
+      chain: z.array(z.any()).optional().describe("Advanced chain step array of { action, ref, label, selector, x, y, holdMs }."),
+      clickFinal: z.boolean().optional().describe("Default true. Whether to click the final element in the hover chain."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -924,12 +1041,20 @@ server.tool(
   // ── 14b. browser_fill ──────────────────────────────────────────────────────
   server.tool(
     "browser_fill",
-    "Smart multi-field form-filling. Best for big complex forms to save round-trips.",
+    "Smart multi-field form-filling and input inspector. Call with scan:true (or empty) to get a lightweight list of all editable inputs on the page without dumping the full DOM. Fill multiple fields in a single turn.",
     {
       fields: z.array(z.object({
-        ref: z.string().describe("Element ref ID (w:NN) from browser_map."),
+        ref: z.string().optional().describe("Element ref ID (w:NN) from browser_map or input scan."),
+        selector: z.string().optional().describe("CSS selector of the field."),
+        target: z.string().optional().describe("Alternative selector or query."),
+        name: z.string().optional().describe("HTML name attribute of the field."),
+        label: z.string().optional().describe("Label or placeholder text."),
         value: z.string().describe("Value to fill/select/type into the field."),
-      })).describe("Array of field ref+value pairs to fill sequentially."),
+      })).optional().describe("Array of field ref+value pairs to fill sequentially."),
+      scan: z.boolean().optional().describe("Set true to discover and return all fillable inputs on the page (with ref IDs, types, and values) in ~30 tokens without full browser_map."),
+      inputs: z.boolean().optional().describe("Alias for scan."),
+      scan_only: z.boolean().optional().describe("Validate field types without mutating DOM."),
+      blast_mode: z.boolean().optional().describe("Fill all fields simultaneously in a single CDP eval round-trip."),
       submit: z.string().optional().describe("Optional ref ID (w:NN) of a submit button to click after filling all fields."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -1000,9 +1125,11 @@ server.tool(
   // ── 22. browser_find ────────────────────────────────────────────────────────
   server.tool(
     "browser_find",
-    "Sub-5ms CDP text search. Zero token waste. Best for locating specific keywords/text on page without a full DOM walk. No refs returned (use browser_map for refs). No shadow roots/regex.",
+    "Instant text & keyword search across page text, labels, and placeholders. Returns matched element coordinates, selectors, and ref IDs.",
     {
-      query: z.string().describe("Exact text query to find on the page."),
+      query: z.string().describe("Text or keyword query to search for on the page."),
+      all: z.boolean().optional().describe("Set true to return all matching elements on the page (default false returns first match)."),
+      limit: z.number().optional().describe("Max number of matches to return when all: true (default 10)."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1369,11 +1496,11 @@ server.tool(
   // ── 37. browser_detect ─────────────────────────────────────────────────────
   server.tool(
     "browser_detect",
-    "Detect available browsers on the machine.",
+    "CRITICAL INITIALIZATION TOOL. Detect available browsers and configured desktop apps (Discord, Slack, etc.). Call this FIRST before interacting with the environment to know if apps are online/offline and what tabs they have open.",
     {},
     async () => {
       try {
-        const result = detectBrowsers(getActiveEngine());
+        const result = await detectBrowsers(getActiveEngine());
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) { return wrapError(e); }
     }
@@ -1573,8 +1700,26 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     }
   );
 
+  // ── 45. browser_checkpoint ─────────────────────────────────────────────────
+  server.tool(
+    "browser_checkpoint",
+    "Snapshot and restore browser state (cookies, localStorage, sessionStorage, and scroll/URL) into named checkpoints to time-travel and rollback failed automation branches.",
+    {
+      action: z.enum(["save", "restore", "list", "delete"]).describe("Action to perform: 'save' a new checkpoint, 'restore' an existing checkpoint, 'list' all checkpoints, or 'delete' a checkpoint."),
+      name: z.string().optional().describe("Checkpoint name identifier (required for 'save', 'restore', 'delete')."),
+      includeDom: z.boolean().optional().describe("Whether to include a lightweight DOM snapshot during 'save' (default false)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
+    },
+    async (args) => {
+      try {
+        return await withSecurity(config, "browser_checkpoint", async (session, liveConfig) => {
+          return await browserCheckpoint(session, args as any, liveConfig);
+        }, false, args.app);
+      } catch (e) { return wrapError(e); }
+    }
+  );
 
-  // ── Prompts ──────────────────────────────────────────────────────────────────
+
   // page_context: zero-shot context injection. Invoke with /page_context
   // in any MCP client that supports prompts (Claude Desktop, etc.).
   server.prompt(
@@ -1719,10 +1864,19 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     const overriddenNames: string[] = [];
     const removedNames: string[] = [];
 
+    // Register any hooks declared in the plugin
+    if (plugin.hooks) {
+      hookPipeline.registerPluginHooks(plugin.name, plugin.hooks);
+    }
+
     // 1. Tool Removals (disable built-in tools)
+    const manifestPerms = plugin.manifest?.permissions;
+    const manifestToolsRemove = Array.isArray(manifestPerms)
+      ? []
+      : manifestPerms?.tools?.remove || [];
     const toRemove = [
       ...(plugin.removeTools || []),
-      ...(plugin.manifest?.permissions?.tools?.remove || []),
+      ...manifestToolsRemove,
     ];
     for (const toolName of toRemove) {
       if ((server as any)._registeredTools?.[toolName]) {
@@ -1753,14 +1907,16 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
               ov.name,
               async (session, liveConfig) => {
                 const wrappedOrig = existingTool
-                  ? async (origArgs: Record<string, any>, _sess: any, _cfg: any) => {
-                      const res = await existingTool.handler(origArgs, {});
+                  ? async (origArgs: Record<string, any>, origSess?: any, origCfg?: any) => {
+                      const finalSess = origSess || session;
+                      const finalCfg = origCfg || liveConfig;
+                      const res = await existingTool.handler(origArgs, finalSess, finalCfg);
                       return res;
                     }
                   : undefined;
 
                 const result = await ov.handler(args, session, liveConfig, wrappedOrig);
-                return { content: [{ type: "text", text: JSON.stringify(result) }] };
+                return result;
               },
               isOfficial
             );
@@ -1776,12 +1932,13 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     const newTools = plugin.tools || [];
     for (const td of newTools) {
       if ((server as any)._registeredTools?.[td.name]) {
+        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} registered tool "${td.name}" which replaced an existing tool.\x1b[0m\n`);
         delete (server as any)._registeredTools[td.name];
       }
       server.tool(
         td.name,
         td.description,
-        (td.schema as any) || {},
+        (td.schema as any) || (td as any).parameters || {},
         async (args: any) => {
           try {
             return await withSecurity(
@@ -1789,7 +1946,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
               td.name,
               async (session, liveConfig) => {
                 const result = await td.handler(args, session, liveConfig);
-                return { content: [{ type: "text", text: JSON.stringify(result) }] };
+                return result;
               },
               isOfficial
             );
@@ -1801,35 +1958,84 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       addedNames.push(td.name);
     }
 
-    // Pass the SDK context so the plugin can dynamically register tools itself
-    const pluginCtx = {
-        mcp: {
-            registerTool: (tool: any) => {
-                server.tool(tool.name, tool.description, tool.schema, async (args: any) => {
-                    return await tool.handler(args);
-                });
-            }
+    // Pass the rich SDK context so dynamic tool registrations receive full security & session
+    const fullPluginCtx = (plugin as any)._context;
+    if (fullPluginCtx && fullPluginCtx.mcp) {
+      fullPluginCtx.mcp.registerTool = (tool: any) => {
+        if ((server as any)._registeredTools?.[tool.name]) {
+          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic tool "${tool.name}" replaced an existing tool.\x1b[0m\n`);
+          delete (server as any)._registeredTools[tool.name];
         }
-    };
+        server.tool(tool.name, tool.description || "", tool.schema || tool.parameters || {}, async (args: any) => {
+          return await withSecurity(
+            config,
+            tool.name,
+            async (session, liveConfig) => {
+              const result = await tool.handler(args, session, liveConfig);
+              return result;
+            },
+            isOfficial
+          );
+        });
+      };
+
+      fullPluginCtx.mcp.overrideTool = (toolName: string, overrideHandler: any) => {
+        const existingTool = (server as any)._registeredTools?.[toolName];
+        if (existingTool) {
+          delete (server as any)._registeredTools[toolName];
+        }
+        server.tool(toolName, `Tool overridden by ${plugin.name}`, {}, async (args: any) => {
+          return await withSecurity(
+            config,
+            toolName,
+            async (session, liveConfig) => {
+              const wrappedOrig = existingTool
+                ? async (origArgs: Record<string, any>, origSess?: any, origCfg?: any) => {
+                    const finalSess = origSess || session;
+                    const finalCfg = origCfg || liveConfig;
+                    return await existingTool.handler(origArgs, finalSess, finalCfg);
+                  }
+                : undefined;
+              const result = await overrideHandler(args, session, liveConfig, wrappedOrig);
+              return result;
+            },
+            isOfficial
+          );
+        });
+      };
+
+      fullPluginCtx.mcp.removeTool = (toolName: string) => {
+        if ((server as any)._registeredTools?.[toolName]) {
+          delete (server as any)._registeredTools[toolName];
+        }
+      };
+
+      fullPluginCtx.mcp.unregisterTool = (toolName: string) => {
+        if ((server as any)._registeredTools?.[toolName]) {
+          delete (server as any)._registeredTools[toolName];
+        }
+      };
+    }
 
     if (typeof plugin.onLoad === "function") {
       try {
-        await plugin.onLoad(pluginCtx as any);
+        await plugin.onLoad(fullPluginCtx || (plugin as any)._context);
       } catch (err: any) {
         process.stderr.write(`  \u001b[31m[!] Plugin ${plugin.name} onLoad failed: ${err?.message}\u001b[0m\n`);
       }
     }
     
     loadedPluginNames.add(plugin.name);
+    activeLoadedPlugins.set(plugin.name, plugin);
     process.stderr.write(`  [Plugin Loaded] ${plugin.name} v${plugin.version}\n`);
     
     // Notify the client that tools have changed
     try {
-        if ((server as any).server) {
-            (server as any).server.sendToolListChanged();
-        }
-    } catch(e) {
-        // Ignore if client doesn't support it or not connected yet
+      if ((server as any).server && typeof (server as any).server.sendToolListChanged === "function") {
+        (server as any).server.sendToolListChanged();
+      }
+    } catch {
+      // Ignore if client doesn't support it or not connected yet
     }
   };
 
@@ -1839,48 +2045,48 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     "List all available Weavetab plugins that can be loaded.",
     {},
     async () => {
-        const installed = listInstalledPlugins();
-        const available = installed
-            .filter(info => !loadedPluginNames.has(info.packageName))
-            .map(info => `- ${info.packageName}: ${info.manifest?.description || "No description"}`);
-            
-        if (available.length === 0) {
-            return { content: [{ type: "text", text: "No un-loaded plugins available." }] };
-        }
-        return { content: [{ type: "text", text: `Available plugins:\n${available.join("\n")}\n\nUse load_plugin to load one.` }] };
+      const installed = listInstalledPlugins();
+      const available = installed
+        .filter(info => !loadedPluginNames.has(info.packageName))
+        .map(info => `- ${info.packageName}: ${info.manifest?.description || "No description"}`);
+          
+      if (available.length === 0) {
+        return { content: [{ type: "text", text: "No un-loaded plugins available." }] };
+      }
+      return { content: [{ type: "text", text: `Available plugins:\n${available.join("\n")}\n\nUse load_plugin with the plugin package name to load one.` }] };
     }
   );
 
   server.tool(
     "load_plugin",
-    "Load a Weavetab plugin into the MCP context dynamically.",
+    "Load any Weavetab plugin dynamically by npm package name (e.g. '@fy2ne/wt-youtube', 'my-plugin').",
     {
-        name: z.string().describe("The exact name of the plugin to load")
+      name: z.string().describe("The exact npm package name of the plugin to load (e.g. '@fy2ne/wt-youtube', 'my-plugin')")
     },
     async ({ name }) => {
-        if (loadedPluginNames.has(name)) {
-            return { content: [{ type: "text", text: `Plugin ${name} is already loaded.` }] };
-        }
-        
-        const plugin = loadPluginByName(name);
-        if (!plugin) {
-            return { content: [{ type: "text", text: `Plugin ${name} not found.` }] };
-        }
-        
-        await registerPluginTools(plugin);
-        
-        return { content: [{ type: "text", text: `Successfully loaded plugin ${name}. The tools have been registered in your context.` }] };
+      if (loadedPluginNames.has(name)) {
+        return { content: [{ type: "text", text: `Plugin ${name} is already loaded.` }] };
+      }
+      
+      const plugin = loadPluginByName(name);
+      if (!plugin) {
+        return { content: [{ type: "text", text: `Plugin "${name}" not found. Make sure it is installed via "weavetab plugin add ${name}".` }] };
+      }
+      
+      await registerPluginTools(plugin);
+      const toolsList = (plugin.tools || []).map((t: any) => t.name).join(", ");
+      
+      return { content: [{ type: "text", text: `Successfully loaded plugin ${name}. Tools registered: ${toolsList || "(dynamic tools registered)"}` }] };
     }
   );
 
-  // We load official core plugins by default, but leave others lazy.
+  // Auto-load plugins by default unless explicitly marked with lazy: true
   const allPlugins = discoverPlugins();
   for (const plugin of allPlugins) {
-      const trust = resolvePluginTrust(plugin.name, verifiedPackages);
-      const isLazy = plugin.manifest?.environments?.includes("mcp");
-      if (trust.tier === "official" || !isLazy) {
-          await registerPluginTools(plugin);
-      }
+    const isExplicitlyLazy = plugin.manifest?.lazy === true;
+    if (!isExplicitlyLazy) {
+      await registerPluginTools(plugin);
+    }
   }
 
   let transport;
@@ -1932,6 +2138,27 @@ let cleanupCalled = false;
 async function cleanup() {
   if (cleanupCalled) return;
   cleanupCalled = true;
+
+  // Run plugin onUnload hooks and clear hook pipeline
+  try {
+    for (const plugin of activeLoadedPlugins.values()) {
+      if (typeof plugin.onUnload === "function") {
+        try {
+          plugin.onUnload((plugin as any)._context);
+        } catch (e: any) {
+          process.stderr.write(`[Weavetab] Error in plugin "${plugin.name}" onUnload: ${e?.message || e}\n`);
+        }
+      }
+    }
+    activeLoadedPlugins.clear();
+    hookPipeline.clearAllHooks();
+  } catch { /* non-fatal */ }
+
+  // Stop config file watcher handle
+  try {
+    const { stopConfigWatcher } = await import("./config/loader.js");
+    stopConfigWatcher();
+  } catch { /* non-fatal */ }
 
   if ((global as any).__wt_is_server) {
     // In server mode the browser must survive server restarts. Only cancel

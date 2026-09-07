@@ -21,6 +21,13 @@ async function getSelector(session: CDP.Client, options: SelectOptions, config: 
   
   if (options.ref || options.id) {
     const ref = (options.ref || options.id) as string;
+    if (ref.startsWith("w:")) {
+      return `[data-wt-id="${ref.slice(2)}"]`;
+    }
+    if (ref.startsWith("#") || ref.startsWith(".") || ref.startsWith("[")) {
+      return ref;
+    }
+
     let targetId = "default";
     const active = sessionRegistry.getActive(getConfigAgentId(config));
     if (active) targetId = active.targetId;
@@ -34,12 +41,12 @@ async function getSelector(session: CDP.Client, options: SelectOptions, config: 
       cacheActionMap(targetId, map);
     }
 
-    const element = map.elements.find(el => el.id === ref || el.id.endsWith(ref.startsWith("w:") ? ref.slice(2) : ref));
+    const element = map.elements.find(el => el.id === ref || el.label === ref || el.id.endsWith(ref.startsWith("w:") ? ref.slice(2) : ref));
     if (element) {
       const sel = safeSelector(element);
       if (sel) return sel;
     }
-    throw new Error(`Could not resolve element for ref/id: ${ref}`);
+    return `[name="${ref}"], #${ref}, [aria-label="${ref}"]`;
   }
 
   if (options.nodeId) {

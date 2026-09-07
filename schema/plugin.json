@@ -1,0 +1,222 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/weavetab/sdk/main/schema/plugin.json",
+  "title": "WeavetabPluginManifest",
+  "description": "Schema definition for Weavetab plugin manifest (weavetab.json)",
+  "type": "object",
+  "required": ["name", "version"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "URL to the JSON schema for validation and autocompletion."
+    },
+    "name": {
+      "type": "string",
+      "description": "Unique plugin package name (e.g., '@fy2ne/wt-youtube', 'my-plugin').",
+      "pattern": "^(?:@[a-z0-9-*~][a-z0-9-*._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version string (e.g., '1.0.0')."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable summary of what the plugin provides."
+    },
+    "entry": {
+      "type": "string",
+      "description": "Entry point file relative to the plugin root (e.g., 'dist/index.js'). Defaults to 'dist/index.js' or package.json main."
+    },
+    "author": {
+      "description": "Plugin author name or author object with contact details.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "email": { "type": "string" },
+            "url": { "type": "string" },
+            "role": { "type": "string" }
+          },
+          "required": ["name"]
+        }
+      ]
+    },
+    "authors": {
+      "type": "array",
+      "description": "List of plugin contributors or co-authors.",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "email": { "type": "string" },
+              "url": { "type": "string" },
+              "role": { "type": "string" }
+            },
+            "required": ["name"]
+          }
+        ]
+      }
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX license identifier (e.g., 'MIT', 'Apache-2.0')."
+    },
+    "engines": {
+      "type": "object",
+      "description": "Engine requirements for the plugin runtime.",
+      "properties": {
+        "weavetab": {
+          "type": "string",
+          "description": "Semver range of compatible Weavetab versions (e.g., '^2.5.0-beta.3')."
+        },
+        "node": {
+          "type": "string",
+          "description": "Semver range of compatible Node.js versions."
+        }
+      },
+      "additionalProperties": { "type": "string" }
+    },
+    "environments": {
+      "type": "array",
+      "description": "Environments where this plugin can execute (e.g. ['mcp', 'cli', 'browser']).",
+      "items": { "type": "string" }
+    },
+    "lazy": {
+      "type": "boolean",
+      "description": "If true, the plugin will not be loaded into the MCP server automatically at startup, but on demand."
+    },
+    "defaultConfig": {
+      "type": "object",
+      "description": "Default configuration template written to ~/.weavetab/plugins/<name>/config.json.",
+      "additionalProperties": true
+    },
+    "permissions": {
+      "description": "Requested security capabilities and reasons.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "config": {
+              "type": "object",
+              "properties": {
+                "read": { "type": "boolean" },
+                "write": { "type": "boolean" },
+                "default": { "type": "object" },
+                "reason": { "type": "string" }
+              }
+            },
+            "extension": {
+              "type": "object",
+              "properties": {
+                "hud": { "type": "boolean" },
+                "overlay": { "type": "boolean" },
+                "styles": { "type": "boolean" },
+                "scripts": { "type": "boolean" },
+                "reason": { "type": "string" }
+              }
+            },
+            "network": {
+              "type": "object",
+              "properties": {
+                "domains": { "type": "array", "items": { "type": "string" } },
+                "hosts": { "type": "array", "items": { "type": "string" } },
+                "intercept": { "type": "boolean" },
+                "reason": { "type": "string" }
+              }
+            },
+            "cdp": {
+              "type": "object",
+              "properties": {
+                "evaluate": { "type": "boolean" },
+                "navigate": { "type": "boolean" },
+                "click": { "type": "boolean" },
+                "input": { "type": "boolean" },
+                "screenshot": { "type": "boolean" },
+                "dom": { "type": "boolean" },
+                "reason": { "type": "string" }
+              },
+              "additionalProperties": true
+            },
+            "fs": {
+              "type": "object",
+              "properties": {
+                "read": { "type": "array", "items": { "type": "string" } },
+                "write": { "type": "array", "items": { "type": "string" } },
+                "reason": { "type": "string" }
+              }
+            },
+            "filesystem": {
+              "type": "object",
+              "properties": {
+                "read": { "type": "array", "items": { "type": "string" } },
+                "write": { "type": "array", "items": { "type": "string" } },
+                "reason": { "type": "string" }
+              }
+            },
+            "tools": {
+              "type": "object",
+              "properties": {
+                "override": { "type": "array", "items": { "type": "string" } },
+                "remove": { "type": "array", "items": { "type": "string" } },
+                "hooks": { "type": "boolean" },
+                "reason": { "type": "string" }
+              }
+            },
+            "hooks": {
+              "type": "object",
+              "description": "Permissions for registering lifecycle and interceptor middleware hooks.",
+              "properties": {
+                "onBeforeAction": { "type": "boolean" },
+                "onAfterAction": { "type": "boolean" },
+                "onDOMMutation": { "type": "boolean" },
+                "reason": { "type": "string" }
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Legacy array format for permissions (e.g. ['browser.evaluate', 'browser.navigate'])."
+        }
+      ]
+    },
+    "middleware": {
+      "type": "object",
+      "description": "Enterprise middleware interceptor hooks declared by the plugin.",
+      "properties": {
+        "onBeforeAction": { "type": "boolean" },
+        "onAfterAction": { "type": "boolean" },
+        "onDOMMutation": { "type": "boolean" }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "description": "Statically declared MCP tools exposed by the plugin.",
+      "items": {
+        "type": "object",
+        "required": ["name", "description"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "parameters": { "type": "object" },
+          "inputSchema": { "type": "object" },
+          "schema": { "type": "object" }
+        }
+      }
+    },
+    "keywords": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "homepage": { "type": "string" },
+    "repository": { "type": "string" }
+  },
+  "additionalProperties": true
+}

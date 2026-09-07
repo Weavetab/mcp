@@ -3,12 +3,20 @@ import type { Config } from "../config/loader.js";
 import { getConfigAgentId } from "../config/loader.js";
 import { logAction, logDebug } from "../audit/logger.js";
 import { recordAction, detectStuckLoop, detectCrossToolLoop, trackToolCall } from "../intelligence/trail.js";
-import { sendToExtension } from "../cdp/helpers.js";
+import { sendToExtension, registerAndHardenSecretField } from "../cdp/helpers.js";
 import { confirmChange } from "../cdp/confirm.js";
 import { verifyActionability } from "../sensors/actionability.js";
+import { SessionSecretTracker } from "../security/secrets.js";
+import { sessionRegistry } from "../state/session.js";
+import { recoverDetachedRef } from "../cdp/walker.js";
 
 export interface FillField {
-  ref: string;
+  ref?: string;
+  selector?: string;
+  target?: string;
+  name?: string;
+  label?: string;
+  placeholder?: string;
   value: string;
 }
 
@@ -24,6 +32,8 @@ export interface FillOptions {
   fields?: FillField[];
   submit?: string;
   scan_only?: boolean;
+  scan?: boolean;
+  inputs?: boolean;
   blast_mode?: boolean;
   /** Grid-fill mode for Google Sheets and other canvas-rendered spreadsheets.
    *  Provide cell addresses in A1 notation with their values.
@@ -37,6 +47,18 @@ export interface FillResult {
   succeeded: number;
   failed: number;
   submitted: boolean;
+  inputs?: Array<{
+    ref: string;
+    tag: string;
+    type: string;
+    name?: string;
+    label?: string;
+    placeholder?: string;
+    value: string;
+    focused?: boolean;
+    disabled?: boolean;
+    visible?: boolean;
+  }>;
   results: {
     ref: string;
     field_type: string;
@@ -50,9 +72,21 @@ export interface FillResult {
 }
 
 
-function toSelector(ref: string): string {
-  const refId = ref.startsWith("w:") ? ref.split(":")[1] : null;
-  return refId ? `[data-wt-id="${refId}"]` : ref;
+function toSelector(fieldOrRef: FillField | string): string {
+  if (typeof fieldOrRef === "string") {
+    const refId = fieldOrRef.startsWith("w:") ? fieldOrRef.split(":")[1] : null;
+    return refId ? `[data-wt-id="${refId}"]` : fieldOrRef;
+  }
+  const f = fieldOrRef;
+  if (f.ref) {
+    const refId = f.ref.startsWith("w:") ? f.ref.split(":")[1] : null;
+    return refId ? `[data-wt-id="${refId}"]` : f.ref;
+  }
+  if (f.selector) return f.selector;
+  if (f.target) return f.target;
+  if (f.name) return `[name="${f.name}"]`;
+  if (f.placeholder) return `[placeholder="${f.placeholder}"]`;
+  return "";
 }
 
 function esc(s: string): string {
@@ -98,7 +132,15 @@ async function detectFieldType(session: CDP.Client, selector: string): Promise<{
       if (type === 'checkbox' || type === 'radio' || type === 'custom-checkbox' || type === 'custom-radio') {
         fillable = !el.disabled && ariaDisabled !== 'true';
       }
-      var isSecret = el.hasAttribute('data-wt-secret') || (el.tagName === 'INPUT' && el.type === 'password');
+      var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+      var isSecret = el.hasAttribute('data-wt-secret') ||
+        (el.tagName === 'INPUT' && (
+          t === 'password' ||
+          secretRegex.test(el.getAttribute('autocomplete') || '') ||
+          secretRegex.test(el.getAttribute('name') || '') ||
+          secretRegex.test(el.getAttribute('id') || '') ||
+          secretRegex.test(el.getAttribute('aria-label') || '')
+        ));
       return JSON.stringify({ exists: true, type: type, fillable: fillable, isSecret: isSecret });
     })()`,
     returnByValue: true,
@@ -123,11 +165,20 @@ async function getFieldState(session: CDP.Client, selector: string, type: string
         var inner = el.querySelector('input, textarea, select');
         if (inner) el = inner;
       }
-      var s = { exists: "true" };
+      var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+      var isSecret = el.hasAttribute('data-wt-secret') ||
+        (el.tagName === 'INPUT' && (
+          (el.type || '').toLowerCase() === 'password' ||
+          secretRegex.test(el.getAttribute('autocomplete') || '') ||
+          secretRegex.test(el.getAttribute('name') || '') ||
+          secretRegex.test(el.getAttribute('id') || '') ||
+          secretRegex.test(el.getAttribute('aria-label') || '')
+        ));
+      var s = { exists: "true", isSecret: isSecret ? "true" : "false" };
       if (el.tagName === 'SELECT') {
         var idx = el.selectedIndex;
         s.selectedIndex = String(idx);
-        s.value = el.value;
+        s.value = isSecret ? '[REDACTED]' : el.value;
         s.text = idx >= 0 ? el.options[idx].text : "";
       } else if (el.type === 'checkbox' || el.type === 'radio' || type === 'custom-checkbox' || type === 'custom-radio') {
         // Native checkbox/radio uses .checked; ARIA elements use aria-checked
@@ -136,9 +187,9 @@ async function getFieldState(session: CDP.Client, selector: string, type: string
         s.checked = isChecked ? "true" : "false";
         if (ariaChecked !== null) s.ariaChecked = ariaChecked;
       } else if (el.isContentEditable) {
-        s.text = el.textContent || "";
+        s.text = isSecret ? '[REDACTED]' : (el.textContent || "");
       } else {
-        s.value = el.value;
+        s.value = isSecret ? '[REDACTED]' : el.value;
       }
       return JSON.stringify(s);
     })(${esc(type)})`,
@@ -474,14 +525,104 @@ export async function browserFill(
   const startMs = Date.now();
   const results: FillResult["results"] = [];
 
+  // ── Input discovery mode: scan and return all inputs on the page ──
+  if (options.scan || options.inputs || (!options.fields || options.fields.length === 0)) {
+    try {
+      const scanRes = await session.Runtime.evaluate({
+        expression: `(function() {
+          const all = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea, select, [role="textbox"], [role="searchbox"], [role="combobox"], [role="checkbox"], [role="radio"], [role="switch"], [contenteditable="true"]'));
+          const activeEl = document.activeElement;
+          
+          return JSON.stringify(all.map((el, i) => {
+            const rect = el.getBoundingClientRect();
+            const isVisible = rect.width > 0 && rect.height > 0 && rect.top < window.innerHeight && rect.bottom > 0;
+            const tag = el.tagName.toLowerCase();
+            const type = (el.getAttribute('type') || (tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : 'text')).toLowerCase();
+            const role = el.getAttribute('role') || '';
+            
+            let label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || '';
+            if (!label && el.id) {
+              const lbl = document.querySelector('label[for="' + el.id + '"]');
+              if (lbl) label = lbl.innerText.trim();
+            }
+            if (!label && el.closest('label')) {
+              label = el.closest('label').innerText.trim();
+            }
+            if (!label) {
+              label = el.getAttribute('name') || '';
+            }
+            
+            var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+            var isSecret = el.hasAttribute('data-wt-secret') ||
+              (el.tagName === 'INPUT' && (
+                type === 'password' ||
+                secretRegex.test(el.getAttribute('autocomplete') || '') ||
+                secretRegex.test(el.getAttribute('name') || '') ||
+                secretRegex.test(el.getAttribute('id') || '') ||
+                secretRegex.test(el.getAttribute('aria-label') || '')
+              ));
+
+            let val = '';
+            if (isSecret) {
+              val = '[REDACTED]';
+            } else if (type === 'checkbox' || type === 'radio' || role === 'checkbox' || role === 'radio' || role === 'switch') {
+              val = el.checked !== undefined ? String(el.checked) : (el.getAttribute('aria-checked') || 'false');
+            } else if (tag === 'select') {
+              val = el.options && el.selectedIndex >= 0 && el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : (el.value || '');
+            } else if (el.isContentEditable) {
+              val = (el.textContent || '').trim().slice(0, 40);
+            } else {
+              val = el.value !== undefined ? String(el.value).slice(0, 40) : '';
+            }
+            
+            const wtId = el.getAttribute('data-wt-id');
+            const ref = wtId ? ('w:' + wtId) : (el.id ? ('#' + el.id) : (el.name ? ('[name="' + el.name + '"]') : ('input:' + i)));
+            const isFocused = el === activeEl || (activeEl && el.contains(activeEl));
+            
+            return {
+              ref,
+              tag,
+              type: role || type,
+              name: el.getAttribute('name') || undefined,
+              label: label.slice(0, 50) || undefined,
+              placeholder: el.getAttribute('placeholder') || undefined,
+              value: val,
+              focused: isFocused ? true : undefined,
+              disabled: (el.disabled || el.getAttribute('aria-disabled') === 'true') ? true : undefined,
+              visible: isVisible
+            };
+          }));
+        })()`,
+        returnByValue: true,
+      });
+
+      const inputsList = JSON.parse((scanRes.result?.value as string) || "[]");
+      return {
+        success: true,
+        total_fields: inputsList.length,
+        succeeded: inputsList.length,
+        failed: 0,
+        submitted: false,
+        inputs: inputsList,
+        results: [],
+        execution_ms: Date.now() - startMs,
+        suggestedNext: inputsList.length > 0 
+          ? `Discovered ${inputsList.length} inputs. Call browser_fill with { fields: [{ ref, value }] } to fill.`
+          : "No editable inputs found on this page.",
+      };
+    } catch (e: any) {
+      logDebug(`[browser_fill] Input scan failed: ${e}`);
+    }
+  }
+
   if (!options.fields || options.fields.length === 0) {
-    return { success: false, total_fields: 0, succeeded: 0, failed: 0, submitted: false, results: [], execution_ms: 0, suggestedNext: "No fields provided. Use browser_map() to get field ref IDs, then call browser_fill with fields:[{ref:'w:NN', value:'...'}]." };
+    return { success: false, total_fields: 0, succeeded: 0, failed: 0, submitted: false, results: [], execution_ms: 0, suggestedNext: "No fields provided. Call browser_fill with scan:true to see all inputs." };
   }
 
   // ── scan_only: return field schema without mutating DOM ──
   if (options.scan_only) {
     for (const field of options.fields) {
-      const selector = toSelector(field.ref);
+      const selector = toSelector(field);
       const detected = await detectFieldType(session, selector);
       // Report success=false for non-fillable fields (disabled, readonly, unknown
       // type) so scan mode doesn't give false confidence before the actual fill.
@@ -494,7 +635,7 @@ export async function browserFill(
         ? `Detected: ${detected.type} (not fillable — disabled or readonly)`
         : `Detected: ${detected.type}`;
       results.push({
-        ref: field.ref,
+        ref: field.ref || field.selector || field.name || field.label || 'field',
         field_type: detected.exists ? detected.type : "not_found",
         success: scanSuccess,
         message: scanMsg,
@@ -511,18 +652,34 @@ export async function browserFill(
     };
   }
 
+  let targetId = "default";
+  const active = sessionRegistry.getActive(getConfigAgentId(config));
+  if (active) targetId = active.targetId;
+
   // ── blast_mode: bulk fill in single CDP roundtrip ──
   if (options.blast_mode) {
     // blast_mode: single CDP round-trip filling all fields at once.
     // Handles text, checkbox, radio, select, contenteditable, and ARIA variants.
     const blastExpression = `(function(fields) {
       var results = [];
+      var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
       fields.forEach(function(f) {
         var el = document.querySelector(f.selector);
-        if (!el) { results.push({ ref: f.ref, ok: false, msg: 'not found', type: 'unknown' }); return; }
+        if (!el) { results.push({ ref: f.ref, ok: false, msg: 'not found', type: 'unknown', isSecret: false }); return; }
         var tag = el.tagName.toLowerCase();
         var inputType = (el.getAttribute('type') || '').toLowerCase();
         var role = (el.getAttribute('role') || '').toLowerCase();
+        var isSecret = el.hasAttribute('data-wt-secret') ||
+          (tag === 'input' && (
+            inputType === 'password' ||
+            secretRegex.test(el.getAttribute('autocomplete') || '') ||
+            secretRegex.test(el.getAttribute('name') || '') ||
+            secretRegex.test(el.getAttribute('id') || '') ||
+            secretRegex.test(el.getAttribute('aria-label') || '')
+          ));
+        if (isSecret) {
+          try { el.setAttribute('data-wt-secret', 'true'); } catch(_) {}
+        }
         try {
           if (tag === 'select') {
             // Select element
@@ -531,12 +688,12 @@ export async function browserFill(
               var opt = el.options[j];
               if (opt.value === f.value || opt.text === f.value || opt.text.trim() === f.value.trim()) { foundIdx = j; break; }
             }
-            if (foundIdx === -1) { results.push({ ref: f.ref, ok: false, msg: 'Option not found: ' + f.value, type: 'select' }); return; }
+            if (foundIdx === -1) { results.push({ ref: f.ref, ok: false, msg: 'Option not found: ' + f.value, type: 'select', isSecret: isSecret }); return; }
             var nativeSS = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
             if (nativeSS) nativeSS.call(el, el.options[foundIdx].value); else el.selectedIndex = foundIdx;
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-            results.push({ ref: f.ref, ok: true, msg: 'selected:' + el.options[foundIdx].text, type: 'select' });
+            results.push({ ref: f.ref, ok: true, msg: 'selected:' + el.options[foundIdx].text, type: 'select', isSecret: isSecret });
           } else if (tag === 'input' && inputType === 'checkbox') {
             // Native checkbox
             var want = f.value === 'true' || f.value === 'yes' || f.value === 'checked' || f.value === '1' || f.value === 'on';
@@ -546,7 +703,7 @@ export async function browserFill(
               el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            results.push({ ref: f.ref, ok: true, msg: want ? 'checked' : 'unchecked', type: 'checkbox' });
+            results.push({ ref: f.ref, ok: true, msg: want ? 'checked' : 'unchecked', type: 'checkbox', isSecret: isSecret });
           } else if (tag === 'input' && inputType === 'radio') {
             // Native radio
             if (!el.checked) {
@@ -555,7 +712,7 @@ export async function browserFill(
               el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            results.push({ ref: f.ref, ok: true, msg: 'selected', type: 'radio' });
+            results.push({ ref: f.ref, ok: true, msg: 'selected', type: 'radio', isSecret: isSecret });
           } else if (role === 'checkbox' || role === 'switch') {
             // ARIA custom checkbox
             var wantAria = f.value === 'true' || f.value === 'yes' || f.value === 'checked' || f.value === '1' || f.value === 'on';
@@ -566,7 +723,7 @@ export async function browserFill(
               el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            results.push({ ref: f.ref, ok: true, msg: wantAria ? 'checked' : 'unchecked', type: 'custom-checkbox' });
+            results.push({ ref: f.ref, ok: true, msg: wantAria ? 'checked' : 'unchecked', type: 'custom-checkbox', isSecret: isSecret });
           } else if (role === 'radio') {
             // ARIA custom radio
             if (el.getAttribute('aria-checked') !== 'true') {
@@ -575,7 +732,7 @@ export async function browserFill(
               el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            results.push({ ref: f.ref, ok: true, msg: 'selected', type: 'custom-radio' });
+            results.push({ ref: f.ref, ok: true, msg: 'selected', type: 'custom-radio', isSecret: isSecret });
           } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true' || el.getAttribute('contenteditable') === '') {
             // contenteditable
             el.focus();
@@ -583,7 +740,7 @@ export async function browserFill(
             try { document.execCommand('selectAll', false, null); document.execCommand('insertText', false, f.value); } catch(e2) {}
             el.dispatchEvent(new InputEvent('input', { bubbles: true, data: f.value, inputType: 'insertText' }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-            results.push({ ref: f.ref, ok: true, msg: 'filled', type: 'contenteditable' });
+            results.push({ ref: f.ref, ok: true, msg: 'filled', type: 'contenteditable', isSecret: isSecret });
           } else {
             // text / textarea / other inputs
             el.focus();
@@ -592,30 +749,37 @@ export async function browserFill(
             if (ns2) ns2.call(el, f.value); else el.value = f.value;
             el.dispatchEvent(new InputEvent('input', { bubbles: true, data: f.value, inputType: 'insertText' }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-            results.push({ ref: f.ref, ok: true, msg: 'filled', type: tag });
+            results.push({ ref: f.ref, ok: true, msg: 'filled', type: tag, isSecret: isSecret });
           }
-        } catch(e) { results.push({ ref: f.ref, ok: false, msg: e.message || String(e), type: tag }); }
+        } catch(e) { results.push({ ref: f.ref, ok: false, msg: e.message || String(e), type: tag, isSecret: isSecret }); }
       });
       return JSON.stringify(results);
-    })(${JSON.stringify(options.fields.map(f => ({ ref: f.ref, selector: toSelector(f.ref), value: f.value })))})`;
+    })(${JSON.stringify(options.fields.map(f => ({ ref: f.ref || f.selector || f.name || f.label || 'field', selector: toSelector(f), value: f.value })))})`;
     
     const { result } = await session.Runtime.evaluate({ expression: blastExpression, returnByValue: true });
     const blastResults = JSON.parse((result?.value as string) || '[]');
     
     for (const r of blastResults) {
+      const fieldDef = options.fields.find(f => (f.ref || f.selector || f.name || f.label || 'field') === r.ref);
+      const isSecretField = r.isSecret || r.type === 'password';
+      if (isSecretField && fieldDef?.value) {
+        const fieldSel = toSelector(fieldDef);
+        await registerAndHardenSecretField(session, targetId, fieldSel, fieldDef.value);
+      }
       results.push({
         ref: r.ref,
         field_type: r.type,
         success: r.ok,
         message: r.ok ? r.msg : `FAIL — ${r.msg}`,
-        value: options.fields.find(f => f.ref === r.ref)?.value,
+        value: isSecretField ? "[REDACTED]" : fieldDef?.value,
       });
       if (!r.ok) logAction("browser_fill", r.ref, `${r.type}: FAIL — ${r.msg}`);
-      else logAction("browser_fill", r.ref, `${r.type}: OK — ${r.msg}`);
+      else logAction("browser_fill", r.ref, isSecretField ? `${r.type}: OK — [secret filled]` : `${r.type}: OK — ${r.msg}`);
     }
   } else {
     for (const field of options.fields) {
-      const selector = toSelector(field.ref);
+      const selector = toSelector(field);
+      const refKey = field.ref || field.selector || field.name || field.label || selector;
 
     // ── Pre-fill actionability gate (Playwright strategy) ─────────────────────
     // Text + select fields on complex sites can be under overlays or still animating.
@@ -627,27 +791,34 @@ export async function browserFill(
     if (actResult.status === 'OCCLUDED' && !actResult.occludedBy?.isWeavetabOwned) {
       const occ = actResult.occludedBy!;
       const blockerStr = `<${occ.tag}${occ.id ? '#'+occ.id : ''}> intercepts pointer events`;
-      results.push({ ref: field.ref, field_type: "unknown", success: false, message: `Field blocked by overlay: ${blockerStr}` });
-      logAction("browser_fill", field.ref, `FAIL — occluded: ${blockerStr}`);
+      results.push({ ref: refKey, field_type: "unknown", success: false, message: `Field blocked by overlay: ${blockerStr}` });
+      logAction("browser_fill", refKey, `FAIL — occluded: ${blockerStr}`);
       continue;
     }
     if (actResult.status === 'INVISIBLE') {
-      results.push({ ref: field.ref, field_type: "unknown", success: false, message: "Field is not visible — scroll to reveal it before filling" });
-      logAction("browser_fill", field.ref, "FAIL — invisible");
+      results.push({ ref: refKey, field_type: "unknown", success: false, message: "Field is not visible — scroll to reveal it before filling" });
+      logAction("browser_fill", refKey, "FAIL — invisible");
       continue;
     }
 
     // 1. Detect field type
-    const detected = await detectFieldType(session, selector);
+    let detected = await detectFieldType(session, selector);
+    if (!detected.exists && (field.ref?.startsWith("w:") || selector.startsWith('[data-wt-id='))) {
+      const ref = field.ref || selector;
+      const rec = await recoverDetachedRef(session, targetId, ref, { label: field.label, placeholder: field.name });
+      if (rec.recovered) {
+        detected = await detectFieldType(session, selector);
+      }
+    }
     if (!detected.exists) {
-      results.push({ ref: field.ref, field_type: "unknown", success: false, message: "Element not found" });
-      logAction("browser_fill", field.ref, "unknown: FAIL — Element not found");
+      results.push({ ref: refKey, field_type: "unknown", success: false, message: "Element not found" });
+      logAction("browser_fill", refKey, "unknown: FAIL — Element not found");
       continue;
     }
     const type = detected.type;
     if (type === "unknown") {
-      results.push({ ref: field.ref, field_type: "unknown", success: false, message: "Unsupported field type" });
-      logAction("browser_fill", field.ref, "unknown: FAIL — Unsupported field type");
+      results.push({ ref: refKey, field_type: "unknown", success: false, message: "Unsupported field type" });
+      logAction("browser_fill", refKey, "unknown: FAIL — Unsupported field type");
       continue;
     }
 
@@ -693,29 +864,33 @@ export async function browserFill(
     );
 
     if (!actionOk) {
-      results.push({ ref: field.ref, field_type: type, success: false, message: actionMsg });
-      logAction("browser_fill", field.ref, `${type}: FAIL — ${actionMsg}`);
+      results.push({ ref: refKey, field_type: type, success: false, message: actionMsg });
+      logAction("browser_fill", refKey, `${type}: FAIL — ${actionMsg}`);
       continue;
+    }
+
+    if (detected.isSecret && actionOk && field.value) {
+      await registerAndHardenSecretField(session, targetId, selector, field.value);
     }
 
     if (confirm.applied) {
       results.push({
-        ref: field.ref,
+        ref: refKey,
         field_type: type,
         success: true,
         message: `${actionMsg} (verified after ${confirm.settleMs}ms)`,
         value: detected.isSecret ? "[REDACTED]" : field.value,
       });
-      logAction("browser_fill", field.ref, `${type}: OK — ${actionMsg}`);
+      logAction("browser_fill", refKey, detected.isSecret ? `${type}: OK — [secret filled]` : `${type}: OK — ${actionMsg}`);
     } else {
       // Field reverted — framework rejected the value (e.g., controlled component)
       results.push({
-        ref: field.ref,
+        ref: refKey,
         field_type: type,
         success: false,
         message: `Value not retained — framework may have reverted it (before=${detected.isSecret ? '"[REDACTED]"' : JSON.stringify(before)}, after=${detected.isSecret ? '"[REDACTED]"' : JSON.stringify(confirm.after)})`,
       });
-      logAction("browser_fill", field.ref, `${type}: FAIL — reverted by framework`);
+      logAction("browser_fill", refKey, `${type}: FAIL — reverted by framework`);
     }
   }
   }

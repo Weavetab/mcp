@@ -69,8 +69,8 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_map` | DOM enumeration with stable `w:NN` ref IDs. Supports `delta` (diff mode), `prune` (one-shot compression), `ax_tree` (Shadow DOM fallback), `scope` filtering, `query` filtering |
-| `browser_find` | Native CDP text search — ~10x cheaper than map, single CDP call |
+| `browser_map` | DOM enumeration (v3.0) with volatile `w:NN` ref IDs, entity & card container binding (`┌ Heading`), active modal hoisting (`╔═ ACTIVE DIALOG ═╗`), nav cluster collapsing, delta diffing, and scope filtering (`modal`, `form`, `main`). |
+| `browser_find` | Native CDP text search with single and multi-match (`all: true`, `limit: N`) returning bounding rects and selectors — ~10x cheaper than map |
 | `browser_scrape` | CSS/XPath structured data extraction in 1 CDP call |
 | `browser_inspect` | Computed CSS styles + inline styles + event listener types |
 | `browser_snapshot` | MHTML capture/restore of DOM state + resources |
@@ -81,21 +81,21 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_navigate` | Navigate to URL with domain blocklist enforcement. Supports `Weavetab://` protocol for persistent local playgrounds |
+| `browser_navigate` | Ultra-low latency navigation (~150-300ms) with non-blocking readyState polling, parallelized metadata, domain blocklist enforcement, and `weavetab://` protocol |
 
 ### Input (9 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_click` | Ghost Cursor (Bézier) click with intent memory, occlusion detection, stuck-loop detection |
-| `browser_type` | Human keystroke engine with jitter, burst patterns, paste mode, stuck detection |
+| `browser_click` | Ghost Cursor (Bézier) click with intent memory, occlusion detection, and stuck-loop detection |
+| `browser_type` | Human keystroke engine with zero-target `document.activeElement` typing, anti-unfocus click avoidance, jitter, and burst patterns |
 | `browser_type_secret` | Blind Injection from `secrets.json` — domain check before value load, Shadow DOM isolation, JS property hardening |
-| `browser_key` | Native keyboard dispatch with modifier keys (Ctrl, Shift, Alt, Meta) |
-| `browser_pointer` | Hover, double-click, drag-and-drop via native mouse events |
+| `browser_key` | Native keyboard dispatch with combo hotkeys (`"Ctrl+A"`, `"Cmd+K"`, `"Alt+Tab"`) and zero arbitrary delay |
+| `browser_pointer` | Hover, double-click, drag-and-drop, and multi-level flyout menu traversal via `hover_chain: ["File", "Export As", "PNG"]` |
 | `browser_select` | Native `<select>` dropdown selection — React/Vue safe (prototype setter + events) |
-| `browser_fill` | Smart multi-field form fill — auto-detects text, select, checkbox, radio, contenteditable |
+| `browser_fill` | Smart multi-field form batch completion with input discovery scanner (`scan: true`), flexible field selectors, and Google Sheets `grid_data` |
 | `browser_upload` | Bypass file dialogs via CDP `DOM.setFileInputFiles` |
-| `browser_scroll` | Directional + element-relative scroll via native wheel events |
+| `browser_scroll` | Fast non-blocking directional + element-relative scroll without redundant action map rebuilds |
 
 ### Tabs & Windows (2 tools)
 
@@ -104,12 +104,11 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | `browser_tabs` | Open/switch/close/list/consolidate (dedup)/heal (recover crash). Also list/focus windows |
 | `browser_detect` | Detect installed browsers + CDP feature coverage per engine (Chromium, Firefox, WebKit) |
 
-### Mission Execution (3 tools)
+### Mission Execution (2 tools)
 
 | Tool | Description |
 |------|-------------|
 | `browser_burst` | Chain N actions in 1 MCP call. Supports 4 macro steps: `type_and_send`, `navigate_and_read`, `click_and_wait`, `scroll_and_read` |
-| `browser_plan` | Live task dashboard in browser Shadow DOM overlay. User sees progress, can comment |
 | `browser_automation` | Inject persistent self-running scripts — monitoring, polling, background extraction |
 
 ### Dialog & User Interaction (3 tools)
@@ -266,7 +265,7 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
   "browserFlags": [],
   "policies": [],
   "electron": {
-    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
+    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-<version>\\Discord.exe",
     "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
     "vscode": "C:\\Users\\<user>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
   }
@@ -580,10 +579,10 @@ For detailed troubleshooting, see [TROUBLESHOOTING.md](../TROUBLESHOOTING.md).
 
 ## Additional Resources
 
+- [Tool Reference](tools/tools.md)
 - [Plugin System Guide](PLUGINS.md)
 - [Architecture Documentation](../ARCHITECTURE.md)
-- [Tool Reference](TOOLS.md)
+- [Support & Community](../SUPPORT.md)
 - [Security Policy](../SECURITY.md)
 - [Contributing Guidelines](../CONTRIBUTING.md)
 - [Troubleshooting Guide](../TROUBLESHOOTING.md)
-- [Comparison with Other Tools](../.upgrade/compare.md)

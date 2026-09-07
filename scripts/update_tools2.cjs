@@ -18,7 +18,6 @@ const descriptions = {
   'browser_pointer': 'Advanced pointer control (hover, drag).',
   'browser_select': 'Select an option from a native dropdown.',
   'browser_fill': 'Smart form-filling for various input types.',
-  'browser_plan': 'Create a live task panel in the browser.',
   'github_analyze': 'Analyze a GitHub repository.',
   'github_read': 'Read file contents from a GitHub repository.',
   'github_issues': 'Interact with GitHub issues.',

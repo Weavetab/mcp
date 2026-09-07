@@ -1,6 +1,6 @@
 ---
-title: "MCP Tools (46 Tools)"
-description: "Complete reference of all 46 production-grade Weavetab automation tools."
+title: "MCP Tools (47 Tools)"
+description: "Complete reference of all 47 production-grade Weavetab automation tools."
 product: mcp
 section: tools
 icon: Wrench
@@ -9,7 +9,7 @@ slug: tools
 
 # MCP Tools Master Reference
 
-Weavetab exposes **46 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
+Weavetab exposes **47 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
 
 Every tool adheres to a strict contract:
 - **Zod schema validation** for all runtime arguments
@@ -32,7 +32,7 @@ Every tool adheres to a strict contract:
 | 7 | `browser_scroll` | Input & Interaction | Directional and element-relative smooth scrolling via CDP wheel events. Supports `app`. |
 | 8 | `browser_dialog` | Dialog & Human Oversight | Accepts, dismisses, or responds to JavaScript `alert`, `confirm`, and `prompt` dialogs. |
 | 9 | `browser_burst` | Mission & Automation | Atomic multi-step action pipeline execution in a single JSON-RPC round-trip. Supports `app`. |
-| 10 | `browser_tabs` | Tabs & Windows | Full tab & window CRUD lifecycle management (open, switch, close, consolidate, heal). Supports `app`. |
+| 10 | `browser_tabs` | Tabs & Windows | Full tab & window CRUD lifecycle management (open, switch, close, consolidate, heal). Specify `app` when targeting desktop apps to avoid opening web browser. |
 | 11 | `browser_wait` | Wait, Timing & Safety | Blocks execution until DOM element, text, URL pattern, network idle, or stability is met. Supports `app`. |
 | 12 | `browser_captcha` | Wait, Timing & Safety | Autonomous zero-API solving of Turnstile, reCAPTCHA, GeeTest, and hCaptcha challenges. |
 | 13 | `browser_thoughts` | Dialog & Human Oversight | Visual agent-to-user status HUD overlay (feedback banner or interactive question modal). |
@@ -59,7 +59,7 @@ Every tool adheres to a strict contract:
 | 34 | `browser_automation` | Mission & Automation | Injects self-running background tracking scripts into the page context for polling/monitoring. Supports `app`. |
 | 35 | `browser_recording` | Output & Media | Video screencast recording into `.webp`, `.gif`, `.webm`, or `.mp4` formats. Supports `app`. |
 | 36 | `browser_reset_loop_counter` | Wait, Timing & Safety | Resets the repetitive action strike counter to zero for long-running automated workflows. |
-| 37 | `browser_detect` | Tabs & Windows | Detects installed local browsers and reports CDP feature support matrices. |
+| 37 | `browser_detect` | Tabs & Windows | CRITICAL INITIALIZATION TOOL. Detects local browsers and configured desktop apps (Discord, Slack, etc.) and reports connection status, active tabs, and port. |
 | 38 | `browser_performance` | Performance & Vitals | Retrieves Core Web Vitals (FCP, LCP, CLS) and detailed network resource timings. Supports `app`. |
 | 39 | `browser_macro_compile` | Mission & Automation | Compiles recent action trails from session history into reusable `browser_burst` macros. |
 | 40 | `github_analyze` | GitHub Intelligence | Analyzes GitHub repository structure, file trees, and READMEs without API token limits. |
@@ -69,20 +69,28 @@ Every tool adheres to a strict contract:
 | 44 | `browser_office` | Office Documents | Parses Word (`.docx`), Excel (`.xlsx`), PDF, and CSV files into structured data. |
 | 45 | `browser_emulate` | Navigation & Environment | Emulates network throttling (3G/4G/Offline), CPU slowdown, geolocation, and custom User-Agent. Supports `app`. |
 | 46 | `list_plugins` | Plugins & Extensions | Inspects installed SDK plugins, loaded tool overrides, custom schemas, and capability manifests. |
+| 47 | `load_plugin` | Plugins & Extensions | Dynamically loads Weavetab plugins by npm package name with isolated sandboxing. |
+| 48 | `browser_checkpoint` | Storage & Safety | Snapshot and restore browser state (cookies, storage, scroll/URL) into named checkpoints for session time-travel and rollback. Supports `app`. |
 
 ---
 
 ## 1. Vision & DOM Reading
 
-### `browser_map`
-DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational tool for reading and understanding page structure.
+### `browser_map` (Version 3.0)
+High-density DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational tool for reading and understanding page structure with zero prompt waste.
+
+**Core 3.0 Capabilities:**
+- **Entity & Container Binding**: Binds action buttons/inputs directly to parent cards, rows, or list items under `┌ [Container Header]` trees.
+- **Active Modal & Dialog Hoisting**: Automatically detects and isolates active dialogs/modals at the top of the map under `╔═ ACTIVE DIALOG: "..." ═╗`.
+- **Nav & Footer Cluster Collapsing**: Compresses cascades of repetitive navigation/footer links (4+ links) into compact `[w:5…w:24] 20 links: "Home" … "Terms"` summaries.
+- **High-Density Unified Grammar**: Single-line format distinguishing `val:"..."`, `ph:"..."`, `FOCUSED`, `checked`, and `disabled` states.
 
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
 | `delta` | `boolean?` | Diff mode: returns only elements added or modified since the previous snapshot (up to 97% token savings). |
 | `prune` | `boolean?` | One-shot semantic compression: collapses repetitive elements and strips non-interactable noise. |
-| `scope` | `enum?` | Restricts extraction to a semantic landmark: `"navigation"`, `"main_content"`, `"sidebar"`, `"form"`, `"modal"`, `"utility"`. |
+| `scope` | `string?` | Restricts extraction to a semantic landmark or selector: `"navigation"`, `"main_content"`, `"sidebar"`, `"form"`, `"modal"`, `"utility"`, or CSS selector. |
 | `query` | `string?` | Filters elements by accessible name, ARIA role, or label substring. |
 | `ax_tree` | `boolean?` | Uses Chromium Accessibility Tree directly (essential for closed Shadow DOM and canvas SPAs). |
 | `full` | `boolean?` | Return full markdown table format with bounding boxes instead of compact list. |
@@ -90,29 +98,36 @@ DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational tool for rea
 | `app` | `string?` | Target desktop Electron app name (e.g. `"discord"`, `"vscode"`, `"figma"`). |
 
 ```typescript
-// Initial fast read with semantic pruning
-browser_map({ prune: true })
+// Standard high-density read
+browser_map()
 
-// Efficient polling for changes
-browser_map({ delta: true, prune: true })
+// Scope specifically to open modal or active form
+browser_map({ scope: "modal" })
+browser_map({ scope: "form" })
 
-// Inspect inputs inside Discord desktop app
-browser_map({ app: "discord", scope: "main_content" })
+// Efficient delta polling for changes
+browser_map({ delta: true })
 ```
 
 ---
 
 ### `browser_find`
-Sub-5ms native CDP in-page text search via `Page.searchInPage`. Approximately 10× cheaper than `browser_map` when only checking for text presence.
+Sub-5ms native CDP in-page text search via `Page.searchInPage`. Approximately 10× cheaper than `browser_map` when only checking for text presence or targeting elements by visible string.
 
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
 | `query` | `string` *(required)* | Text search query string. |
+| `all` | `boolean?` | Return all matching elements with bounding rects and selectors instead of just the first match. |
+| `limit` | `number?` | Maximum number of matches to return when `all: true` (default `10`). |
 | `app` | `string?` | Target Electron desktop application. |
 
 ```typescript
+// Single match check
 browser_find({ query: "Order Confirmed" })
+
+// Discover all occurrences of keyword with coordinates & selectors
+browser_find({ query: "Delete", all: true, limit: 5 })
 ```
 
 ---
@@ -186,30 +201,179 @@ browser_click({ id: "w:8", app: "discord" })
 ### `browser_type`
 Realistic humanized keystroke engine with temporal jitter (35–95ms), typing burst profiling, and stuck-input loop detection.
 
+**Key Upgrades:**
+- **Zero-Target ActiveElement Typing**: If no `id`/`selector` is passed, automatically detects and types directly into the currently focused `document.activeElement` without throwing errors or requiring prior clicks.
+- **Anti-Click Unfocus Guard**: If the target input is already active, avoids redundant hardware clicks that cause focus blur or close open dropdowns.
+
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
 | `text` | `string` *(required)* | Text string to type. |
-| `id` | `string?` | Target `w:NN` ref ID. |
+| `id` | `string?` | Target `w:NN` ref ID (optional if element already focused). |
 | `selector` | `string?` | CSS selector for target input. |
+| `label` | `string?` | Accessible label or placeholder text. |
 | `clearFirst` | `boolean?` | Clear input field value before typing. |
 | `paste` | `boolean?` | Fast paste mode (recommended for tokens/strings > 8 chars). |
 | `app` | `string?` | Target Electron desktop application. |
 
+```typescript
+// Type directly into active focused element (zero target)
+browser_type({ text: "Autonomous Agent Query" })
+
+// Type into specific ref ID with clearFirst
+browser_type({ id: "w:15", text: "admin@corp.internal", clearFirst: true })
+```
+
 ---
 
 ### `browser_type_secret`
-**Blind Credential Injection** — Resolves passwords, API keys, and 2FA tokens server-side from `secrets.json`. Secrets are **never sent to the LLM context** and are permanently redacted as `[REDACTED]` in all subsequent DOM snapshots and audit logs.
+Enterprise-grade blind credential injection from encrypted local storage (`secrets.json`). Injects sensitive tokens, passwords, and 2FA keys directly into input fields via CDP without exposing plaintext values to the AI context, audit logs, or DOM reads.
+
+**Key Upgrades:**
+- **Zero-Exposure In-Process Resolution**: The model passes only the key name (`envKey: "MY_KEY"`). The MCP server resolves the value in-process and enforces domain scoping.
+- **Universal Selector Support**: Accepts direct CSS selectors (`#password`, `input[type='password']`, `.pwd-field`), ActionMap ref IDs (`w:5`), or `target: "focused"`.
+- **Automatic DOM Hardening**: Injected elements are tagged with `data-wt-secret="true"`, instance `.value` getters are overridden with `[REDACTED]`, and symbol coercion/JSON serialization leaks are sealed.
 
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
-| `envKey` | `string` *(required)* | Key name in `secrets.json` (e.g. `"OKTA_PASSWORD"`). |
-| `id` | `string?` | Target `w:NN` ref ID. |
-| `target` | `string?` | CSS selector for target password/auth input. |
+| `envKey` | `string` *(required)* | Key name stored in `secrets.json` (e.g. `"GITHUB_TOKEN"`, `"TEST_KEY"`). |
+| `id` | `string?` | Target element `w:NN` ref ID or CSS selector. |
+| `target` | `string?` | Target element alias (`"focused"`, selector, or ref ID). |
+| `app` | `string?` | Target Electron desktop application. |
 
 ```typescript
-browser_type_secret({ id: "w:8", envKey: "PROD_AUTH_TOKEN" })
+// Inject credential into password field via CSS selector
+browser_type_secret({
+  id: "#password",
+  envKey: "PROD_DB_PASSWORD"
+})
+
+// Inject into focused active element
+browser_type_secret({
+  target: "focused",
+  envKey: "AWS_SESSION_TOKEN"
+})
+```
+
+---
+
+### `browser_fill`
+Smart multi-field form batch completion across text inputs, radios, checkboxes, and selects.
+
+**Key Upgrades:**
+- **Input Discovery Scanner (`scan: true`)**: Call with `scan: true` (or empty) to get a lightweight JSON list of all fillable inputs on the page (with ref IDs, types, names, labels, current values, and focus states) in ~30 tokens without dumping the entire DOM.
+- **Flexible Field Target Matching**: Supports targeting fields by `ref`, `selector`, `target`, `name`, `placeholder`, or `label`.
+- **Google Sheets & Canvas Spreadsheet Grid Fill**: Supports typing directly into spreadsheet cell coordinates via `grid_data: [{ cell: "A1", value: "Revenue" }]`.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `fields` | `array?` | Array of field objects (`{ ref?, selector?, name?, label?, value }`). |
+| `scan` | `boolean?` | Return all fillable inputs on the page without mutating DOM. |
+| `inputs` | `boolean?` | Alias for `scan`. |
+| `blast_mode` | `boolean?` | Fill all fields simultaneously in a single CDP eval round-trip. |
+| `submit` | `string?` | Optional ref ID (`w:NN`) of submit button to click after filling. |
+| `grid_data` | `array?` | Array of `{ cell: "A1", value: "..." }` pairs for Google Sheets / Canvas grids. |
+| `app` | `string?` | Target Electron desktop application. |
+
+```typescript
+// 1. Discover all editable inputs on page (~30 tokens)
+browser_fill({ scan: true })
+
+// 2. Batch fill form fields by ref, name, or label
+browser_fill({
+  fields: [
+    { ref: "w:12", value: "Anas" },
+    { name: "email", value: "anas@example.com" },
+    { label: "Country", value: "Morocco" }
+  ],
+  submit: "w:18"
+})
+```
+
+---
+
+### `browser_pointer`
+Precision mouse control for hover flyouts, clicks, double-clicks, and drag-and-drop.
+
+**Key Upgrades:**
+- **Multi-Level `hover_chain`**: Traverse complex multi-level nested menus (e.g. Photoshop/Photopea `"File" → "Export As" → "PNG"`, Figma, or enterprise dashboards) in a single tool call without custom eval scripts.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `action` | `"hover" | "click" | "dblclick" | "drag"` | Mouse action type. |
+| `id` | `string?` | Target `w:NN` ref ID. |
+| `selector` | `string?` | CSS selector of target element. |
+| `hover_chain` | `string[]?` | Array of labels/selectors to hover sequentially (e.g. `["File", "Export As", "PNG"]`). |
+| `from` | `object?` | Drag start coordinates `{ x, y }` or target ID. |
+| `to` | `object?` | Drag destination coordinates `{ x, y }` or target ID. |
+| `app` | `string?` | Target Electron desktop application. |
+
+```typescript
+// Glide through multi-level flyout menu
+browser_pointer({ hover_chain: ["File", "Export As", "PNG"] })
+```
+
+---
+
+### `browser_key`
+Native keyboard dispatch with modifier keys and hotkey combos.
+
+**Key Upgrades:**
+- **Hotkey Combinations**: Supports standard key combo strings like `"Ctrl+A"`, `"Control+Shift+P"`, `"Cmd+K"`, `"Alt+Tab"`.
+- **Zero Lag Execution**: Removed arbitrary post-key wait times (<20ms execution on standard keys).
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `key` | `string` *(required)* | Key name or hotkey combination (`"Enter"`, `"Tab"`, `"Escape"`, `"Ctrl+A"`, `"Cmd+K"`). |
+| `app` | `string?` | Target Electron desktop application. |
+
+```typescript
+browser_key({ key: "Enter" })
+browser_key({ key: "Ctrl+A" })
+```
+
+---
+
+### `browser_scroll`
+Directional and element-relative smooth scrolling via CDP wheel events.
+
+**Key Upgrades:**
+- **Ultra-Fast Non-Blocking Scroll**: Eliminates redundant full DOM action map rebuilds after scrolling, executing in sub-50ms.
+- **Direct Target Scrolling**: Supports scrolling specific container elements by `w:NN` ref ID.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `direction` | `"up" | "down" | "left" | "right"` | Scroll direction. |
+| `pixels` | `number?` | Scroll distance in pixels (default `400`). |
+| `id` | `string?` | Target element `w:NN` ref ID or selector to scroll inside. |
+| `app` | `string?` | Target Electron desktop application. |
+
+---
+
+### `browser_emulate`
+Emulate environmental conditions over CDP: network throttling (Slow 3G, Fast 3G, 4G, Offline), CPU slowdown multipliers, geolocation overrides, timezone IDs, and custom User-Agent strings.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `network` | `string \| object?` | Throttling profile (`"offline" \| "slow3g" \| "fast3g" \| "4g" \| "online"`) or custom `{ latency, downloadThroughput, uploadThroughput }`. |
+| `cpuThrottlingRate` | `number?` | CPU slowdown multiplier (e.g. `2` = 2× slowdown, `4` = 4× slowdown, `1` = normal). |
+| `geolocation` | `object?` | Override coordinates `{ latitude: number, longitude: number, accuracy?: number }`. |
+| `timezoneId` | `string?` | Override browser timezone (e.g. `'America/New_York'`). |
+| `userAgent` | `string?` | Override browser User Agent string. |
+| `app` | `string?` | Target Electron desktop application. |
+
+```typescript
+browser_emulate({
+  network: "slow3g",
+  cpuThrottlingRate: 4,
+  geolocation: { latitude: 37.7749, longitude: -122.4194 }
+})
 ```
 
 ---
@@ -291,3 +455,79 @@ Inspects all dynamically loaded Weavetab SDK plugins, active tool overrides, reg
 ```typescript
 list_plugins({ verbose: true })
 ```
+
+---
+
+### `load_plugin`
+Dynamically loads any published Weavetab plugin by npm package name into the active runtime with isolated sandboxing and hot tool registration.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `string` *(required)* | The exact npm package name of the plugin to load (e.g. `'@fy2ne/wt-youtube'`, `'my-plugin'`). |
+
+```typescript
+load_plugin({ name: "@fy2ne/wt-youtube" })
+```
+
+---
+
+### `browser_checkpoint`
+Snapshot and restore browser state (cookies, localStorage, sessionStorage, and scroll/URL) into named checkpoints to time-travel and rollback failed automation branches.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `action` | `'save' \| 'restore' \| 'list' \| 'delete'` *(required)* | Action to perform on the checkpoint store. |
+| `name` | `string?` | Unique checkpoint name identifier (required for `save`, `restore`, `delete`). |
+| `includeDom` | `boolean?` | Whether to include a lightweight DOM snapshot during `save` (default `false`). |
+| `app` | `string?` | Target Electron app name if automating desktop applications. |
+
+```typescript
+// Save current session state before a risky form submit
+browser_checkpoint({ action: "save", name: "pre-checkout-state" })
+
+// Restore and time-travel back if automation failed or hit a roadblock
+browser_checkpoint({ action: "restore", name: "pre-checkout-state" })
+```
+
+---
+
+## 7. Tabs, Windows & Desktop Environment
+
+### `browser_detect`
+CRITICAL INITIALIZATION TOOL. Detects local browser engines and configured desktop applications (Discord, Slack, VS Code, etc.) and reports connection status, active tabs, and port.
+
+**Parameters:**
+None.
+
+```typescript
+browser_detect()
+```
+
+---
+
+### `browser_tabs`
+Full tab and window CRUD lifecycle management (open, switch, close, consolidate, heal). Specify `app` when targeting desktop apps (e.g. `app: "discord"`) to avoid opening the web browser.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `action` | `"list" \| "open" \| "close" \| "switch" \| "list_windows" \| "focus_window" \| "consolidate" \| "heal"` *(required)* | Action to perform. |
+| `url` | `string?` | URL to open (required for `open`). |
+| `app` | `string?` | Optional Electron app name configured in `config.json` under `electron`. |
+| `tabId` | `string?` | Target Tab ID (required for `switch` or `close`). |
+| `tabIds` | `string[]?` | Multiple Tab IDs for batch `close`. |
+| `force` | `boolean?` | Force close protected (anchor) tabs. |
+| `windowId` | `number?` | Window ID to focus (required for `focus_window`). |
+| `reuse` | `boolean?` | Default `true`. Reuses existing tab if URL is already open. |
+
+```typescript
+// Inspect tabs inside Discord desktop application
+browser_tabs({ action: "list", app: "discord" })
+
+// Open a new tab in the web browser
+browser_tabs({ action: "open", url: "https://github.com" })
+```
+
+

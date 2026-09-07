@@ -6,9 +6,9 @@ import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
 function getVersion(): string {
   try {
-    return _require("../../package.json").version || "2.4.0";
+    return _require("../../package.json").version || "2.5.0-beta.3";
   } catch {
-    return "2.4.0";
+    return "2.5.0-beta.3";
   }
 }
 

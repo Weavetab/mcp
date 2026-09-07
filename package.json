@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.5.0-beta.2",
+  "version": "2.5.0-beta.3",
   "description": "Direct Layer 0 interface for AI agents across web and desktop applications. No WebDriver. No cloud. Pure control.",
   "author": {
     "name": "fy2ne",
@@ -79,8 +79,8 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "prepublishOnly": "npm run verify && npm run build",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/electron.test.ts\"",
+    "test": "npm run test:unit",
+    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/plugin_lifecycle.test.ts\" \"tests/unit/plugin_interceptors.test.ts\" \"tests/unit/electron.test.ts\" \"tests/unit/stale_ref_recovery.test.ts\" \"tests/unit/secret_containment.test.ts\" \"tests/unit/checkpoint.test.ts\"",
     "test:e2e": "tsx tests/e2e/smoke_test.ts"
   },
   "dependencies": {
@@ -99,7 +99,7 @@
     "proper-lockfile": "^4.1.2",
     "ws": "^8.20.0",
     "xlsx": "^0.18.5",
-    "zod": "^3.23.8"
+    "zod": "^3.25.76"
   },
   "optionalDependencies": {
     "sharp": "^0.34.5"

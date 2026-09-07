@@ -30,14 +30,27 @@ function _acquireServerLock(): boolean {
     fs.mkdirSync(_SERVER_LOCK_DIR, { recursive: true });
     if (fs.existsSync(_SERVER_LOCK_FILE)) {
       const existingPid = parseInt(fs.readFileSync(_SERVER_LOCK_FILE, "utf-8").trim(), 10);
-      if (!isNaN(existingPid) && existingPid !== process.pid && _isProcessAlive(existingPid)) {
-        process.stderr.write(`[Weavetab] Another Weavetab MCP server is running (PID ${existingPid}). Multiple clients active.\n`);
-        // We no longer return false here. The analyticsInterval.unref() call
-        // prevents zombie leaks, so it's safe to allow multiple agents (e.g.
-        // Openchamber + Antigravity) to run their own MCP processes concurrently
-        // and share the browser.
+      if (!isNaN(existingPid) && existingPid !== process.pid) {
+        if (_isProcessAlive(existingPid)) {
+          process.stderr.write(`[Weavetab] Another Weavetab MCP server is running (PID ${existingPid}). Client session active.\n`);
+        } else {
+          // Process is dead: reap stale PID lock
+          try { fs.unlinkSync(_SERVER_LOCK_FILE); } catch { /* ignore */ }
+        }
       }
     }
+
+    // Also reap stale browser lock file if the recorded browser PID is dead
+    const browserLockFile = path.join(_SERVER_LOCK_DIR, ".weavetab.lock");
+    if (fs.existsSync(browserLockFile)) {
+      try {
+        const lockData = JSON.parse(fs.readFileSync(browserLockFile, "utf-8"));
+        if (lockData.pid && !_isProcessAlive(lockData.pid)) {
+          fs.unlinkSync(browserLockFile);
+        }
+      } catch { /* malformed lock, ignore */ }
+    }
+
     fs.writeFileSync(_SERVER_LOCK_FILE, String(process.pid), "utf-8");
     return true;
   } catch {
@@ -1056,7 +1069,7 @@ async function main(): Promise<void> {
     console.log(pc.bold("LINKS"));
     console.log(`  ${pc.cyan("[G]")}  GitHub    ${pc.dim("github.com/Weavetab")}`);
     console.log(`  ${pc.cyan("[N]")}  NPM       ${pc.dim("npmjs.com/package/Weavetab")}`);
-    console.log(`  ${pc.cyan("[W]")}  Website   ${pc.dim("weavetab.pages.dev")}`);
+    console.log(`  ${pc.cyan("[W]")}  Website   ${pc.dim("weavetab.dev")}`);
     console.log();
 
     console.log(pc.dim("Awaiting command..."));

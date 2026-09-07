@@ -178,7 +178,7 @@ test("delta: updates stored snapshot", () => {
   assert.equal(secondCall?.stable_count, 2);
 });
 
-test("delta: rich delta - first visit returns null", () => {
+test("delta: rich delta - first visit returns null", async () => {
   const targetId = "tab-9";
   clearAllSnapshots();
 
@@ -186,11 +186,11 @@ test("delta: rich delta - first visit returns null", () => {
     { id: "w:1", role: "button", label: "Submit", fingerprint: "button:submit:div:0", group: "utility", depth: 0 } as any,
   ];
 
-  const result = computeRichDelta(targetId, elements);
+  const result = await computeRichDelta(targetId, elements);
   assert.equal(result, null, "First visit rich delta returns null");
 });
 
-test("delta: rich delta - includes property diffs", () => {
+test("delta: rich delta - includes property diffs", async () => {
   const targetId = "tab-10";
   clearAllSnapshots();
 
@@ -222,7 +222,7 @@ test("delta: rich delta - includes property diffs", () => {
     } as any,
   ];
 
-  const result = computeRichDelta(targetId, updated);
+  const result = await computeRichDelta(targetId, updated);
   assert.ok(result !== null);
   assert.equal(result?.changed.length, 1);
   assert.equal(result?.changed[0]?.ref, "w:1");
@@ -231,7 +231,7 @@ test("delta: rich delta - includes property diffs", () => {
   assert.equal(result?.changed[0]?.changes?.disabled?.to, "true");
 });
 
-test("delta: rich delta - marks interactive elements as actionable", () => {
+test("delta: rich delta - marks interactive elements as actionable", async () => {
   const targetId = "tab-11";
   clearAllSnapshots();
 
@@ -259,14 +259,14 @@ test("delta: rich delta - marks interactive elements as actionable", () => {
     } as any,
   ];
 
-  const result = computeRichDelta(targetId, updated);
+  const result = await computeRichDelta(targetId, updated);
   assert.ok(result !== null);
   assert.equal(result?.changed.length, 1);
   assert.equal(result?.changed[0]?.actionable, true);
   assert.equal(result?.changed[0]?.recommended_action, "click");
 });
 
-test("delta: rich delta - iframe tracking", () => {
+test("delta: rich delta - iframe tracking", async () => {
   const targetId = "tab-12";
   clearAllSnapshots();
 
@@ -305,7 +305,7 @@ test("delta: rich delta - iframe tracking", () => {
     } as any,
   ];
 
-  const result = computeRichDelta(targetId, updated);
+  const result = await computeRichDelta(targetId, updated);
   assert.ok(result !== null);
   assert.ok(result?.iframes !== undefined);
   assert.equal(result?.iframes?.length, 1);

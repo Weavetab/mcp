@@ -9,9 +9,9 @@ import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
 function getVersion(): string {
   try {
-    return _require("../../package.json").version || "2.5.0-beta.2";
+    return _require("../../package.json").version || "2.5.0-beta.3";
   } catch {
-    return "2.5.0-beta.2";
+    return "2.5.0-beta.3";
   }
 }
 
@@ -19,11 +19,12 @@ import {
   getVerifiedPackages,
   resolvePluginTrust,
   resolvePluginCandidates,
+  invalidateRegistryCache,
   OFFICIAL_PLUGIN_PREFIX,
   REGISTRY_URL,
   type PluginCandidate,
 } from "../plugin/registry.js";
-import { listInstalledPlugins, inspectInstalledPackage } from "../plugin/loader.js";
+import { listInstalledPlugins, inspectInstalledPackage, normalizePermissions } from "../plugin/loader.js";
 
 // Helper to run child process safely
 function runCommand(cmd: string, cmdArgs: string[], cwd: string = process.cwd()): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -32,7 +33,7 @@ function runCommand(cmd: string, cmdArgs: string[], cwd: string = process.cwd())
     const executable = isWin && !cmd.endsWith(".cmd") && !cmd.endsWith(".exe") ? `${cmd}.cmd` : cmd;
     const child = spawn(executable, cmdArgs, {
       cwd,
-      shell: isWin,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -212,7 +213,7 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
   if (installedInfo && installedInfo.manifest) {
     const manifest = installedInfo.manifest;
     const tools = manifest.tools || [];
-    const permissions = manifest.permissions || {};
+    const permissions = normalizePermissions(manifest.permissions);
 
     const infoLines = [
       `${pc.bold("Plugin Details:")}`,
@@ -505,7 +506,13 @@ export async function runPluginVerify(pkgName: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function runPluginCli(args: string[]): Promise<void> {
-  const subcmd = args[0]?.toLowerCase();
+  if (args.includes("--refresh")) {
+    invalidateRegistryCache();
+    console.log(pc.green("[OK] Plugin registry cache refreshed.\n"));
+  }
+
+  const cleanArgs = args.filter((a) => a !== "--refresh");
+  const subcmd = cleanArgs[0]?.toLowerCase();
 
   if (!subcmd || subcmd === "--help" || subcmd === "-h" || subcmd === "help") {
     console.log();
@@ -515,7 +522,7 @@ export async function runPluginCli(args: string[]): Promise<void> {
     console.log(`  weavetab plugin <command> [options]`);
     console.log();
     console.log(pc.bold("COMMANDS"));
-    console.log(`  ${pc.cyan("add <pkg>")}          Install a plugin (resolves official @weavetab/ & community)`);
+    console.log(`  ${pc.cyan("add <pkg>")}          Install any plugin by npm package name (e.g. @fy2ne/wt-youtube, my-plugin)`);
     console.log(`  ${pc.cyan("browse")}             Interactive terminal explorer to browse & 1-click install`);
     console.log(`  ${pc.cyan("search [query]")}     Search plugins across official registry & npm`);
     console.log(`  ${pc.cyan("list")}               List all installed plugins and their registered tools`);
@@ -523,10 +530,11 @@ export async function runPluginCli(args: string[]): Promise<void> {
     console.log(`  ${pc.cyan("verify <pkg>")}       Check trust tier and registry verification status`);
     console.log();
     console.log(pc.bold("DEVELOPER SDK (@weavetab/sdk)"));
-    console.log(`  ${pc.dim("Scaffold a plugin:")}  ${pc.cyan("npx -y @weavetab/sdk init <name>")}`);
+    console.log(`  ${pc.dim("Scaffold a plugin:")}  ${pc.cyan("npx @weavetab/sdk init <name>")}`);
     console.log(`  ${pc.dim("Build & validate:")}   ${pc.cyan("npx @weavetab/sdk build")}`);
     console.log();
-    console.log(pc.bold("OPTIONS (for 'add')"));
+    console.log(pc.bold("OPTIONS (for 'add' / general)"));
+    console.log(`  ${pc.cyan("--refresh")}          Invalidate and refresh the verified plugin cache`);
     console.log(`  ${pc.cyan("--official, -O")}     Prefer official @weavetab/plugin-<name>`);
     console.log(`  ${pc.cyan("--community, -C")}    Prefer community package`);
     console.log(`  ${pc.cyan("--yes, -y")}          Bypass interactive warning prompt for unverified plugins`);
@@ -536,14 +544,14 @@ export async function runPluginCli(args: string[]): Promise<void> {
 
   if (subcmd === "init" || subcmd === "create" || subcmd === "new" || subcmd === "build" || subcmd === "manifest") {
     console.log(pc.yellow(`\n[Weavetab] Plugin authoring commands belong to the developer SDK (@weavetab/sdk).`));
-    console.log(pc.dim("To scaffold a new plugin:   ") + pc.cyan("npx -y @weavetab/sdk init <name>"));
+    console.log(pc.dim("To scaffold a new plugin:   ") + pc.cyan("npx @weavetab/sdk init <name>"));
     console.log(pc.dim("To build/validate a plugin: ") + pc.cyan("npx @weavetab/sdk build"));
     console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://github.com/weavetab/sdk\n"));
     return;
   }
 
   if (subcmd === "add" || subcmd === "install" || subcmd === "i") {
-    await runPluginAdd(args[1], args.slice(2));
+    await runPluginAdd(cleanArgs[1], cleanArgs.slice(2));
     return;
   }
 
@@ -553,7 +561,7 @@ export async function runPluginCli(args: string[]): Promise<void> {
   }
 
   if (subcmd === "search" || subcmd === "find") {
-    await runPluginSearch(args[1]);
+    await runPluginSearch(cleanArgs[1]);
     return;
   }
 
@@ -563,12 +571,12 @@ export async function runPluginCli(args: string[]): Promise<void> {
   }
 
   if (subcmd === "remove" || subcmd === "rm" || subcmd === "uninstall") {
-    await runPluginRemove(args[1], args.slice(2));
+    await runPluginRemove(cleanArgs[1], cleanArgs.slice(2));
     return;
   }
 
   if (subcmd === "verify" || subcmd === "check") {
-    await runPluginVerify(args[1]);
+    await runPluginVerify(cleanArgs[1]);
     return;
   }
 

@@ -52,11 +52,16 @@ function domainFile(hostname: string): string {
   return join(memoryDir, `${safe}.json`);
 }
 
-// memoryCache is capped at 200 DomainProfile entries (one per unique hostname).
-// When the cap is hit, the oldest entry is evicted (insertion-order LRU) so the
-// cache can't grow without bound over a long session.
 const memoryCache = new Map<string, DomainProfile>();
 const MEMORY_CACHE_MAX = 200;
+
+export function clearMemoryCache(): void {
+  memoryCache.clear();
+}
+
+export function getDomainFilePath(hostname: string): string {
+  return domainFile(hostname);
+}
 
 function memoryCacheSet(hostname: string, profile: DomainProfile): void {
   if (memoryCache.size >= MEMORY_CACHE_MAX && !memoryCache.has(hostname)) {

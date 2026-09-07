@@ -11,19 +11,31 @@ import { buildActionMap, findAllMatches, resolveByAria } from "../cdp/walker.js"
 
 export interface FindOptions {
   query: string;
-  role?: string;           // Filter by role (button, link, textbox, etc.)
-  fuzzy?: boolean;         // Enable fuzzy matching (default: true)
-  matchPlaceholder?: boolean; // Search placeholder text (default: true)
-  matchTitle?: boolean;    // Search title attribute (default: true)
+  role?: string;
+  fuzzy?: boolean;
+  matchPlaceholder?: boolean;
+  matchTitle?: boolean;
+  all?: boolean;
+  limit?: number;
+}
+
+export interface FindItem {
+  ref?: string;
+  selector: string;
+  label: string;
+  tag?: string;
+  rect: { x: number; y: number; width: number; height: number };
 }
 
 export interface FindResult {
   success: boolean;
   found: boolean;
+  total_matches?: number;
+  matches?: FindItem[];
   rect?: { x: number; y: number; width: number; height: number };
   nodeId?: number;
-  selector?: string;       // CSS selector for the found element
-  label?: string;          // The actual label/text that matched
+  selector?: string;
+  label?: string;
 }
 
 export async function browserFind(
@@ -31,65 +43,88 @@ export async function browserFind(
   options: FindOptions,
   _config: Config
 ): Promise<FindResult> {
-  const { query, role, fuzzy = true, matchPlaceholder = true, matchTitle = true } = options;
+  const { query, all = false, limit = 10 } = options;
 
   if (!query) throw new Error("browser_find requires a query string");
 
-  // Find tool must search ALL elements, not just interactive ones.
   const { result } = await session.Runtime.evaluate({
-    expression: `(function(q) {
+    expression: `(function(q, returnAll, maxMatches) {
       function norm(s) { return (s || '').toLowerCase().replace(/[.\\u2026\\s]+/g, ' ').trim(); }
       var qLow = norm(q);
       var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, null, false);
-      var matches = [];
+      var matchedNodes = [];
+      var seenElements = new Set();
+
       while (walker.nextNode()) {
         var node = walker.currentNode;
-        if (node.nodeType === Node.TEXT_NODE) {
-          var t = norm(node.textContent);
-          if (t && t.includes(qLow)) {
-            matches.push(node.parentElement);
-          }
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-          var el = node;
-          var aria = norm(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || '');
-          if (aria && aria.includes(qLow)) {
-            matches.push(el);
-          }
+        var el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+        if (!el || seenElements.has(el)) continue;
+
+        var text = norm(node.textContent);
+        var aria = norm(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || '');
+
+        if ((text && text.includes(qLow)) || (aria && aria.includes(qLow))) {
+          seenElements.add(el);
+          matchedNodes.push(el);
+          if (!returnAll && matchedNodes.length >= 1) break;
+          if (matchedNodes.length >= maxMatches) break;
         }
       }
-      if (matches.length === 0) return null;
-      var match = matches[0];
-      var r = match.getBoundingClientRect();
-      var sel = '';
-      if (match.id) {
-        sel = '#' + CSS.escape(match.id);
-      } else {
-        var tmp = 'wt-tmp-' + Math.random().toString(36).slice(2,8);
-        match.setAttribute('data-wt-id', tmp);
-        sel = '[data-wt-id="' + tmp + '"]';
-      }
-      return {
-        label: match.getAttribute('aria-label') || (match.textContent||'').trim().slice(0,80) || q,
-        x: Math.round(r.left),
-        y: Math.round(r.top),
-        width: Math.round(r.width),
-        height: Math.round(r.height),
-        selector: sel
-      };
-    })(${JSON.stringify(query)})`,
+
+      if (matchedNodes.length === 0) return null;
+
+      var out = matchedNodes.map(function(match, i) {
+        var r = match.getBoundingClientRect();
+        var wtId = match.getAttribute('data-wt-id');
+        var sel = '';
+        if (wtId) {
+          sel = '[data-wt-id="' + wtId + '"]';
+        } else if (match.id) {
+          sel = '#' + CSS.escape(match.id);
+        } else {
+          var tmp = 'wt-find-' + i + '-' + Math.random().toString(36).slice(2,6);
+          match.setAttribute('data-wt-id', tmp);
+          sel = '[data-wt-id="' + tmp + '"]';
+          wtId = tmp;
+        }
+        return {
+          ref: 'w:' + wtId,
+          label: match.getAttribute('aria-label') || (match.textContent||'').trim().slice(0,80) || q,
+          tag: match.tagName.toLowerCase(),
+          x: Math.round(r.left),
+          y: Math.round(r.top),
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+          selector: sel
+        };
+      });
+
+      return JSON.stringify(out);
+    })(${JSON.stringify(query)}, ${JSON.stringify(all)}, ${JSON.stringify(limit)})`,
     returnByValue: true
   }).catch(() => ({ result: { value: null } }));
 
   if (result && result.value) {
-    const val = result.value as any;
-    return {
-      success: true,
-      found: true,
-      rect: { x: val.x, y: val.y, width: val.width, height: val.height },
-      selector: val.selector,
-      label: val.label
-    };
+    const list: any[] = JSON.parse((result.value as string) || '[]');
+    if (list.length > 0) {
+      const first = list[0];
+      return {
+        success: true,
+        found: true,
+        total_matches: list.length,
+        matches: list.map(m => ({
+          ref: m.ref,
+          selector: m.selector,
+          label: m.label,
+          tag: m.tag,
+          rect: { x: m.x, y: m.y, width: m.width, height: m.height }
+        })),
+        rect: { x: first.x, y: first.y, width: first.width, height: first.height },
+        selector: first.selector,
+        label: first.label
+      };
+    }
   }
 
-  return { success: true, found: false };
+  return { success: true, found: false, total_matches: 0, matches: [] };
 }

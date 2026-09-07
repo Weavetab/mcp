@@ -235,7 +235,6 @@ src/
 │   ├── thought.ts         # browser_thought
 │   ├── wait.ts           # browser_wait
 │   ├── burst.ts          # browser_burst
-│   ├── plan.ts           # browser_plan
 │   ├── automation.ts     # browser_automation
 │   ├── find.ts           # browser_find
 │   ├── inspect.ts        # browser_inspect
@@ -511,8 +510,8 @@ If you need help contributing:
 
 - **GitHub Issues**: Use for bug reports and feature requests
 - **GitHub Discussions**: Use for questions and community discussion
-- **Email**: conduct@weavetab.pages.dev for Code of Conduct matters
-- **Security**: security@weavetab.pages.dev for security vulnerabilities
+- **Email**: conduct@weavetab.dev for Code of Conduct matters
+- **Security**: security@weavetab.dev for security vulnerabilities
 
 ---
 

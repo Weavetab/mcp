@@ -12,20 +12,22 @@ import {
   logMemorySuccess,
   logMemoryFailure,
   loadDomainProfile,
+  clearMemoryCache,
+  getDomainFilePath,
 } from "../../src/intelligence/sessionMemory.js";
-import { getSystemDir } from "../../src/config/loader.js";
 
-const hostname = "test.weavetab.pages.dev";
+const hostname = "test.weavetab.dev";
 let profilePath: string;
 
 before(() => {
-  const memoryDir = getSystemDir("memory");
-  profilePath = path.join(memoryDir, `${hostname}.json`);
+  clearMemoryCache();
+  profilePath = getDomainFilePath(hostname);
   if (fs.existsSync(profilePath)) fs.unlinkSync(profilePath);
 });
 
 after(() => {
-  if (fs.existsSync(profilePath)) fs.unlinkSync(profilePath);
+  clearMemoryCache();
+  if (profilePath && fs.existsSync(profilePath)) fs.unlinkSync(profilePath);
 });
 
 test("1: Initial success log — selector is immediately retrievable", async () => {

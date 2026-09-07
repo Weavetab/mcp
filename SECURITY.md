@@ -42,28 +42,43 @@ Weavetab interacts directly with the local Chromium browser instance via the Chr
 
 ---
 
-## Blind Injection Threat Model
+## Blind Injection Threat Model & Hardening
 
-The **Blind Injection** architecture specifically ensures that credentials do not leak back into the LLM context or Weavetab logs.
+The **Blind Injection** architecture specifically ensures that credentials do not leak back into the LLM context, Weavetab logs, DOM snapshots, visual captures, or scrape results.
 
 ### Threats Mitigated
 
-- **Accidental context inclusion** — LLM reading the DOM and echoing passwords
-- **Log scraping** — Passwords appearing in plaintext audit logs
-- **DOM snapshot leakage** — Secret values masked as `[REDACTED]` in all subsequent maps, deltas, and AX tree dumps
-- **Prompt injection domain theft** — Domain check runs before the secret value is ever resolved
+- **Accidental Context Inclusion** — LLM reading the DOM, AX tree, or input discovery and echoing passwords
+- **DOM & Scrape Scraping** — Passwords extracted via direct DOM access, `browser_scrape`, or `document.querySelector().value`
+- **Visual Capture Leaks** — Passwords visible in screenshots, MHTML snapshots, or PDF printouts
+- **Log Scraping** — Passwords appearing in plaintext action logs or audit records
+- **DOM Snapshot Leakage** — Secret values masked as `[REDACTED]` in all subsequent maps, deltas, and AX tree dumps
+- **Prompt Injection Domain Theft** — Domain check runs before the secret value is ever resolved from disk
+- **Coercion & Serialization Leaks** — `JSON.stringify(el)`, `String(el)`, or array spreads leaking underlying element values
+
+### Defense-in-Depth Implementation
+
+1. **Storage at Rest**: Secrets in `~/.weavetab/secrets.json` are encrypted using AES-256-GCM with a machine-isolated key in `~/.weavetab-system/secrets-key`.
+2. **In-Process Resolution**: The AI model only receives and passes the key name (`envKey: "MY_KEY"`). The secret value is resolved in memory and injected directly via CDP `Input.insertText`.
+3. **DOM Property Hardening**: Injected elements are tagged `data-wt-secret="true"`, instance `.value` getters are overridden with `[REDACTED]`, and `Symbol.iterator`, `Symbol.toPrimitive`, and `toJSON` are locked.
+4. **In-Memory SessionSecretTracker**: Tracks node IDs and secret substrings per session to redact any coincidental echoes across ActionMaps, delta diffs, or scrape outputs.
+5. **Universal Tool Containment**:
+   - `browser_type`: Broad secret regex (`type`, `name`, `id`, `autocomplete`, `aria-label`, PINs, tokens, multi-language variants) auto-hardens target fields and suppresses raw value readbacks.
+   - `browser_fill`: Registers secrets in both single and `blast_mode`, redacting return values and scan discovery mode (`scan: true`).
+   - `browser_scrape`: Evaluates in-page extraction substituting all attributes of sensitive nodes with `[REDACTED]`.
+   - `browser_screenshot`, `browser_snapshot`, `browser_pdf`: Dynamically blanks/masks sensitive fields during capture and restores them in `finally` blocks.
 
 ### Threats NOT Mitigated
 
-- This does **not** protect against a compromised host or a malicious process reading the secrets file directly
-- It is not "zero-knowledge"; Weavetab must read the secret from `secrets.json` to inject it
+- This does **not** protect against a compromised host or a malicious OS process with elevated privileges reading the secrets file directly.
+- It is not "zero-knowledge"; Weavetab must read and decrypt the secret from `secrets.json` to inject it into Chromium.
 
 ### Secrets Resolution Order
 
 When `browser_type_secret({ envKey: 'MY_SECRET' })` is called, the `JsonSecretStore` resolves from:
 
-1. `./.Weavetab/secrets.json` (project-scoped, opt-in via `Weavetab secrets init --project`)
-2. `~/.Weavetab/secrets.json` (global default)
+1. `./.weavetab/secrets.json` (project-scoped, opt-in via `weavetab secrets init --project`)
+2. `~/.weavetab/secrets.json` (global default)
 
 The old `EnvSecretProvider` (`.env`-based) is **deprecated and no longer supported**. All secrets must be stored in `secrets.json`. See the [README Secrets Management section](README.md#-secrets-management) for the full CLI workflow.
 
@@ -72,14 +87,10 @@ The old `EnvSecretProvider` (`.env`-based) is **deprecated and no longer support
 ```json
 {
   "ACME_CORP_PASSWORD": {
-    "value": "hunter2",
+    "value": "encrypted_aes_gcm_string",
     "domains": ["login.example.com"],
-    "description": "Account password"
-  },
-  "GITHUB_2FA": {
-    "value": "123456",
-    "domains": ["github.com"],
-    "description": "2FA Code"
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
   }
 }
 ```
@@ -131,7 +142,7 @@ If you discover a security vulnerability in Weavetab, please **do not** open a p
 
 Instead, report via one of the following channels:
 
-- **Email**: security@weavetab.pages.dev
+- **Email**: security@weavetab.dev
 - **GitHub**: Use the private vulnerability reporting feature on the repository
 
 ### Disclosure Timeline
@@ -185,8 +196,8 @@ To receive security notifications:
 
 For security-related inquiries:
 
-- **Security Vulnerabilities**: security@weavetab.pages.dev
-- **Security Questions**: conduct@weavetab.pages.dev
+- **Security Vulnerabilities**: security@weavetab.dev
+- **Security Questions**: conduct@weavetab.dev
 - **GitHub Security**: https://github.com/weavetab/mcp/security
 
 ---

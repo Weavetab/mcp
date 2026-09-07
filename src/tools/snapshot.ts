@@ -13,7 +13,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { Config } from "../config/loader.js";
 import { getOutputDir, getConfigAgentId } from "../config/loader.js";
-import { hideWeaveTabOverlay, restoreWeaveTabOverlay } from "../cdp/helpers.js";
+import { hideWeaveTabOverlay, restoreWeaveTabOverlay, maskSecretFieldsForCapture, restoreSecretFieldsAfterCapture } from "../cdp/helpers.js";
 import { clearTabCache } from "../state/cache.js";
 import { clearSnapshot } from "../state/delta.js";
 import { sessionRegistry } from "../state/session.js";
@@ -58,22 +58,7 @@ export async function browserSnapshot(
     }
     // ── Blank secret field values before capture ──────────────────────────
     // Prevents credential values from being embedded in the MHTML archive.
-    // data-wt-secret is set by browser_type_secret at injection time.
-    await session.Runtime.evaluate({
-      expression: `(function() {
-        var els = document.querySelectorAll('[data-wt-secret], input[type="password"]');
-        for (var i = 0; i < els.length; i++) {
-          var el = els[i];
-          el.__wt_snap_backup = el.value;
-          try { el.value = ''; } catch(e) {}
-          if (el.isContentEditable) {
-            el.__wt_snap_text_backup = el.textContent;
-            try { el.textContent = ''; } catch(e) {}
-          }
-        }
-      })()`,
-      returnByValue: false,
-    }).catch(() => {});
+    await maskSecretFieldsForCapture(session);
 
     let snapshotData: string;
     try {
@@ -81,26 +66,10 @@ export async function browserSnapshot(
       snapshotData = res.data;
     } finally {
       // ── Restore secret field values after capture (always runs) ──────────
+      await restoreSecretFieldsAfterCapture(session);
       if (shouldHide) {
         await restoreWeaveTabOverlay(session);
       }
-      await session.Runtime.evaluate({
-        expression: `(function() {
-          var els = document.querySelectorAll('[data-wt-secret], input[type="password"]');
-          for (var i = 0; i < els.length; i++) {
-            var el = els[i];
-            if (el.__wt_snap_backup !== undefined) {
-              try { el.value = el.__wt_snap_backup; } catch(e) {}
-              delete el.__wt_snap_backup;
-            }
-            if (el.__wt_snap_text_backup !== undefined) {
-              try { el.textContent = el.__wt_snap_text_backup; } catch(e) {}
-              delete el.__wt_snap_text_backup;
-            }
-          }
-        })()`,
-        returnByValue: false,
-      }).catch(() => {});
     }
 
     await fs.mkdir(path.dirname(filePath), { recursive: true });

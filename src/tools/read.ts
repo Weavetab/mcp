@@ -22,8 +22,9 @@ import type { Config } from "../config/loader.js";
 import { getConfigAgentId } from "../config/loader.js";
 import type { ActionElement } from "../cdp/walker.js";
 
-// Cap at 80 elements; form/modal groups are always kept, utility trimmed last.
-const MAX_ELEMENTS = 80;
+// Cap at 35 elements by default to keep prompt tokens lean.
+// Form, modal, and primary interactive elements are prioritized first.
+const MAX_ELEMENTS = 35;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -41,16 +42,11 @@ export interface ReadOptions {
   delta?: boolean;
   intent?: string;
   ax_tree?: boolean;
-  /** Debug: draws colored element borders via extension. The screen glow (blue edge fade) is the standard visual indicator, shown automatically during reading states. */
+  /** Debug: draws colored element borders via extension. */
   show_overlays?: boolean;
-  /** Force deep shadow DOM traversal (crosses all shadow boundaries to find elements). Auto-enabled when flat query returns sparse results. */
+  /** Force deep shadow DOM traversal. */
   deep?: boolean;
-  /**
-   * Run one-shot semantic DOM pruning before returning elements.
-   * Drops hidden elements with no interactive descendants and no known toggle-trigger.
-   * Replaces SVG icons with [SVG Icon: label] tokens.
-   * NOTE: distinct from delta — delta diffs across time, prune compresses the current snapshot once.
-   */
+  /** Semantic DOM pruning. Defaults to true to drop non-interactive noise and SVGs. */
   prune?: boolean;
 }
 
@@ -60,35 +56,136 @@ function formatLite(el: ActionElement, activeElementId?: string, changedIds?: Se
   // ── State badges ────────────────────────────────────────────────────────────
   if (el.disabled) parts.push("disabled");
   if (activeElementId && el.id === activeElementId) parts.push("FOCUSED");
-  if (el.viewport && el.viewport !== "visible") parts.push(`offscreen:${el.viewport}`);
+  if (el.viewport && el.viewport !== "visible" && el.viewport !== "in-viewport") {
+    parts.push(el.viewport);
+  }
 
   // ── Value / checked / placeholder ──────────────────────────────────────────
   const role = (el.role || '').toLowerCase();
   const type = (el.type || '').toLowerCase();
 
-  // Radio / checkbox checked state — critical for quiz forms
+  // Radio / checkbox checked state
   if ((role === 'radio' || role === 'checkbox' || type === 'radio' || type === 'checkbox') && el.value !== undefined) {
     parts.push(el.value === 'true' || el.value === 'checked' ? '✓ checked' : '○ unchecked');
   } else if (el.value) {
-    // Truncate long values to avoid token waste
-    const v = el.value.length > 60 ? el.value.slice(0, 57) + '…' : el.value;
-    parts.push(`"${v}"`);
+    const v = el.value.length > 45 ? el.value.slice(0, 42) + '…' : el.value;
+    parts.push(`val:"${v}"`);
   } else if (el.placeholder) {
-    parts.push(`placeholder: "${el.placeholder}"`);
+    const p = el.placeholder.length > 35 ? el.placeholder.slice(0, 32) + '…' : el.placeholder;
+    parts.push(`ph:"${p}"`);
   }
 
-  // ── Type suffix for inputs (e.g. input[email], input[date]) ────────────────
-  const typeLabel = (role === 'textbox' || role === 'searchbox' || role === 'combobox') && type
+  // ── Type suffix for inputs ──────────────────────────────────────────────────
+  const typeLabel = (role === 'textbox' || role === 'searchbox' || role === 'combobox') && type && type !== 'text'
     ? `/${type}` : '';
 
-  // ── Link hint ───────────────────────────────────────────────────────────────
-  if (role === 'link' && el.hrefType && el.hrefType !== 'same-origin') {
-    parts.push(el.hrefType);
+  // ── Link hint (only if external) ───────────────────────────────────────────
+  if (role === 'link' && el.hrefType === 'external') {
+    parts.push('ext');
   }
 
   const state = parts.length > 0 ? ` (${parts.join(', ')})` : '';
   const changed = changedIds?.has(el.id) ? ' ★' : '';
-  return `[${el.id}] ${el.role}${typeLabel} "${el.label}"${state}${changed}`;
+  const label = el.label.length > 50 ? el.label.slice(0, 47) + '…' : el.label;
+  return `[${el.id}] ${el.role}${typeLabel} "${label}"${state}${changed}`;
+}
+
+// ─── 3.0 High-density formatter helpers ──────────────────────────────────────
+
+/** Collapse a cluster of nav/footer links into a compact summary token. */
+function collapseNavCluster(cluster: ActionElement[]): string {
+  if (cluster.length === 0) return '';
+  if (cluster.length === 1) return formatLite(cluster[0]);
+  const first = cluster[0].label.slice(0, 20);
+  const last = cluster[cluster.length - 1].label.slice(0, 20);
+  const ids = `${cluster[0].id}…${cluster[cluster.length - 1].id}`;
+  return `[${ids}] ${cluster.length} links: "${first}" … "${last}"`;
+}
+
+/**
+ * Format the main element list using 3.0 semantics:
+ * - Active modals hoisted to the top
+ * - Items under shared container headings grouped
+ * - Nav link clusters (4+ consecutive) collapsed
+ */
+function formatMap3(
+  elements: ActionElement[],
+  activeElementId: string | undefined,
+  changedIds: Set<string>
+): string[] {
+  const lines: string[] = [];
+
+  // ── 1. Hoist active modal elements ───────────────────────────────────────
+  const modalEls = elements.filter(e => e.isModal);
+  const mainEls  = elements.filter(e => !e.isModal);
+
+  if (modalEls.length > 0) {
+    const modalTitle = modalEls[0].modalTitle || 'Dialog';
+    lines.push(`╔═ ACTIVE DIALOG: "${modalTitle}" ${'═'.repeat(Math.max(0, 30 - modalTitle.length))}╗`);
+    for (const el of modalEls) {
+      lines.push('  ' + formatLite(el, activeElementId, changedIds));
+    }
+    lines.push(`╚${'═'.repeat(42)}╝`);
+    if (mainEls.length > 0) lines.push('');
+  }
+
+  // ── 2. Main elements with entity grouping + nav cluster collapsing ────────
+  const SECTION_LABEL: Record<ActionElement["group"], string> = {
+    navigation:   "── NAV ──────────────────",
+    main_content: "── MAIN ─────────────────",
+    form:         "── FORM ─────────────────",
+    sidebar:      "── SIDEBAR ──────────────",
+    modal:        "── MODAL ────────────────",
+    utility:      "── OTHER ────────────────",
+  };
+
+  let currentSection: ActionElement['group'] | null = null;
+  let currentContainer: string | null = null;
+  let navCluster: ActionElement[] = [];
+
+  const flushNavCluster = () => {
+    if (navCluster.length >= 4) {
+      lines.push(collapseNavCluster(navCluster));
+    } else {
+      for (const ne of navCluster) {
+        lines.push(formatLite(ne, activeElementId, changedIds));
+      }
+    }
+    navCluster = [];
+  };
+
+  for (const el of mainEls) {
+    // Section header
+    if (el.group !== currentSection) {
+      flushNavCluster();
+      currentSection = el.group;
+      currentContainer = null;
+      lines.push(SECTION_LABEL[currentSection]);
+    }
+
+    // Accumulate nav/utility link cluster for potential collapsing
+    const isNavLink = (el.group === 'navigation' || el.group === 'utility') && el.role === 'link';
+    if (isNavLink) {
+      navCluster.push(el);
+      continue;
+    } else {
+      flushNavCluster();
+    }
+
+    // Container/entity heading
+    const ctx = el.containerContext || null;
+    if (ctx && ctx !== currentContainer) {
+      currentContainer = ctx;
+      const header = ctx.length > 55 ? ctx.slice(0, 52) + '…' : ctx;
+      lines.push(`  ┌ ${header}`);
+    }
+
+    const indent = ctx ? '  │ ' : '';
+    lines.push(indent + formatLite(el, activeElementId, changedIds));
+  }
+  flushNavCluster();
+
+  return lines;
 }
 
 /** Full markdown table mode — only used when full:true is explicitly passed */
@@ -220,7 +317,7 @@ export async function browserMap(
           query: options.query,
           limit: options.limit,
           deep: options.deep,
-          prune: options.prune,
+          prune: options.prune !== false,
         },
         targetId
       ), 8000).catch(() => _emptyMap);
@@ -390,19 +487,29 @@ export async function browserMap(
     newRefs.push(...toRefEntries(map.elements));
   }
 
-  // ── Delta mode ─────────────────────────────────────────────────────────────
-  if (options.delta) {
+  // ── Delta / Auto-Delta mode ────────────────────────────────────────────────
+  // If delta is explicit OR if the user is re-reading the same page without full/force options,
+  // auto-delta returns only what changed (saving up to 95% prompt tokens).
+  const autoDeltaEligible = options.delta === true || (
+    options.delta !== false &&
+    !options.full &&
+    !options.query &&
+    !options.scope
+  );
+
+  if (autoDeltaEligible) {
     const richDiff = await computeRichDelta(targetId, map.url, map.elements);
-    if (richDiff) {
-      if ("delta_timeout" in richDiff) {
-        // Delta mode timed out — fall through to full read
-      } else {
+    if (richDiff && !("delta_timeout" in richDiff)) {
+      const totalChanges = richDiff.added.length + richDiff.changed.length + richDiff.removed.length;
+      
+      // Auto-delta: if 0 changes or <= 15 changes, return the diff directly
+      if (options.delta === true || totalChanges <= 15) {
         const lines: string[] = [];
         const header = `Page: ${map.title || map.url} | ${map.elements.length} elements`;
         lines.push(header);
 
-        if (richDiff.added.length === 0 && richDiff.changed.length === 0 && richDiff.removed.length === 0 && (!richDiff.iframes || richDiff.iframes.length === 0)) {
-          lines.push("stable — no changes detected");
+        if (totalChanges === 0 && (!richDiff.iframes || richDiff.iframes.length === 0)) {
+          lines.push("stable — no DOM changes since last map (use existing refs)");
         } else {
           for (const r of richDiff.added) lines.push(`+ [${r.id}] ${r.role} "${r.label}"`);
           for (const r of richDiff.changed) {
@@ -423,7 +530,6 @@ export async function browserMap(
         return lines.join("\n");
       }
     }
-    // No prior snapshot → fall through to full read
   }
 
   storeSnapshot(targetId, map.url, newRefs);
@@ -491,16 +597,7 @@ export async function browserMap(
   );
   lines.push("");
 
-  // ── Semantic section grouping ────────────────────────────────────────────────
-  const SECTION_LABEL: Record<ActionElement["group"], string> = {
-    navigation:   "── NAV ──────────────────",
-    main_content: "── MAIN ─────────────────",
-    form:         "── FORM ─────────────────",
-    sidebar:      "── SIDEBAR ──────────────",
-    modal:        "── MODAL ────────────────",
-    utility:      "── OTHER ────────────────",
-  };
-
+  // ── Semantic section grouping (3.0) ────────────────────────────────────────
   let activeElementId: string | undefined;
   try {
     const { result } = await session.Runtime.evaluate({
@@ -516,36 +613,13 @@ export async function browserMap(
     }
   } catch {}
 
-  let currentSection: ActionElement['group'] | null = null;
-  for (const el of capped) {
-    if (el.group !== currentSection) {
-      currentSection = el.group;
-      lines.push(SECTION_LABEL[currentSection]);
-    }
-    lines.push(formatLite(el, activeElementId, changedIds));
-  }
+  lines.push(...formatMap3(capped, activeElementId, changedIds));
 
   if (overflowCount > 0) {
     lines.push(`(+${overflowCount} more below fold — call browser_scroll down to reveal)`);
   }
 
   if (visualFallback) lines.push(visualFallback);
-
-  // Context-scoped tool hint — collapse 34-tool surface to ~12 relevant tools.
-  // Detected from map elements already computed above — zero extra latency.
-  const hasForm   = map.elements.some(e => e.group === "form" || e.role === "input" || e.role === "combobox" || e.role === "checkbox" || e.role === "radio");
-  const hasSelect = map.elements.some(e => e.role === "combobox" || e.role === "listbox");
-  const hasCanvas = map.url?.includes("canvas") || false;
-  const isGithub  = map.url?.includes("github.com") ?? false;
-
-  const baseTools   = ["browser_click", "browser_type", "browser_key", "browser_scroll", "browser_wait", "browser_navigate", "browser_tabs"];
-  const formTools   = hasForm   ? ["browser_select", "browser_type_secret", "browser_find"] : [];
-  const githubTools = isGithub  ? ["github_analyze", "github_read", "github_issues", "github_get_pr"] : [];
-  const canvasTools = hasCanvas ? ["browser_canvas", "browser_screenshot"] : ["browser_screenshot"];
-  const diagTools   = ["browser_inspect", "browser_highlight", "browser_scrape", "browser_burst"];
-
-  const contextTools = [...new Set([...baseTools, ...formTools, ...githubTools, ...canvasTools, ...diagTools])];
-  lines.push(`\n_tools [${contextTools.join(", ")}]`);
 
   const output = lines.join("\n");
   const wordCount = output.split(/\s+/).length;

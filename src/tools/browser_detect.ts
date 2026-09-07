@@ -42,15 +42,29 @@ const ENGINE_COVERAGE: Record<BrowserEngine, { coverage: number; unsupported: st
   },
 };
 
+import { sessionRegistry } from "../state/session.js";
+import { getTabList } from "../cdp/connector.js";
+import { getConfigAgentId } from "../config/loader.js";
+import { discoverElectronApps, type DiscoveredElectronApp } from "../desktop/discovery.js";
+
+export interface ConfiguredAppStatus {
+  name: string;
+  status: "connected" | "running_no_debug" | "offline";
+  configuredPath?: string;
+  activeTabs?: { id: string; title: string; url: string }[];
+  port?: number;
+}
+
 export interface BrowserDetectResult {
   available: { engine: BrowserEngine; name: string; path: string }[];
   current: BrowserEngine;
-  electronApps?: Record<string, ElectronAppConfig>;
+  configuredApps?: ConfiguredAppStatus[];
+  runningUnconfiguredApps?: DiscoveredElectronApp[];
   toolCoverage: Record<string, number>;
   unsupportedTools: Record<string, string[]>;
 }
 
-export function detectBrowsers(currentEngine: BrowserEngine): BrowserDetectResult {
+export async function detectBrowsers(currentEngine: BrowserEngine): Promise<BrowserDetectResult> {
   const available: { engine: BrowserEngine; name: string; path: string }[] = [];
 
   // Detect Chromium-based browsers
@@ -65,9 +79,6 @@ export function detectBrowsers(currentEngine: BrowserEngine): BrowserDetectResul
     available.push({ engine: "firefox", name: ff.name, path: ff.path });
   }
 
-  // WebKit detection is best-effort (Safari Technology Preview)
-  // We do not auto-detect WebKit — only report if manually configured
-
   const toolCoverage: Record<string, number> = {};
   const unsupportedMap: Record<string, string[]> = {};
   for (const engine of ["chromium", "firefox", "webkit"] as BrowserEngine[]) {
@@ -75,12 +86,59 @@ export function detectBrowsers(currentEngine: BrowserEngine): BrowserDetectResul
     unsupportedMap[engine] = [...ENGINE_COVERAGE[engine].unsupported];
   }
 
-  const electronApps = getElectronApps(getCachedConfig());
+  const config = getCachedConfig();
+  const electronApps = getElectronApps(config);
+  const runningElectronApps = await discoverElectronApps().catch(() => []);
+  
+  const configuredApps: ConfiguredAppStatus[] = [];
+  const runningUnconfiguredApps: DiscoveredElectronApp[] = [];
+
+  // Identify configured app statuses
+  for (const [appName, appCfg] of Object.entries(electronApps)) {
+    const clients = sessionRegistry.getAllForAgent(getConfigAgentId(config));
+    const activeClient = clients.find(c => c.isElectron && c.appName === appName);
+    
+    let status: ConfiguredAppStatus["status"] = "offline";
+    let activeTabs: any[] = [];
+    let port: number | undefined;
+
+    if (activeClient) {
+      status = "connected";
+      port = activeClient.port;
+      try {
+        const tabs = await getTabList(getConfigAgentId(config), appName);
+        activeTabs = tabs.map(t => ({ id: t.id, title: t.title, url: t.url }));
+      } catch { /* ignore tab list failure */ }
+    } else {
+      const running = runningElectronApps.find(r => r.name.toLowerCase() === appName.toLowerCase());
+      if (running) {
+        status = running.status === "debug_port_open" ? "connected" : "running_no_debug";
+        port = running.port;
+      }
+    }
+
+    configuredApps.push({
+      name: appName,
+      status,
+      configuredPath: appCfg.path,
+      activeTabs: activeTabs.length > 0 ? activeTabs : undefined,
+      port
+    });
+  }
+
+  // Find running apps that are not configured
+  for (const running of runningElectronApps) {
+    const isConfigured = Object.keys(electronApps).some(n => n.toLowerCase() === running.name.toLowerCase());
+    if (!isConfigured) {
+      runningUnconfiguredApps.push(running);
+    }
+  }
 
   return {
     available,
     current: currentEngine,
-    electronApps: Object.keys(electronApps).length > 0 ? electronApps : undefined,
+    configuredApps: configuredApps.length > 0 ? configuredApps : undefined,
+    runningUnconfiguredApps: runningUnconfiguredApps.length > 0 ? runningUnconfiguredApps : undefined,
     toolCoverage,
     unsupportedTools: unsupportedMap,
   };

@@ -1051,7 +1051,8 @@ export async function launchElectronApp(
     }
   }
 
-  const execPath = appCfg.path;
+  const { resolveElectronExecutablePath } = await import("../desktop/discovery.js");
+  const execPath = resolveElectronExecutablePath(appName, appCfg.path) || appCfg.path;
   if (!execPath || !isValidElectronExecutablePath(execPath)) {
     throw new Error(`[Weavetab] ✗ Invalid or non-existent Electron executable path for "${appName}": ${execPath}`);
   }

@@ -14,7 +14,7 @@ import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
 import fs from "node:fs";
 import path from "node:path";
-import { hideWeaveTabOverlay, restoreWeaveTabOverlay } from "../cdp/helpers.js";
+import { hideWeaveTabOverlay, restoreWeaveTabOverlay, maskSecretFieldsForCapture, restoreSecretFieldsAfterCapture } from "../cdp/helpers.js";
 
 export interface ScreenshotOptions {
   /** Capture format — "png" (lossless) or "jpeg" (smaller). Default: "png". */
@@ -86,33 +86,36 @@ export async function browserScreenshot(
     if (clip) params.clip = clip;
   }
 
-  // ── AI-blind: hide Weavetab overlay elements before screenshot ──────────────
+  // ── AI-blind: hide Weavetab overlay elements and mask secrets before screenshot ─
   // The chat panel, ghost cursor, thought bubble, HUD iframe, and all scripted
-  // UI are FOR THE USER only. The AI must never see or interact with them.
-  // hideOverlay defaults to true — only set to false if explicitly requested.
+  // UI are FOR THE USER only. Secret values are masked to prevent visual leaks.
   const shouldHide = options.hideOverlay !== false;
   if (shouldHide) {
     await hideWeaveTabOverlay(session);
   }
+  await maskSecretFieldsForCapture(session);
 
   let data: string;
   try {
-    const res = await session.Page.captureScreenshot(params);
-    data = res.data;
-  } catch (e) {
-    if (params.captureBeyondViewport) {
-      params.captureBeyondViewport = false;
-      delete params.clip;
+    try {
       const res = await session.Page.captureScreenshot(params);
       data = res.data;
-    } else {
-      throw e;
+    } catch (e) {
+      if (params.captureBeyondViewport) {
+        params.captureBeyondViewport = false;
+        delete params.clip;
+        const res = await session.Page.captureScreenshot(params);
+        data = res.data;
+      } else {
+        throw e;
+      }
     }
-  }
-
-  // Restore overlay visibility immediately after capture
-  if (shouldHide) {
-    await restoreWeaveTabOverlay(session);
+  } finally {
+    // Restore secret fields and overlay visibility immediately after capture
+    await restoreSecretFieldsAfterCapture(session);
+    if (shouldHide) {
+      await restoreWeaveTabOverlay(session);
+    }
   }
   // ─────────────────────────────────────────────────────────────────────────────
 

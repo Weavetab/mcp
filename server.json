@@ -7,13 +7,13 @@
     "url": "https://github.com/weavetab/mcp",
     "source": "github"
   },
-  "version": "2.5.0-beta.2",
+  "version": "2.5.0-beta.3",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@weavetab/mcp",
-      "version": "2.5.0-beta.2",
+      "version": "2.5.0-beta.3",
       "transport": {
         "type": "stdio"
       },

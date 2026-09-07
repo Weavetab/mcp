@@ -117,7 +117,7 @@ export const DEFAULT_CONFIG: Config = {
   sessionTimeout: 3600,
   navigationTimeout: 30000,
   idleTimeout: 60000,
-  actionabilityTimeoutMs: 15000,
+  actionabilityTimeoutMs: 300,
   maxTabs: 10,
   maxActionsPerMinute: 60,
   githubCacheTtlMs: 30 * 60 * 1000,
@@ -962,11 +962,15 @@ export function saveConfig(config: Config): void {
 // ─── Live-reload watcher ───────────────────────────────────────────────────────
 
 let watchTimeout: NodeJS.Timeout | null = null;
+let _configWatcher: fs.FSWatcher | null = null;
 
 function startWatcher(dir: string) {
   try {
     if (!fs.existsSync(dir)) return;
-    fs.watch(dir, (eventType, filename) => {
+    if (_configWatcher) {
+      try { _configWatcher.close(); } catch { /* ignore */ }
+    }
+    _configWatcher = fs.watch(dir, (eventType, filename) => {
       if (filename === "config.json" && eventType === "change") {
         if (watchTimeout) clearTimeout(watchTimeout);
         watchTimeout = setTimeout(() => {
@@ -977,12 +981,32 @@ function startWatcher(dir: string) {
             logDebug("[Weavetab] Failed to reload config", e);
           }
         }, 150);
+        if (watchTimeout && typeof watchTimeout.unref === "function") {
+          watchTimeout.unref();
+        }
       }
     });
+    if (_configWatcher && typeof (_configWatcher as any).unref === "function") {
+      (_configWatcher as any).unref();
+    }
   } catch {
     // Ignore watch errors on some OS/network mounts
   }
 }
 
+export function stopConfigWatcher(): void {
+  if (watchTimeout) {
+    clearTimeout(watchTimeout);
+    watchTimeout = null;
+  }
+  if (_configWatcher) {
+    try {
+      _configWatcher.close();
+    } catch { /* ignore */ }
+    _configWatcher = null;
+  }
+}
+
 // Watch global location so changes are picked up
 startWatcher(GLOBAL_CONFIG_DIR);
+

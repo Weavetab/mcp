@@ -45,5 +45,5 @@ This document is the universal specification for AI agents (Cursor, Antigravity,
 When adding or updating an MCP tool:
 1. Define tool input schema using `zod` in `src/`.
 2. Register the tool handler in the MCP server initialization.
-3. Update [mcp.json](file:///c:/Users/fy2ne/Music/Weavetab/MCP/mcp.json) and [server.json](file:///c:/Users/fy2ne/Music/Weavetab/MCP/server.json) metadata if tool list or capabilities change.
+3. Update tool definitions in `src/server.ts` and test assertions if tool list or capabilities change.
 4. Add unit test coverage under `tests/unit/`.

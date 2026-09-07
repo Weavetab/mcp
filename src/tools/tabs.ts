@@ -135,19 +135,28 @@ export async function WeavetabOpen(
   reuse = true,
   appName?: string
 ): Promise<{ success: true; tabId: string; url: string; reused?: boolean }> {
-  const port = resolvePort(config, appName);
+  // Infer appName from active session if omitted
+  let resolvedAppName = appName;
+  if (!resolvedAppName) {
+    const lastApp = sessionRegistry.getLastActiveApp();
+    if (lastApp) {
+      resolvedAppName = lastApp;
+    }
+  }
+
+  const port = resolvePort(config, resolvedAppName);
 
   // Tab reuse: if same URL is already open, focus it instead of duplicating
   if (reuse && url) {
     try {
-      const targets = await getTabList(getConfigAgentId(config), appName);
+      const targets = await getTabList(getConfigAgentId(config), resolvedAppName);
       const existing = targets.find(
         (t: any) => t.url === url
       );
       if (existing) {
-        const client = await connectToTab(existing.id, undefined, undefined, undefined, appName);
+        const client = await connectToTab(existing.id, undefined, undefined, undefined, resolvedAppName);
         await client.session.Target.activateTarget({ targetId: existing.id });
-        sessionRegistry.setActive(existing.id, getConfigAgentId(config), appName);
+        sessionRegistry.setActive(existing.id, getConfigAgentId(config), resolvedAppName);
         recordTabActivity(existing.id);
         logAction("browser_tabs", url, `reused existing tab ${existing.id}`);
         return { success: true, tabId: existing.id, url, reused: true };
@@ -155,11 +164,11 @@ export async function WeavetabOpen(
     } catch { /* fall through to open new */ }
   }
 
-  if (!appName) {
+  if (!resolvedAppName) {
     await enforceMaxTabs(config);
   }
 
-  const bctxId = appName ? undefined : sessionRegistry.getBrowserContextIdForAgent(getConfigAgentId(config));
+  const bctxId = resolvedAppName ? undefined : sessionRegistry.getBrowserContextIdForAgent(getConfigAgentId(config));
   const metaSession = await CDP({ host: "127.0.0.1", port });
   const { targetId } = await metaSession.Target.createTarget({ url, browserContextId: bctxId });
   await metaSession.close();

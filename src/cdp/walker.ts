@@ -8,7 +8,8 @@ import { logDebug } from "../audit/logger.js";
 import CDP from "chrome-remote-interface";
 import { filterHidden } from "../security/filter.js";
 import { SessionSecretTracker } from "../security/secrets.js";
-import type { RefEntry } from "../state/delta.js";
+import { getStoredRef, getStoredProps, type RefEntry } from "../state/delta.js";
+import { getRawCachedActionMap } from "../state/cache.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -44,6 +45,9 @@ export interface ActionElement {
   y?: number;
   viewport?: string;
   structuralIdiom?: string; // Captured structural hints (e.g. "aria-controls")
+  containerContext?: string; // e.g. "Pro Plan ($29/mo)" or "User: Anas (Admin)"
+  isModal?: boolean;         // true if inside an active dialog/modal
+  modalTitle?: string;       // enclosing modal title
 }
 
 
@@ -417,8 +421,16 @@ export async function buildActionMap(
             else if (role === 'input' && (el.type === 'text' || el.type === 'search')) role = 'textbox';
             var frameUrl = '';
             try { if (el.ownerDocument !== document) frameUrl = el.ownerDocument.defaultView.location.href; } catch(e) { frameUrl = 'cross-origin-' + (_coIdx++); }
-            var isSecret = el.hasAttribute('data-wt-secret') || (el.tagName === 'INPUT' && el.type === 'password');
-            var labelStr = el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || '';
+            var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+            var isSecret = el.hasAttribute('data-wt-secret') ||
+              (el.tagName === 'INPUT' && (
+                el.type === 'password' ||
+                secretRegex.test(el.getAttribute('autocomplete') || '') ||
+                secretRegex.test(el.getAttribute('name') || '') ||
+                secretRegex.test(el.getAttribute('id') || '') ||
+                secretRegex.test(el.getAttribute('aria-label') || '')
+              ));
+            var labelStr = el.getAttribute('aria-label') || el.innerText || (isSecret ? '' : el.value) || el.placeholder || '';
             // For radio/checkbox, serialize checked state as 'true'/'false' so the agent
             // can see which option is selected without having to scrape the DOM separately.
             var elType = (el.type || '').toLowerCase();
@@ -453,10 +465,59 @@ export async function buildActionMap(
                 break;
               }
             }
+
+            // ── Container context binding ─────────────────────────────────────
+            // Walk up the DOM to find a meaningful card/row/list-item heading that
+            // describes this element's entity context, e.g. "Pro Plan ($29/mo)".
+            var containerCtx = '';
+            try {
+              var CARD_SEL = '[class*="card"],[class*="row"],[class*="item"],[class*="product"],[class*="plan"],[class*="entry"],[class*="result"],[class*="tile"],[class*="option"],[data-entity]';
+              var ancestor = el.parentElement;
+              var depth3 = 0;
+              while (ancestor && depth3 < 8) {
+                if (ancestor.matches && ancestor.matches(CARD_SEL)) {
+                  var heading = ancestor.querySelector('h1,h2,h3,h4,h5,h6,[class*="title"],[class*="name"],[class*="heading"],[class*="label"]');
+                  if (heading) {
+                    var hText = (heading.innerText || heading.textContent || '').trim().slice(0, 60);
+                    if (hText && hText !== labelStr) { containerCtx = hText; break; }
+                  }
+                  var allText = (ancestor.innerText || ancestor.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+                  if (allText && allText !== labelStr) { containerCtx = allText; break; }
+                }
+                ancestor = ancestor.parentElement;
+                depth3++;
+              }
+            } catch(e) {}
+
+            // ── Modal detection ───────────────────────────────────────────────
+            var inModal = false;
+            var modalTitleStr = '';
+            try {
+              var MODAL_SEL = 'dialog[open],[role="dialog"],[aria-modal="true"],[class*="modal"],[class*="overlay"],[class*="drawer"]';
+              var modalAnc = el.parentElement;
+              var md = 0;
+              while (modalAnc && md < 15) {
+                if (modalAnc.matches && modalAnc.matches(MODAL_SEL)) {
+                  inModal = true;
+                  var mh = modalAnc.querySelector('h1,h2,h3,h4,[class*="title"]');
+                  if (mh) {
+                    var lbId = modalAnc.getAttribute('aria-labelledby');
+                    var lbEl = lbId ? document.getElementById(lbId) : null;
+                    modalTitleStr = ((lbEl || mh).innerText || (lbEl || mh).textContent || '').trim().slice(0, 60);
+                  }
+                  break;
+                }
+                modalAnc = modalAnc.parentElement;
+                md++;
+              }
+            } catch(e) {}
+
             results.push({
               id: String(id),
               role: el.getAttribute('role') || role,
+              type: elType || undefined,
               label: labelStr,
+              placeholder: el.placeholder || undefined,
               value: valStr,
               x: Math.round(rect.left + rect.width / 2),
               y: Math.round(rect.top + rect.height / 2),
@@ -465,7 +526,12 @@ export async function buildActionMap(
               textContent: txtContent,
               className: el.className || '',
               frameUrl: frameUrl,
-              structuralIdiom: idiom || undefined
+              structuralIdiom: idiom || undefined,
+              containerContext: containerCtx || undefined,
+              isModal: inModal || undefined,
+              modalTitle: modalTitleStr || undefined,
+              disabled: (el.disabled || el.getAttribute('aria-disabled') === 'true') || undefined,
+              checked: isCheckable ? el.checked : undefined,
             });
           } catch (e) {
             // Silently skip elements that cause errors (cross-origin SVG, detached nodes, etc.)
@@ -552,6 +618,8 @@ export async function buildActionMap(
     role: el.role || el.tag || 'generic',
     label: el.label || el.text || el.placeholder || '',
     value: el.value,
+    placeholder: el.placeholder || undefined,
+    type: el.type || undefined,
     group: 'main_content',
     fingerprint: `${el.role || el.tag || 'generic'}:${el.label || el.text || ''}:${el.id}`,
     depth: 0,
@@ -565,6 +633,10 @@ export async function buildActionMap(
     className: el.className || el.attributes?.class || '',
     structuralIdiom: el.structuralIdiom || undefined,
     frameUrl: el.frameUrl || undefined,
+    containerContext: el.containerContext || undefined,
+    isModal: el.isModal || undefined,
+    modalTitle: el.modalTitle || undefined,
+    disabled: el.disabled || undefined,
   }));
 
   // Post-mapping sanitizer — catch any w:undefined/w:null and reassign.
@@ -702,7 +774,16 @@ export async function buildActionMap(
     filtered = filtered.slice(0, options.limit);
   }
 
-  return { url, title, elements: filtered, targetId };
+  // Apply session secret redaction over all element labels, values, placeholders
+  const redactedElements = filtered.map(el => ({
+    ...el,
+    label: targetId ? SessionSecretTracker.redact(targetId, el.label) : el.label,
+    value: el.value !== undefined ? (targetId ? SessionSecretTracker.redact(targetId, el.value) : el.value) : undefined,
+    placeholder: el.placeholder ? (targetId ? SessionSecretTracker.redact(targetId, el.placeholder) : el.placeholder) : undefined,
+    textContent: el.textContent ? (targetId ? SessionSecretTracker.redact(targetId, el.textContent) : el.textContent) : undefined,
+  }));
+
+  return { url, title, elements: redactedElements, targetId };
 }
 
 // ─── toRefEntries — converts ActionElements to RefEntry for delta tracking ───
@@ -714,7 +795,7 @@ export function toRefEntries(elements: ActionElement[]): RefEntry[] {
     label: el.label,
     type: el.type,
     href: el.href,
-    disabled: el.disabled,
+    disabled: el.disabled ?? false,
     value: el.value,
     fingerprint: el.fingerprint,
   }));
@@ -1036,10 +1117,14 @@ export async function buildAXTreeMap(
       value = node.value?.value !== undefined ? String(node.value.value) : undefined;
     }
 
-    const isSecretRole = role === 'password' || node.name?.value?.toLowerCase().includes('password');
+    const SECRET_TERMS = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha|пароль|密碼|密码/i;
+    const isSecretRole = role === 'password' || SECRET_TERMS.test(node.name?.value || '') || SECRET_TERMS.test(node.description?.value || '');
     if (isSecretRole || (node.backendDOMNodeId !== undefined && SessionSecretTracker.isNodeSecret(targetId, node.backendDOMNodeId))) {
       label = '[REDACTED]';
       value = '[REDACTED]';
+    } else {
+      label = targetId ? SessionSecretTracker.redact(targetId, label) : label;
+      if (value !== undefined) value = targetId ? SessionSecretTracker.redact(targetId, value) : value;
     }
     // Use globally-unique sequential ID (Bug #5 fix: was local idCounter = 1).
     const id = dedupeRefId(`w:${axIdCursor++}`);
@@ -1095,4 +1180,241 @@ export async function buildAXTreeMap(
   axTreeCacheSet(url, map);
   return map;
 }
+
+/**
+ * Sanitizes element IDs in an ActionElement list, replacing empty or malformed
+ * IDs with sequential fallback IDs.
+ */
+export function sanitizeElementIds(
+  els: ActionElement[],
+  counter: { value: number }
+): number {
+  let fixed = 0;
+  for (const el of els) {
+    if (!el.id || el.id === "w:undefined" || el.id === "w:null" || el.id === "w:") {
+      el.id = `w:${counter.value++}`;
+      fixed++;
+    }
+  }
+  return fixed;
+}
+
+export interface RecoveredRefResult {
+  recovered: boolean;
+  element?: ActionElement;
+  strategy?: "connected_existing" | "stored_selector" | "exact_label" | "placeholder_or_name" | "fuzzy_label";
+  warning?: string;
+}
+
+/**
+ * Recovers a detached or invalidated w:NN ref on reactive SPAs.
+ * When hydration or DOM re-renders detach an element, this helper executes a sub-5ms
+ * multi-tier recovery heuristic (connected node verification, stored CSS selector,
+ * exact label/aria, placeholder/name match, and fuzzy substring) and re-stamps
+ * data-wt-id="NN" onto the live DOM node so subsequent interaction succeeds.
+ */
+export async function recoverDetachedRef(
+  session: CDP.Client,
+  targetId: string,
+  ref: string,
+  preferredCandidate?: Partial<ActionElement>
+): Promise<RecoveredRefResult> {
+  const refNumericId = ref.replace(/^w:/, '');
+
+  // Extract known metadata for this ref
+  const storedRef = getStoredRef(targetId, ref);
+  const storedProps = getStoredProps(targetId, ref);
+  const rawMap = getRawCachedActionMap(targetId);
+  const cachedEl = rawMap?.elements?.find(e => e.id === ref || e.id === `w:${refNumericId}`);
+
+  const candidateLabel = preferredCandidate?.label || storedProps?.label || storedRef?.label || cachedEl?.label || '';
+  const candidatePlaceholder = preferredCandidate?.placeholder || storedProps?.placeholder || cachedEl?.placeholder || '';
+  const candidateRole = preferredCandidate?.role || storedProps?.role || storedRef?.role || cachedEl?.role || '';
+  const candidateSelector = preferredCandidate?.selector || cachedEl?.selector || (storedProps?.className ? `.${storedProps.className.split(' ')[0]}` : undefined);
+  const candidateText = preferredCandidate?.textContent || storedProps?.textContent || cachedEl?.textContent || '';
+
+  const meta = {
+    label: candidateLabel === '[REDACTED]' ? '' : candidateLabel,
+    placeholder: candidatePlaceholder === '[REDACTED]' ? '' : candidatePlaceholder,
+    role: candidateRole,
+    selector: candidateSelector,
+    textContent: candidateText === '[REDACTED]' ? '' : candidateText,
+  };
+
+  try {
+    const { result } = await session.Runtime.evaluate({
+      expression: `(function(refId, meta) {
+        // 1. Check if node with data-wt-id=refId is already in DOM, connected, and visible
+        const existing = document.querySelector('[data-wt-id="' + refId + '"]');
+        if (existing && existing.isConnected) {
+          const r = existing.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            return {
+              success: true,
+              strategy: 'connected_existing',
+              x: Math.round(r.left + r.width / 2),
+              y: Math.round(r.top + r.height / 2),
+              label: existing.getAttribute('aria-label') || (existing.innerText || existing.textContent || '').trim() || existing.placeholder || '',
+              role: existing.getAttribute('role') || existing.tagName.toLowerCase()
+            };
+          }
+        }
+
+        function isValidCandidate(el) {
+          if (!el || !el.isConnected) return false;
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return false;
+          try {
+            const style = window.getComputedStyle(el);
+            if (style.visibility === 'hidden' || style.display === 'none') return false;
+          } catch(e) {}
+          return true;
+        }
+
+        // 2. Strategy: Stored Selector (if stable CSS selector recorded)
+        if (meta.selector && !meta.selector.startsWith('[data-wt-id')) {
+          try {
+            const el = document.querySelector(meta.selector);
+            if (isValidCandidate(el)) {
+              el.setAttribute('data-wt-id', refId);
+              const r = el.getBoundingClientRect();
+              return {
+                success: true,
+                strategy: 'stored_selector',
+                x: Math.round(r.left + r.width / 2),
+                y: Math.round(r.top + r.height / 2),
+                label: el.getAttribute('aria-label') || (el.innerText || el.textContent || '').trim() || el.placeholder || '',
+                role: el.getAttribute('role') || el.tagName.toLowerCase()
+              };
+            }
+          } catch(e) {}
+        }
+
+        const normLabel = (meta.label || '').toLowerCase().trim();
+        const normPlaceholder = (meta.placeholder || '').toLowerCase().trim();
+
+        const candidates = Array.from(document.querySelectorAll(
+          'button, a, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="tab"], [tabindex="0"]'
+        ));
+
+        // 3. Strategy: Exact Label / Text / Aria match
+        if (normLabel) {
+          for (const c of candidates) {
+            if (!isValidCandidate(c)) continue;
+            const aria = (c.getAttribute('aria-label') || '').toLowerCase().trim();
+            const text = ((c.innerText || c.textContent || '')).toLowerCase().trim();
+            const val = (c.value || '').toLowerCase().trim();
+            const placeholder = (c.placeholder || '').toLowerCase().trim();
+            const name = (c.getAttribute('name') || '').toLowerCase().trim();
+
+            if (aria === normLabel || text === normLabel || placeholder === normLabel || name === normLabel || (val && val === normLabel)) {
+              c.setAttribute('data-wt-id', refId);
+              const r = c.getBoundingClientRect();
+              return {
+                success: true,
+                strategy: 'exact_label',
+                x: Math.round(r.left + r.width / 2),
+                y: Math.round(r.top + r.height / 2),
+                label: c.getAttribute('aria-label') || (c.innerText || c.textContent || '').trim() || c.placeholder || '',
+                role: c.getAttribute('role') || c.tagName.toLowerCase()
+              };
+            }
+          }
+        }
+
+        // 4. Strategy: Placeholder or Name match
+        if (normPlaceholder) {
+          for (const c of candidates) {
+            if (!isValidCandidate(c)) continue;
+            const placeholder = (c.placeholder || '').toLowerCase().trim();
+            const name = (c.getAttribute('name') || '').toLowerCase().trim();
+            if (placeholder === normPlaceholder || name === normPlaceholder) {
+              c.setAttribute('data-wt-id', refId);
+              const r = c.getBoundingClientRect();
+              return {
+                success: true,
+                strategy: 'placeholder_or_name',
+                x: Math.round(r.left + r.width / 2),
+                y: Math.round(r.top + r.height / 2),
+                label: c.placeholder || c.getAttribute('name') || '',
+                role: c.getAttribute('role') || c.tagName.toLowerCase()
+              };
+            }
+          }
+        }
+
+        // 5. Strategy: Fuzzy Substring Match (if label length >= 3)
+        if (normLabel && normLabel.length >= 3) {
+          let bestMatch = null;
+          let minDiff = Infinity;
+          for (const c of candidates) {
+            if (!isValidCandidate(c)) continue;
+            const text = ((c.innerText || c.textContent || '')).toLowerCase().trim();
+            const aria = (c.getAttribute('aria-label') || '').toLowerCase().trim();
+            const candStr = aria || text;
+            if (candStr && candStr.includes(normLabel)) {
+              const diff = candStr.length - normLabel.length;
+              if (diff >= 0 && diff < minDiff) {
+                minDiff = diff;
+                bestMatch = c;
+              }
+            }
+          }
+          if (bestMatch) {
+            bestMatch.setAttribute('data-wt-id', refId);
+            const r = bestMatch.getBoundingClientRect();
+            return {
+              success: true,
+              strategy: 'fuzzy_label',
+              x: Math.round(r.left + r.width / 2),
+              y: Math.round(r.top + r.height / 2),
+              label: bestMatch.getAttribute('aria-label') || (bestMatch.innerText || bestMatch.textContent || '').trim() || bestMatch.placeholder || '',
+              role: bestMatch.getAttribute('role') || bestMatch.tagName.toLowerCase()
+            };
+          }
+        }
+
+        return { success: false };
+      })(${JSON.stringify(refNumericId)}, ${JSON.stringify(meta)})`,
+      returnByValue: true,
+    });
+
+    const res = result?.value as any;
+    if (res && res.success) {
+      const recoveredElement: ActionElement = {
+        id: ref.startsWith('w:') ? ref : `w:${ref}`,
+        role: res.role || candidateRole || 'button',
+        label: res.label || candidateLabel || 'recovered-element',
+        x: res.x,
+        y: res.y,
+        selector: `[data-wt-id="${refNumericId}"]`,
+        group: "utility",
+        depth: 0,
+        fingerprint: `${res.role || candidateRole}:${res.label || candidateLabel}`,
+      };
+
+      // Patch the raw cache if present so subsequent lookups hit
+      if (rawMap && rawMap.elements) {
+        const existingIdx = rawMap.elements.findIndex(e => e.id === recoveredElement.id);
+        if (existingIdx !== -1) {
+          rawMap.elements[existingIdx] = recoveredElement;
+        } else {
+          rawMap.elements.push(recoveredElement);
+        }
+      }
+
+      return {
+        recovered: true,
+        element: recoveredElement,
+        strategy: res.strategy,
+        warning: `(Auto-recovered detached ref '${ref}' via ${res.strategy}: '${recoveredElement.label}')`,
+      };
+    }
+  } catch (err) {
+    logDebug(`[Walker] Detached ref recovery failed for ${ref}: ${err}`);
+  }
+
+  return { recovered: false };
+}
+
 

@@ -140,25 +140,138 @@ async function resolveRefToCoords(session: CDP.Client, targetId: string, ref: st
   return null;
 }
 
+export interface PointerStep {
+  action?: "hover" | "click" | "double_click";
+  ref?: string;
+  selector?: string;
+  target?: string;
+  label?: string;
+  x?: number;
+  y?: number;
+  holdMs?: number;
+}
+
+export interface PointerArgs {
+  action?: "click" | "double_click" | "hover" | "drag_and_drop" | "hover_chain";
+  ref?: string;
+  selector?: string;
+  target?: string;
+  label?: string;  // supports label-based targeting
+  x?: number;
+  y?: number;
+  end_ref?: string;
+  end_x?: number;
+  end_y?: number;
+  waitForChild?: string; // for hover
+  holdMs?: number; // for hover
+  hover_chain?: Array<string | PointerStep>;
+  chain?: Array<string | PointerStep>;
+  clickFinal?: boolean;
+  [key: string]: unknown;
+}
+
 export async function browserPointer(
   session: CDP.Client,
-  args: {
-    action: "click" | "double_click" | "hover" | "drag_and_drop";
-    ref?: string;
-    selector?: string;
-    target?: string;
-    label?: string;  // supports label-based targeting
-    x?: number;
-    y?: number;
-    end_ref?: string;
-    end_x?: number;
-    end_y?: number;
-    waitForChild?: string; // for hover
-    holdMs?: number; // for hover
-  },
+  args: PointerArgs,
   config: Config
 ): Promise<PointerResult> {
-  let { action, ref, selector, label, x, y, end_ref, end_x, end_y, waitForChild, holdMs = 300 } = args;
+  let { action = "click", ref, selector, label, x, y, end_ref, end_x, end_y, waitForChild, holdMs = 200 } = args;
+
+  // ── HOVER CHAIN / SUBMENU NAVIGATION (Photopea, Figma, Photoshop, Flyout Menus) ──
+  const rawChain = args.hover_chain || args.chain;
+  if (action === "hover_chain" || (rawChain && rawChain.length > 0)) {
+    const chainItems: PointerStep[] = (rawChain || []).map((step, idx, arr) => {
+      if (typeof step === "string") {
+        const isLast = idx === arr.length - 1;
+        return {
+          action: isLast && args.clickFinal !== false ? "click" : "hover",
+          ref: step,
+          label: step,
+          target: step
+        };
+      }
+      return step;
+    });
+
+    const startMs = Date.now();
+    const { Page, Input } = session;
+    let targetId = "default";
+    const active = sessionRegistry.getActive(getConfigAgentId(config));
+    if (active) targetId = active.targetId;
+
+    let lastX = 0, lastY = 0;
+    for (let i = 0; i < chainItems.length; i++) {
+      const step = chainItems[i]!;
+      const stepTarget = step.ref || step.selector || step.target || step.label;
+      let stepCoords: { x: number; y: number; selector: string } | null = null;
+
+      if (step.x !== undefined && step.y !== undefined) {
+        stepCoords = { x: step.x, y: step.y, selector: step.selector || '' };
+      } else if (stepTarget) {
+        stepCoords = await resolveRefToCoords(session, targetId, stepTarget).catch(() => null);
+        if (!stepCoords) {
+          // Submenu might have rendered after previous hover; quick retry with fresh map
+          await new Promise(r => setTimeout(r, 80));
+          await buildActionMap(session, { lite: true }, targetId).then(m => cacheActionMap(targetId, m)).catch(() => {});
+          stepCoords = await resolveRefToCoords(session, targetId, stepTarget).catch(() => null);
+        }
+      }
+
+      if (!stepCoords) {
+        throw new Error(`[browser_pointer hover_chain] Could not resolve coordinates for chain step [${i}]: '${stepTarget}'`);
+      }
+
+      lastX = stepCoords.x;
+      lastY = stepCoords.y;
+
+      // Move pointer smoothly to element
+      await ghostMove(session, stepCoords.x, stepCoords.y, config, step.label, "fast");
+      await Input.dispatchMouseEvent({ type: "mouseMoved", x: stepCoords.x, y: stepCoords.y, pointerType: "mouse" });
+
+      // Dispatch mouseenter/mouseover events for dynamic flyout/hover menus
+      if (stepCoords.selector) {
+        await session.Runtime.evaluate({
+          expression: `(function(sel, cx, cy) {
+            const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+            if (!el) return;
+            el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, cancelable: true, clientX: cx, clientY: cy }));
+            el.dispatchEvent(new MouseEvent('mouseover',  { bubbles: true,  cancelable: true, clientX: cx, clientY: cy }));
+            el.dispatchEvent(new MouseEvent('mousemove',  { bubbles: true,  cancelable: true, clientX: cx, clientY: cy }));
+          })(${JSON.stringify(stepCoords.selector)}, ${stepCoords.x}, ${stepCoords.y})`,
+          returnByValue: false
+        }).catch(() => {});
+      }
+
+      const stepHold = step.holdMs ?? (i === chainItems.length - 1 ? 40 : 100);
+      await new Promise(r => setTimeout(r, stepHold));
+
+      // If action is click (e.g. final step in chain)
+      if (step.action === "click") {
+        await Input.dispatchMouseEvent({ type: "mousePressed", x: stepCoords.x, y: stepCoords.y, button: "left", clickCount: 1, pointerType: "mouse" });
+        await new Promise(r => setTimeout(r, 40));
+        await Input.dispatchMouseEvent({ type: "mouseReleased", x: stepCoords.x, y: stepCoords.y, button: "left", clickCount: 1, pointerType: "mouse" });
+      } else if (step.action === "double_click") {
+        await Input.dispatchMouseEvent({ type: "mousePressed", x: stepCoords.x, y: stepCoords.y, button: "left", clickCount: 1, pointerType: "mouse" });
+        await Input.dispatchMouseEvent({ type: "mouseReleased", x: stepCoords.x, y: stepCoords.y, button: "left", clickCount: 1, pointerType: "mouse" });
+        await new Promise(r => setTimeout(r, 60));
+        await Input.dispatchMouseEvent({ type: "mousePressed", x: stepCoords.x, y: stepCoords.y, button: "left", clickCount: 2, pointerType: "mouse" });
+        await Input.dispatchMouseEvent({ type: "mouseReleased", x: stepCoords.x, y: stepCoords.y, button: "left", clickCount: 2, pointerType: "mouse" });
+      }
+    }
+
+    const execMs = Date.now() - startMs;
+    const { frameTree: postFrameTree } = await Page.getFrameTree().catch(() => ({ frameTree: { frame: { url: '' } } }));
+    return {
+      success: true,
+      action: "hover_chain",
+      x: lastX,
+      y: lastY,
+      execution_ms: execMs,
+      tab_id: targetId,
+      url: postFrameTree.frame.url,
+      dom_changed: true,
+    };
+  }
   
   if (selector && !ref) {
     ref = selector;

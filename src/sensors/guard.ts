@@ -205,11 +205,9 @@ export async function detectPageWeight(session: CDP.Client): Promise<PageWeight>
   }
 }
 
-// ─── Navigation wait — used after clicks that trigger navigation ──────────────
-
 export async function awaitNavigation(
   session: CDP.Client,
-  timeout = 6000  // Reduced from 10000ms
+  timeout = 6000
 ): Promise<void> {
   // Poll readyState instead of consuming one-shot event
   await pollUntil(async () => {
@@ -218,13 +216,8 @@ export async function awaitNavigation(
       returnByValue: true,
     }).catch(() => ({ result: { value: 'loading' } }));
     return result?.value === 'complete' || result?.value === 'interactive';
-  }, { timeout, interval: 50 }).catch(() => {  // Reduced interval from 100ms
-    throw new Error(`Navigation timeout after ${timeout}ms`);
-  });
+  }, { timeout, interval: 30 }).catch(() => {});
 
-  // After DOM content fires, detect page weight for post-load stability wait
-  const weight = await detectPageWeight(session);
-  const stabilityTimeout = weight.level === "heavy" ? 3000 : weight.level === "medium" ? 2000 : 1000;  // Reduced from 5000/3000/2000
-
-  await waitForDOMStable(session, 50, stabilityTimeout);  // Reduced quiet period from 100ms
+  // Quick 40ms settle window for hydration/initial script exec
+  await new Promise(r => setTimeout(r, 40));
 }

@@ -56,7 +56,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at:
 
-- **Email:** conduct@weavetab.pages.dev
+- **Email:** conduct@weavetab.dev
 - **GitHub:** Use the private vulnerability reporting feature on the repository
 
 All complaints will be reviewed and investigated promptly and fairly.
@@ -130,7 +130,7 @@ All contributions must include:
 For questions about this Code of Conduct or its enforcement:
 
 - **Project Maintainer:** fy2ne
-- **Email:** conduct@weavetab.pages.dev
+- **Email:** conduct@weavetab.dev
 - **GitHub:** https://github.com/weavetab/mcp
 
 ---

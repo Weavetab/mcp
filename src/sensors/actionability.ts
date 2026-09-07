@@ -74,7 +74,7 @@ export interface ActionabilityOptions {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Playwright's per-action retry backoff (ms). */
-const BACKOFF = [0, 20, 100, 100, 500] as const;
+const BACKOFF = [0, 20, 100] as const;
 
 /**
  * 4-way scroll alignment rotation — escape sticky headers.
@@ -180,7 +180,6 @@ function buildPageExpression(
     let stable = false;
     while (Date.now() < stabilityDeadline) {
       await new Promise(r => requestAnimationFrame(r));
-      await new Promise(r => requestAnimationFrame(r)); // two ticks like Playwright
       const cur = el.getBoundingClientRect();
       if (
         Math.abs(cur.x - prevRect.x) < 0.5 &&

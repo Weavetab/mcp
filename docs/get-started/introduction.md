@@ -54,7 +54,7 @@ npm install -D @weavetab/sdk@latest
 
 ## Next Steps
 
-- **[Quickstart](/docs/quickstart)** — install and run a first mission in 60 seconds
-- **[Desktop & Electron Apps](/docs/electron-apps)** — configure and control desktop apps
-- **[Autonomous CAPTCHA Solver](/docs/captcha-solver)** — zero-API anti-bot solving
-- **[MCP Tools Reference](/docs/tools)** — full reference for all 46 built-in automation tools
+- **[Quickstart](quickstart.md)** — install and run a first mission in 60 seconds
+- **[Desktop & Electron Apps](../desktop-automation/electron-apps.md)** — configure and control desktop apps
+- **[Autonomous CAPTCHA Solver](../captcha-stealth/captcha-solver.md)** — zero-API anti-bot solving
+- **[MCP Tools Reference](../tools/tools.md)** — full reference for all 46 built-in automation tools
