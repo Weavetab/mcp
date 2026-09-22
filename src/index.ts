@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 import chalk from "chalk";
 import boxen from "boxen";
 import pc from "picocolors";
+import { WEAVETAB_VERSION } from "./version.js";
 
 // ─── Server-Process Singleton Lock ────────────────────────────────────────────
 // When an IDE opens multiple windows or reconnects after a crash, it spawns a new
@@ -1032,7 +1033,7 @@ async function main(): Promise<void> {
     const open = (await import("open")).default;
     const config = await loadConfig();
     const _require = createRequire(import.meta.url);
-    const version = _require("../package.json").version || "2.5.0";
+    const version = _require("../package.json").version || WEAVETAB_VERSION;
 
     console.clear();
     await checkForUpdates();
@@ -1134,10 +1135,10 @@ async function main(): Promise<void> {
         runMainUI();
       }
       if (k === "g") {
-        await open("https://github.com/Weavetab");
+        await open("https://github.com/weavetab");
       }
       if (k === "n") {
-        await open("https://npmjs.com/package/Weavetab");
+        await open("https://www.npmjs.com/package/@weavetab/mcp");
       }
       if (k === "w") {
         await open("https://github.com/weavetab/mcp");
@@ -1149,7 +1150,7 @@ async function main(): Promise<void> {
 
   function runHelp(): void {
     const _require = createRequire(import.meta.url);
-    const version = _require("../package.json").version || "2.5.0";
+    const version = _require("../package.json").version || WEAVETAB_VERSION;
 
     console.clear();
 
@@ -1199,8 +1200,8 @@ async function main(): Promise<void> {
     console.log();
 
     console.log(pc.bold("LINKS"));
-    console.log(`  ${pc.cyan("GitHub:")}  ${pc.dim("https://github.com/Weavetab")}`);
-    console.log(`  ${pc.cyan("npm:")}     ${pc.dim("https://npmjs.com/package/Weavetab")}`);
+    console.log(`  ${pc.cyan("GitHub:")}  ${pc.dim("https://github.com/weavetab")}`);
+    console.log(`  ${pc.cyan("npm:")}     ${pc.dim("https://www.npmjs.com/package/@weavetab/mcp")}`);
     console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://github.com/weavetab/mcp")}`);
     console.log();
   }
@@ -1325,7 +1326,7 @@ main().catch((err: unknown) => {
       }
 
       await secretStore.setSecret(key, value as string, domains);
-      console.log(pc.green(`[OK] Secret "${key}" saved successfully.`));
+      console.log(pc.green(`[OK] Secret "${key}" saved.`));
       return;
     }
 

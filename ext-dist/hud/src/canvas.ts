@@ -14,26 +14,12 @@ let phase = 'idle';
 let currentToolName = '';
 
 // ── Routing state (set by content.js via postMessage) ──
-// True when sidepanel is open — browser_thought pill routes there instead
-let isSidepanelOpen = false;
 // True when user wants scripted cursor pills to show (Typing..., Clicking..., etc.)
 let showScriptedCursorPill = true;
-// One-shot flag: background sent WT_SUPPRESS_THOUGHT_HUD for current event
-let suppressNextThoughtPill = false;
 
-// Listen for sidepanel state + suppression from content.js relay
+// Listen for suppression from content.js relay
 window.addEventListener('message', function(e: MessageEvent) {
   if (!e.data) return;
-  if (e.data.type === 'WT_SIDEPANEL_STATE') {
-    isSidepanelOpen = !!e.data.open;
-    // When sidepanel opens, clear any in-progress thought pill immediately
-    if (isSidepanelOpen) currentToolName = '';
-  }
-  if (e.data.type === 'WT_SUPPRESS_THOUGHT_HUD') {
-    suppressNextThoughtPill = true;
-    currentToolName = '';
-  }
-  // User toggled scripted pill setting from sidepanel settings
   if (e.data.type === 'WT_SCRIPTED_PILL_TOGGLE') {
     showScriptedCursorPill = !!e.data.enabled;
   }
@@ -360,7 +346,7 @@ function drawCursor() {
 }
 
 function drawEmote() {
-  // Floating on-page text pills removed — all tool calls/thoughts display inside sidepanel logs
+  // Floating on-page text pills removed
   return;
 }
 

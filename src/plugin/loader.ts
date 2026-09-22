@@ -5,6 +5,7 @@ import os from "node:os";
 import type { WeavetabPlugin, WeavetabManifest, WeavetabPermissions, PluginContext } from "./interface.js";
 import { PluginStorageManager } from "./storage.js";
 import { PluginExtensionBridge } from "./extension_bridge.js";
+import { getSiteProfile, learnPattern, recordPatternExecution, getPatternReliability, recordQuirk } from "../intelligence/patternCompiler.js";
 
 const require = createRequire(import.meta.url);
 
@@ -15,8 +16,9 @@ export interface InstalledPluginInfo {
   pkgJson?: Record<string, any>;
   hasValidManifest: boolean;
 }
+import { WEAVETAB_VERSION } from "../version.js";
 
-const RUNTIME_VERSION = "2.5.0-beta.3";
+const RUNTIME_VERSION = WEAVETAB_VERSION;
 
 function getNodeModulesDirs(customDir?: string): string[] {
   if (customDir) return [customDir];
@@ -246,6 +248,13 @@ export function buildPluginContext(
       onPageNavigate: (fn) => {
         if (typeof fn === "function") hooks.onPageNavigate.push(fn);
       },
+    },
+    memory: {
+      getSiteProfile: (origin: string) => getSiteProfile(origin),
+      learnPattern: (origin: string, name: string, pattern: any) => learnPattern(origin, name, pattern),
+      recordExecution: (origin: string, name: string, success: boolean, durationMs?: number) => recordPatternExecution(origin, name, success, durationMs),
+      getReliability: (origin: string, patternName: string) => getPatternReliability(origin, patternName),
+      recordQuirk: (origin: string, quirkKey: string, quirkData: any) => recordQuirk(origin, quirkKey, quirkData),
     },
     logger: {
       info: (...args: any[]) => console.error(`[Plugin: ${plugin.name}] [INFO]`, ...args),

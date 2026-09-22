@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import CDP from "chrome-remote-interface";
-import { GLOBAL_CONFIG_DIR } from "../config/loader.js";
+import { GLOBAL_CONFIG_DIR, getSystemDir } from "../config/loader.js";
 import { logDebug } from "../audit/logger.js";
 import fs from "fs";
 
@@ -47,9 +47,18 @@ export interface DomainProfile {
 
 function domainFile(hostname: string): string {
   const safe = hostname.replace(/[^a-zA-Z0-9.-]/g, "_");
-  const memoryDir = join(GLOBAL_CONFIG_DIR, "memory");
-  if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true });
-  return join(memoryDir, `${safe}.json`);
+  const memoryDir = getSystemDir("memory");
+  const systemPath = join(memoryDir, `${safe}.json`);
+
+  // Backward compatibility: migrate legacy ~/.weavetab/memory/<safe>.json if it exists
+  const legacyPath = join(GLOBAL_CONFIG_DIR, "memory", `${safe}.json`);
+  if (!fs.existsSync(systemPath) && fs.existsSync(legacyPath)) {
+    try {
+      fs.copyFileSync(legacyPath, systemPath);
+    } catch { /* ignore migration error */ }
+  }
+
+  return systemPath;
 }
 
 const memoryCache = new Map<string, DomainProfile>();

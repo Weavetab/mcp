@@ -936,6 +936,20 @@ export function getGlobalSystemDir(subdir: string): string {
   return dir;
 }
 
+/**
+ * Returns the canonical directory for persistent site profiles and learned workflow patterns.
+ * Lives in ~/.weavetab-system/memory/sites/ — strictly machine-managed, never user-authored.
+ * Separated from the legacy selector-memory dir (~/.weavetab-system/memory/) so existing
+ * per-domain selector caches are not disrupted.
+ */
+export function getSystemMemorySitesDir(): string {
+  const dir = path.join(GLOBAL_SYSTEM_DIR, "memory", "sites");
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
 
 export function saveConfig(config: Config): void {
   const { dir, file } = getActiveConfigPath();

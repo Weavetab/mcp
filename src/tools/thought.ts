@@ -13,6 +13,8 @@ function sleep(ms: number) {
 export interface ThoughtOptions {
   action: "feedback" | "question";
   message: string;
+  anchor?: string;
+  style?: "observation" | "decision" | "warning" | "question";
   input?: "sentence" | "paragraph";
   timeout?: number;
 }
@@ -30,22 +32,19 @@ export async function browserThought(
   session: CDP.Client,
   args: ThoughtOptions
 ): Promise<ThoughtResult> {
-  const { action, message, input, timeout } = args;
+  const { action, message, input, timeout, anchor, style } = args;
 
   logAction("browser_thought", action, message);
 
   if (action === "feedback") {
-    await sendToExtension(session, {
-      type: 'Weavetab_STATE',
-      hud: { action: message },
-      stickyFeedback: true,
-    }).catch(() => {});
-
-    // Forward to sidepanel thought stream
+    // Forward thought event to extension
     await sendToExtension(session, {
       type: 'WT_THOUGHT',
       text: message,
       kind: 'thought',
+      anchor,
+      style: style || 'observation',
+      action: 'feedback',
     }).catch(() => {});
 
     return { success: true };
@@ -55,13 +54,14 @@ export async function browserThought(
     const QUESTION_TIMEOUT_MS = Math.min((timeout || 20), 20) * 1000;
 
     await sendToExtension(session, {
-      type: 'Weavetab_STATE',
-      hud: { action: message },
-      stickyFeedback: true,
-      ask: {
-        input: input || "sentence",
-        timeout: Math.min((timeout || 20), 20),
-      },
+      type: 'WT_THOUGHT',
+      text: message,
+      kind: 'question',
+      anchor,
+      style: style || 'question',
+      action: 'question',
+      input: input || "sentence",
+      timeout: Math.min((timeout || 20), 20),
     }).catch(() => {});
 
     const start = Date.now();

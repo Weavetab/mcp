@@ -1,21 +1,6 @@
 const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
 
-// Allow users to open the side panel by clicking on the action toolbar icon
-if (browserAPI.sidePanel) {
-  browserAPI.sidePanel
-    .setPanelBehavior({ openPanelOnActionClick: true })
-    .catch((error) => console.error(error));
-}
-
-// ── Browser Startup: auto-open sidepanel ────────────────────────
-// Clear minimized state on browser launch so sidepanel opens automatically
-browserAPI.runtime.onStartup.addListener(function() {
-  try { browserAPI.storage.local.remove('wt_panel_minimized'); } catch(e) {}
-});
-// Also clear on install (first launch)
-browserAPI.runtime.onInstalled.addListener(function() {
-  try { browserAPI.storage.local.remove('wt_panel_minimized'); } catch(e) {}
-});
+// HUD toggle command handler
 
 // HUD toggle command handler
 browserAPI.commands.onCommand.addListener(function(command) {
@@ -40,24 +25,6 @@ const controlledTabs = new Set();
 const anchorTabs = new Set();
 let currentGroupState = 'idle';
 let activeSessionTabId = null;
-
-// ── Sidepanel Open/Close Tracking ────────────────────────────────────────────
-let isSidepanelOpen = false;
-browserAPI.runtime.onConnect.addListener(function(port) {
-  if (port.name === 'wt-sidepanel') {
-    isSidepanelOpen = true;
-    // Notify all controlled tabs so HUD can suppress browser_thought pill
-    controlledTabs.forEach(tabId => {
-      browserAPI.tabs.sendMessage(tabId, { type: 'WT_SIDEPANEL_STATE', open: true }).catch(() => {});
-    });
-    port.onDisconnect.addListener(function() {
-      isSidepanelOpen = false;
-      controlledTabs.forEach(tabId => {
-        browserAPI.tabs.sendMessage(tabId, { type: 'WT_SIDEPANEL_STATE', open: false }).catch(() => {});
-      });
-    });
-  }
-});
 
 // State color mapping — always blue, never yellow
 const STATE_COLORS = {
@@ -145,33 +112,18 @@ function refreshStateTimeout() {
 }
 
 // Bridge: relay state from CLI (via CDP executeScript) to content scripts
-// ── Sidepanel broadcast ─────────────────────────────────────────────────────
-// Routes agent-activity messages (tool calls, thoughts, status) to the sidepanel
-// so all visual state lives there, not in in-page overlays.
-function broadcastToSidepanel(msg) {
-  browserAPI.runtime.sendMessage(msg).catch(() => {}); // sidepanel listens on runtime
-}
-
 browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // ── Forward tool call events to sidepanel ──
+  // ── Forward tool call events to active tabs ──
   if (message.type === 'TOOL_CALL_EVENT') {
-    broadcastToSidepanel({ type: 'TOOL_CALL_EVENT', payload: message.payload });
+    controlledTabs.forEach(tabId => {
+      browserAPI.tabs.sendMessage(tabId, message).catch(() => {});
+    });
   }
-  // ── Smart thought routing ──
-  // browser_thought (kind='thought') → sidepanel when open, HUD when closed
-  // Scripted pill suppression is handled in the HUD via WT_SIDEPANEL_STATE
+  // ── Thought routing: relay to HUD in controlled tabs ──
   if (message.type === 'WT_THOUGHT') {
-    if (isSidepanelOpen) {
-      // Route to sidepanel only — suppress HUD rendering
-      broadcastToSidepanel({ type: 'WT_THOUGHT', text: message.text, kind: message.kind });
-      // Tell the HUD iframe in the active tab to suppress the browser_thought pill
-      if (sender.tab && sender.tab.id) {
-        browserAPI.tabs.sendMessage(sender.tab.id, { type: 'WT_SUPPRESS_THOUGHT_HUD' }).catch(() => {});
-      }
-    } else {
-      // Sidepanel closed — let the HUD handle it normally via the iframe relay
-      broadcastToSidepanel({ type: 'WT_THOUGHT', text: message.text, kind: message.kind });
-    }
+    controlledTabs.forEach(tabId => {
+      browserAPI.tabs.sendMessage(tabId, { type: 'WT_THOUGHT', text: message.text, kind: message.kind }).catch(() => {});
+    });
   }
 
   // ── User messaging ──
@@ -206,7 +158,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'Weavetab_STATE') {
-    broadcastToSidepanel(message);
     controlledTabs.forEach(tabId => {
       browserAPI.tabs.sendMessage(tabId, message).catch(() => {});
     });
@@ -248,9 +199,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       browserAPI.tabs.sendMessage(tabId, { type: 'Weavetab_GROUP_STATE', state, isActive: tabId === activeSessionTabId }).catch(() => {});
     });
 
-    // ── Mirror to sidepanel status dot ──
-    broadcastToSidepanel({ type: 'WT_AGENT_STATUS', status: state });
-
     sendResponse({ ok: true });
   }
   if (message.type === 'REGISTER_TAB') {
@@ -289,7 +237,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: true });
   }
 
-  // ── User feedback relay: sidepanel / content script → storage queue ────────
+  // ── User feedback relay: content script → storage queue ───────────────────
   // CDP polls window.__Weavetab.popUserFeedback() or window.__wt_chat_queue which reads from this queue.
   if (message.type === 'USER_FEEDBACK' || message.type === 'WT_USER_NOTE') {
     if (message.text || message.snipe) {

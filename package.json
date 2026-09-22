@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.5.0-beta.3",
+  "version": "2.5.0-beta.4",
   "description": "Direct Layer 0 interface for AI agents across web and desktop applications. No WebDriver. No cloud. Pure control.",
   "author": {
     "name": "fy2ne",
@@ -68,9 +68,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "npm run build:ext && npm run build:hud && npm run build:sidepanel && tsc",
+    "build": "npm run build:ext && npm run build:hud && tsc",
     "build:hud": "esbuild ext-dist/hud/src/index.ts --bundle --minify --outfile=ext-dist/hud/hud.js --format=iife",
-    "build:sidepanel": "esbuild ext-dist/sidepanel/src/index.ts --bundle --minify --outfile=ext-dist/sidepanel/sidepanel.js --format=iife",
     "build:ext": "node scripts/build-ext.js",
     "docs:generate": "node scripts/generate-docs.js",
     "verify:versions": "node scripts/verify-versions.js",
@@ -80,7 +79,7 @@
     "start": "node dist/index.js",
     "prepublishOnly": "npm run verify && npm run build",
     "test": "npm run test:unit",
-    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/plugin_lifecycle.test.ts\" \"tests/unit/plugin_interceptors.test.ts\" \"tests/unit/electron.test.ts\" \"tests/unit/stale_ref_recovery.test.ts\" \"tests/unit/secret_containment.test.ts\" \"tests/unit/checkpoint.test.ts\"",
+    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/site_memory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/plugin_lifecycle.test.ts\" \"tests/unit/plugin_interceptors.test.ts\" \"tests/unit/electron.test.ts\" \"tests/unit/stale_ref_recovery.test.ts\" \"tests/unit/secret_containment.test.ts\" \"tests/unit/checkpoint.test.ts\" \"tests/unit/marks.test.ts\" \"tests/unit/highlight.test.ts\"",
     "test:e2e": "tsx tests/e2e/smoke_test.ts"
   },
   "dependencies": {

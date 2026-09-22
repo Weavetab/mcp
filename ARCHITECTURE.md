@@ -475,7 +475,7 @@ Weavetab's architecture is designed for **autonomous AI agents** requiring:
 - **Human-like behavior** for authorized automation
 - **Extensibility** for custom workflows
 
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a robust foundation for AI-driven browser automation at scale.
+The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.
 - Loop detection warnings
 - User chat messages
 
@@ -492,7 +492,7 @@ Weavetab's architecture is designed for **autonomous AI agents** requiring:
 - **Human-like behavior** for authorized automation
 - **Extensibility** for custom workflows
 
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a robust foundation for AI-driven browser automation at scale.
+The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.
 - Loop detection warnings
 - User chat messages
 
@@ -509,7 +509,7 @@ Weavetab's architecture is designed for **autonomous AI agents** requiring:
 - **Human-like behavior** for authorized automation
 - **Extensibility** for custom workflows
 
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a robust foundation for AI-driven browser automation at scale.
+The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.
     description: string;
     handler: (session: CDP.Client, config: Config) => Promise<any>;
   }>;
@@ -587,4 +587,4 @@ Weavetab's architecture is designed for **autonomous AI agents** requiring:
 - **Human-like behavior** for authorized automation
 - **Extensibility** for custom workflows
 
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a robust foundation for AI-driven browser automation at scale.
+The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.

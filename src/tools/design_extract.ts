@@ -767,7 +767,7 @@ ${tailwindPath ? "4. `tailwind.theme.json` — Tailwind CSS `theme.extend` confi
           htmlBytes: beautifulHtml.length
         }
       },
-      message: `Design extracted successfully to ${targetDir}. Saved tokens.json, template.html, styles.css, and README.md.`
+      message: `design saved to ${targetDir}. Saved tokens.json, template.html, styles.css, and README.md.`
     };
   } finally {
     if (hideOverlay) {

@@ -1,6 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
    Weavetab · UI Design System
-   Claude Chrome-inspired sidepanel + floating elements
    ═══════════════════════════════════════════════════════════════ */
 
 /* ── SHARED TOKENS (Light theme default) ─────────────────────── */
@@ -215,4 +214,10 @@
   .wt-bubble {
     max-width: 280px !important;
   }
+}
+
+/* ── ACTION RIPPLE ANIMATION ─────────────────────────────────── */
+@keyframes __wt_ripple_expand {
+  0%   { transform: scale(1); opacity: 1; }
+  100% { transform: scale(7.5); opacity: 0; }
 }

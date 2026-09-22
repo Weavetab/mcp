@@ -10,7 +10,7 @@ Weavetab is a production-grade, in-process MCP (Model Context Protocol) server p
 
 ### Core Capabilities
 
-- **45 Built-in MCP Tools** across 15 functional categories (Vision, Navigation, Input, Tabs, Mission Execution, Dialog, Wait, Storage, Device, Network, Canvas, Output, Evaluation, GitHub, Office Documents)
+- **50 Built-in MCP Tools** across 15 functional categories (Vision, Navigation, Input, Tabs, Mission Execution, Dialog, Wait, Storage, Device, Network, Canvas, Output, Evaluation, GitHub, Office Documents)
 - **Direct CDP WebSocket** — 3-8ms mean latency, zero process overhead
 - **Semantic Delta Engine** — 5-10x token reduction via per-tab snapshot diffing
 - **Ghost Cursor** — Bézier curve click engine with human acceleration and jitter
@@ -69,7 +69,7 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_map` | DOM enumeration (v3.0) with volatile `w:NN` ref IDs, entity & card container binding (`┌ Heading`), active modal hoisting (`╔═ ACTIVE DIALOG ═╗`), nav cluster collapsing, delta diffing, and scope filtering (`modal`, `form`, `main`). |
+| `browser_map` | DOM enumeration (v3.0) with volatile `w:NN` ref IDs, Set-of-Marks visual grounding (`visual: true` / `"auto"`), entity & card container binding (`┌ Heading`), active modal hoisting (`╔═ ACTIVE DIALOG ═╗`), nav cluster collapsing, delta diffing, and scope filtering (`modal`, `form`, `main`). |
 | `browser_find` | Native CDP text search with single and multi-match (`all: true`, `limit: N`) returning bounding rects and selectors — ~10x cheaper than map |
 | `browser_scrape` | CSS/XPath structured data extraction in 1 CDP call |
 | `browser_inspect` | Computed CSS styles + inline styles + event listener types |
@@ -87,7 +87,7 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_click` | Ghost Cursor (Bézier) click with intent memory, occlusion detection, and stuck-loop detection |
+| `browser_click` | Ghost Cursor (Bézier) click with direct visual mark targeting (`mark: N`), intent memory, occlusion detection, and stuck-loop detection |
 | `browser_type` | Human keystroke engine with zero-target `document.activeElement` typing, anti-unfocus click avoidance, jitter, and burst patterns |
 | `browser_type_secret` | Blind Injection from `secrets.json` — domain check before value load, Shadow DOM isolation, JS property hardening |
 | `browser_key` | Native keyboard dispatch with combo hotkeys (`"Ctrl+A"`, `"Cmd+K"`, `"Alt+Tab"`) and zero arbitrary delay |
@@ -499,7 +499,7 @@ Skills are automatically discovered by MCP clients and provide:
 Weavetab natively supports **generic automation of any Electron or Chromium-based desktop application** (e.g. Discord, Slack, VS Code, Antigravity IDE, Figma, Obsidian, Postman, or local developer applications running from source).
 
 ### Why It Works at Layer 0
-Electron desktop applications run a bundled Chromium/Blink engine under the hood. When started with Chrome DevTools Protocol debugging enabled (either automatically via Weavetab or via `--remote-debugging-port`), Weavetab connects directly to the desktop app's internal WebSockets and exposes all 45+ MCP tools without requiring external drivers or wrappers.
+Electron desktop applications run a bundled Chromium/Blink engine under the hood. When started with Chrome DevTools Protocol debugging enabled (either automatically via Weavetab or via `--remote-debugging-port`), Weavetab connects directly to the desktop app's internal WebSockets and exposes all 50 MCP tools without requiring external drivers or wrappers.
 
 ### Registering Applications
 In `~/.weavetab/config.json` or project-scoped `.weavetab/config.json`:

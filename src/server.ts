@@ -1,12 +1,13 @@
 /**
  * Weavetab — server.ts
- * MCP server: 47 browser automation tools with security, rate limiting, and visual overlay.
+ * MCP server: 50 browser automation tools with security, rate limiting, and visual overlay.
  * Weavetab by fy2ne
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { WEAVETAB_VERSION } from "./version.js";
 import { getOrConnect } from "./cdp/connector.js";
 import { checkRateLimit } from "./security/ratelimit.js";
 import { checkDomain, isToolAllowedInMode } from "./security/blacklist.js";
@@ -58,6 +59,8 @@ import { browserEmulate } from "./tools/emulation.js";
 import { browserCheckpoint } from "./tools/checkpoint.js";
 import { getActiveEngine } from "./cdp/connector.js";
 import { resetLoopCounter } from "./intelligence/trail.js";
+import { getSiteProfile, learnPattern, recordPatternExecution, recordQuirk, getPatternReliability, formatSiteProfileHint } from "./intelligence/patternCompiler.js";
+
 import { discoverPlugins, listInstalledPlugins, loadPluginByName } from "./plugin/loader.js";
 import type { WeavetabPlugin } from "./plugin/interface.js";
 import { hookPipeline } from "./plugin/pipeline.js";
@@ -83,9 +86,9 @@ type ToolHandler<T> = (session: any, config: Config) => Promise<T>;
 const ROLE_TOOL_ALLOW: Record<string, Set<string>> = {
   admin: new Set(["*"]),
   operator: new Set(["*"]),
-  viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait"]),
+  viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait", "browser_memory_profile"]),
   automation: new Set(["*"]), // Allowed all except interactive tools (enforced in isToolAllowedForRole)
-  system: new Set(["browser_thoughts", "browser_reset_loop_counter", "browser_detect", "browser_performance", "browser_checkpoint"]),
+  system: new Set(["browser_thoughts", "browser_reset_loop_counter", "browser_detect", "browser_performance", "browser_checkpoint", "browser_memory_profile", "browser_pattern_learn"]),
 };
 
 function isToolAllowedForRole(role: Role, toolName: string): { allowed: boolean; reason?: string } {
@@ -491,7 +494,7 @@ function wrapError(err: unknown): { content: [{ type: "text"; text: string }]; i
 }
 
 export async function startServer(config: Config, transportMode: "stdio" | "ws" = "stdio", wsPort = 3000): Promise<void> {
-  const server = new McpServer({ name: "Weavetab MCP", version: "3.0.0-beta" });
+  const server = new McpServer({ name: "Weavetab MCP", version: WEAVETAB_VERSION });
 
   // Intercept server.tool to inject global plugin middleware hooks (onBeforeAction, onAfterAction)
   const rawTool = server.tool.bind(server);
@@ -519,7 +522,6 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
     return (rawTool as any)(name, ...rest);
   };
 
-  // Initialize agent state manager
   agentState.setIdleTimeout(config.idleTimeout ?? 60000);
   agentState.setCallbacks({
     onStateChange: async (session, state, word) => {
@@ -532,18 +534,18 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       }
     },
     onUpdateTabTitle: async (_session, _state) => {
-      // Handled robustly via Weavetab extension background & content scripts
+      // handled via extension background & content scripts
     },
   });
 
   // ── 1. browser_map ─────────────────────────────────────────────────────────
   server.tool(
     "browser_map",
-    "Snapshot interactive DOM with volatile ref IDs that invalidate after DOM mutations. For complex SPAs (e.g. GitHub dashboards), use `scope` or `query` to reduce tokens. For forms/pagination/sequential loops, ALWAYS use `delta: true` to save 97% tokens.",
+    "Snapshot interactive DOM with volatile ref IDs that invalidate after DOM mutations. For complex SPAs (e.g. GitHub dashboards), use `scope` or `query` to reduce tokens. For forms/pagination/sequential loops, ALWAYS use `delta: true` to save 97% tokens. For canvas/WebGL/Figma pages where the DOM has < 5 interactive elements, use `visual: \"auto\"` to get a numbered screenshot — then use browser_click({ mark: N }) to interact.",
     {
       full: z.boolean().optional().describe("Set to true to return a full markdown table (heavier context) instead of the lite list."),
-      scope: z.enum(["navigation", "main_content", "sidebar", "form", "modal", "utility"]).optional().describe("Restrict parsing to a semantic page area to save tokens. Crucial for complex dashboards."),
-      query: z.string().optional().describe("Filter returned elements by label or role substring. Crucial for complex dashboards."),
+      scope: z.enum(["navigation", "main_content", "sidebar", "form", "modal", "utility"]).optional().describe("Restrict parsing to a semantic page area to save tokens. Useful on dense dashboards."),
+      query: z.string().optional().describe("Filter returned elements by label or role substring. Useful on dense dashboards."),
       delta: z.boolean().optional().describe("Diff mode: return ONLY elements that changed since the last browser_map call (added, removed, or modified). Diffs across time — distinct from prune. Cuts prompt tokens by up to 97% on consecutive calls."),
       ax_tree: z.boolean().optional().describe("Bypass the extension entirely and read raw Chrome Accessibility Tree. Use this if Shadow DOMs hide elements."),
       tab_id: z.string().optional().describe("Read a specific background tab instead of the active one."),
@@ -551,6 +553,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       show_overlays: z.boolean().optional().describe("Default false. Debug only — draws colored element borders via extension (ugly). The blue edge glow is the standard visual indicator, shown automatically during reading states. Only enable this for debugging element boundaries."),
       force: z.boolean().optional().describe("Force a full DOM map rebuild even if loop detection says nothing changed. Bypasses the map skip guard."),
       prune: z.boolean().optional().describe("Semantic DOM pruning: compress the current snapshot before returning. Drops hidden elements with no interactive descendants and not referenced by any toggle trigger (aria-controls etc.). Replaces SVG icons with [SVG Icon: label] tokens. Distinct from delta:true — delta diffs across time, prune compresses this snapshot once. Combine both for maximum token efficiency."),
+      visual: z.union([z.boolean(), z.literal("auto")]).optional().describe("Set-of-Marks visual grounding. true = always inject numbered badges + return annotated screenshot. \"auto\" = only activate when DOM interactive count < 5 (canvas/WebGL/Figma pages). After receiving marks, use browser_click({ mark: N }) to interact with numbered elements."),
     },
     async (args) => {
       try {
@@ -589,11 +592,25 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
           }
 
           const result = await agentAction(targetSession, 'reading', () => browserMap(targetSession, args, targetId, liveConfig), 'browser_map');
-          return { content: [{ type: "text", text: result }] };
+
+          // Handle visual grounding result (text + annotated image)
+          if (result && typeof result === 'object' && 'text' in result) {
+            const vr = result as import('./tools/read.js').BrowserMapResult;
+            const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [
+              { type: "text", text: vr.text },
+            ];
+            if (vr.imageBase64) {
+              content.push({ type: "image", data: vr.imageBase64, mimeType: "image/jpeg" });
+            }
+            return { content };
+          }
+
+          return { content: [{ type: "text", text: result as string }] };
         }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
+
 
   // ── 2. browser_navigate ────────────────────────────────────────────────────
   server.tool(
@@ -634,7 +651,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
   // ── 3. browser_click ───────────────────────────────────────────────────────
   server.tool(
     "browser_click",
-    "Click a DOM element. Use browser_canvas for charts/canvas. If stuck_warning=true, stop and use browser_map.",
+    "Click a DOM element. Use browser_canvas for charts/canvas. If stuck_warning=true, stop and use browser_map. Pass mark: N to click a numbered element from browser_map({ visual: true/\"auto\" }) without any DOM re-scan.",
     {
       id: z.string().optional().describe("Ref ID from browser_map (e.g. 'w:42'). Primary targeting method. DO NOT SPAM. If stuck_warning is returned, stop retrying and call browser_map first."),
       ref: z.string().optional().describe("Alias for id (e.g. 'w:42')."),
@@ -642,6 +659,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       target: z.string().optional().describe("CSS selector or query string. Alias for selector."),
       label: z.string().optional().describe("Visible text or aria-label to click."),
       intent: z.string().optional().describe("Semantic description of the action (e.g. 'submit login form'). WeaveTab checks learned memory first — if a high-confidence selector is found it clicks immediately without DOM resolution. Falls through to normal resolution on a miss; does not error."),
+      mark: z.number().int().positive().optional().describe("Mark number from browser_map({ visual: true/\"auto\" }). Clicks the center of the numbered badge seen in the annotated screenshot. Zero DOM walk — instant coordinate dispatch. Use when the page is canvas/WebGL and DOM refs are unavailable."),
       backendNodeId: z.number().optional().describe("Raw CDP backendNodeId for direct hardware targeting."),
       x: z.number().optional().describe("Raw X coordinate. Use for precise positional clicks when element ID is not available."),
       y: z.number().optional().describe("Raw Y coordinate. Use for precise positional clicks when element ID is not available."),
@@ -936,10 +954,12 @@ server.tool(
   // ── 12. browser_thoughts ─────────────────────────────────────────────────────────
   server.tool(
     "browser_thoughts",
-    "Agent-to-user communication. Use 'question' mode to ask a free-text question. Use 'feedback' mode to provide status updates or analysis (green sticky feedback).",
+    "Agent-to-user communication. Renders in the middle down of the page. Use 'question' mode to ask a free-text question. Use 'feedback' mode to provide status updates, analysis, or decisions. Supports element anchoring (e.g. 'w:15') and presentation styles ('observation', 'decision', 'warning', 'question').",
     {
       action: z.enum(["question", "feedback"]).describe("Action to perform."),
       message: z.string().describe("The question to ask, or the feedback/analysis to log."),
+      anchor: z.string().optional().describe("Optional element Ref ID (e.g. 'w:15') or CSS selector to visually anchor this thought to on the page."),
+      style: z.enum(["observation", "decision", "warning", "question"]).optional().describe("Thought presentation style. Defaults to 'observation' for feedback and 'question' for question."),
       input: z.enum(["sentence", "paragraph"]).optional().describe("Input field type for question mode (default: sentence)."),
       timeout: z.number().optional().describe("Timeout in seconds for question mode before auto-cancel (default: 120)."),
       app: z.string().optional().describe("Optional Electron app name. (Note: thought HUD overlay is browser-only)."),
@@ -965,10 +985,22 @@ server.tool(
               tool: "browser_thoughts",
               result: `[AGENT FEEDBACK]: ${args.message}`
             });
-            await browserThought(session, { action: "feedback", message: args.message });
+            await browserThought(session, {
+              action: "feedback",
+              message: args.message,
+              anchor: args.anchor,
+              style: args.style,
+            });
             return { content: [{ type: "text", text: "Feedback appended to mission log and HUD." }] };
           }
-          const result = await browserThought(session, { action: "question", message: args.message, input: args.input, timeout: args.timeout });
+          const result = await browserThought(session, {
+            action: "question",
+            message: args.message,
+            anchor: args.anchor,
+            style: args.style,
+            input: args.input,
+            timeout: args.timeout,
+          });
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         });
       } catch (e) { return wrapError(e); }
@@ -1070,20 +1102,24 @@ server.tool(
   // ── 18. browser_highlight ───────────────────────────────────────────────────
   server.tool(
     "browser_highlight",
-    "Highlight an element with a colored overlay.",
+    "Highlight elements on page. Supports single or multiple candidates (refs) with styles ('consideration' for candidate evaluation, 'target' for lock-on, 'danger' for destructive actions, 'success', or 'shimmer'), floating badges, and configurable duration.",
     {
       selector: z.string().optional().describe("CSS Selector of the element to highlight."),
       id: z.string().optional().describe("Alternative element Ref ID from browser_map (e.g. 'w:42')."),
       ref: z.string().optional().describe("Alternative element Ref ID (e.g. 'w:42')."),
+      refs: z.array(z.string()).optional().describe("Array of element Ref IDs to highlight concurrently (e.g. ['w:12', 'w:15', 'w:23'])."),
       target: z.string().optional().describe("Alternative element identifier, CSS Selector, or query."),
+      style: z.enum(["consideration", "target", "danger", "success", "shimmer"]).optional().describe("Visual highlight style. Defaults to 'shimmer' (or 'consideration' when refs provided)."),
+      label: z.string().optional().describe("Floating label badge text to display above the element(s)."),
+      duration: z.number().optional().describe("Duration in ms to keep highlight visible (default: 2000ms for consideration/target, 600ms for shimmer)."),
       nodeId: z.number().optional().describe("CDP backendNodeId to highlight directly."),
-      color: z.string().optional().describe("CSS color to use for the overlay (e.g. 'rgba(255,0,0,0.5)')."),
+      color: z.string().optional().describe("Custom CSS color to use for the overlay (e.g. 'rgba(255,0,0,0.5)')."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_highlight", async (session, liveConfig) => {
-          const normalizedArgs = { ...args };
+          const normalizedArgs: any = { ...args };
           let inputRef = args.selector || args.id || args.ref || args.target;
           if (inputRef) {
             if (inputRef.startsWith("w:")) {
@@ -1395,7 +1431,7 @@ server.tool(
   // ── 36. browser_inspect ─────────────────────────────────────────────────────
   server.tool(
     "browser_inspect",
-    "15-35ms latency, zero waste. Deep DOM inspection. Crucial for debugging why a click failed, verifying z-index & visibility, or computed styles.",
+    "15-35ms latency, zero waste. Deep DOM inspection. Useful for debugging failed clicks, verifying z-index & visibility, or computed styles.",
     {
       nodeId: z.number().optional().describe("CDP backendNodeId."),
       selector: z.string().optional().describe("CSS Selector."),
@@ -1537,6 +1573,116 @@ server.tool(
       } catch (e) { return wrapError(e); }
     }
   );
+
+  // ── browser_memory_profile ────────────────────────────────────────────────
+  server.tool(
+    "browser_memory_profile",
+    "Inspect the persistent site profile for an origin from ~/.weavetab-system/memory/sites/. Returns known workflow patterns with reliability scores, quirks, detected framework, and fast-path eligibility. Call at session start to decide between fast-path replay (reliability ≥ 0.8) or exploratory navigation.",
+    {
+      origin: z.string().optional().describe("Full origin to inspect, e.g. 'https://github.com'. If omitted, reads the current tab's origin."),
+      pattern: z.string().optional().describe("If provided, returns reliability score for this specific named pattern only.")
+    },
+    async (args) => {
+      try {
+        let resolvedOrigin = args.origin;
+        if (!resolvedOrigin) {
+          return await withSecurity(config, "browser_memory_profile", async (session, _liveConfig) => {
+            try {
+              const res = await session.Runtime.evaluate({
+                expression: "window.location.origin",
+                returnByValue: true,
+              });
+              resolvedOrigin = res?.result?.value as string | undefined;
+            } catch { /* fall through */ }
+
+            if (!resolvedOrigin) {
+              return { content: [{ type: "text", text: JSON.stringify({ error: "Could not determine origin from active tab. Pass origin explicitly." }) }] };
+            }
+
+            if (args.pattern) {
+              const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
+              return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
+            }
+
+            const profile = await getSiteProfile(resolvedOrigin);
+            if (!profile) {
+              return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
+            }
+
+            const hint = formatSiteProfileHint(profile);
+            return { content: [{ type: "text", text: JSON.stringify({ ...profile, _hint: hint }) }] };
+          });
+        }
+
+        if (args.pattern) {
+          const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
+          return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
+        }
+
+        const profile = await getSiteProfile(resolvedOrigin);
+        if (!profile) {
+          return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
+        }
+
+        const hint = formatSiteProfileHint(profile);
+        return { content: [{ type: "text", text: JSON.stringify({ ...profile, _hint: hint }) }] };
+      } catch (e) { return wrapError(e); }
+    }
+  );
+
+  // ── browser_pattern_learn ─────────────────────────────────────────────────
+  server.tool(
+    "browser_pattern_learn",
+    "Register or update a named workflow pattern for a site in ~/.weavetab-system/memory/sites/. Use after completing a multi-step flow to persist it. Set action='record_execution' to update the reliability score after a replay attempt. Set action='record_quirk' to store a site quirk (cookie_banner, rate_limit, modal_popup).",
+    {
+      origin: z.string().describe("Full origin to associate the pattern with, e.g. 'https://github.com'."),
+      action: z.enum(["learn", "record_execution", "record_quirk"]).default("learn").describe("'learn': create/update a named pattern. 'record_execution': update reliability after replay. 'record_quirk': store a site quirk."),
+      name: z.string().optional().describe("Pattern name in snake_case (required for 'learn' and 'record_execution')."),
+      steps: z.array(z.object({
+        tool: z.string().describe("MCP tool name, e.g. 'browser_click'."),
+        target: z.string().optional().describe("Selector or URL."),
+        value: z.string().optional().describe("Value for browser_type/browser_fill/browser_select."),
+        extra: z.record(z.any()).optional().describe("Additional tool arguments.")
+      })).optional().describe("Ordered workflow steps (required for 'learn')."),
+      success_indicator: z.string().optional().describe("CSS selector or URL fragment confirming workflow success."),
+      entry: z.string().optional().describe("URL path or pattern where this workflow starts."),
+      success: z.boolean().optional().describe("Whether the execution succeeded (required for 'record_execution')."),
+      duration_ms: z.number().optional().describe("Execution duration in ms (optional for 'record_execution')."),
+      quirk_key: z.string().optional().describe("Quirk key: 'cookie_banner', 'rate_limit', or 'modal_popups' (required for 'record_quirk')."),
+      quirk_data: z.record(z.any()).optional().describe("Quirk payload object (required for 'record_quirk').")
+    },
+    async (args) => {
+      try {
+        if (args.action === "learn") {
+          if (!args.name) return { content: [{ type: "text", text: JSON.stringify({ error: "name is required for action='learn'" }) }] };
+          const pattern = await learnPattern(args.origin, args.name, {
+            steps: args.steps ?? [],
+            success_indicator: args.success_indicator,
+            entry: args.entry,
+          });
+          return { content: [{ type: "text", text: JSON.stringify({ ok: true, pattern }) }] };
+        }
+
+        if (args.action === "record_execution") {
+          if (!args.name) return { content: [{ type: "text", text: JSON.stringify({ error: "name is required for action='record_execution'" }) }] };
+          if (args.success === undefined) return { content: [{ type: "text", text: JSON.stringify({ error: "success (boolean) is required for action='record_execution'" }) }] };
+          const updated = await recordPatternExecution(args.origin, args.name, args.success, args.duration_ms);
+          return { content: [{ type: "text", text: JSON.stringify({ ok: true, pattern: updated }) }] };
+        }
+
+        if (args.action === "record_quirk") {
+          if (!args.quirk_key) return { content: [{ type: "text", text: JSON.stringify({ error: "quirk_key is required for action='record_quirk'" }) }] };
+          if (!args.quirk_data) return { content: [{ type: "text", text: JSON.stringify({ error: "quirk_data is required for action='record_quirk'" }) }] };
+          await recordQuirk(args.origin, args.quirk_key, args.quirk_data);
+          return { content: [{ type: "text", text: JSON.stringify({ ok: true, origin: args.origin, quirk_key: args.quirk_key }) }] };
+        }
+
+        return { content: [{ type: "text", text: JSON.stringify({ error: "Unknown action" }) }] };
+      } catch (e) { return wrapError(e); }
+    }
+  );
+
+
 
 
 
@@ -2076,7 +2222,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       await registerPluginTools(plugin);
       const toolsList = (plugin.tools || []).map((t: any) => t.name).join(", ");
       
-      return { content: [{ type: "text", text: `Successfully loaded plugin ${name}. Tools registered: ${toolsList || "(dynamic tools registered)"}` }] };
+      return { content: [{ type: "text", text: `loaded plugin ${name}. Tools registered: ${toolsList || "(dynamic tools registered)"}` }] };
     }
   );
 

@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
   "mcpName": "io.github.weavetab/mcp",
-  "version": "2.5.0-beta.3",
+  "version": "2.5.0-beta.4",
   "description": "Weavetab MCP — Direct Layer 0 interface for AI agents across web and desktop applications. Direct socket transport, zero wrapper overhead, deterministic state execution.",
   "icon": "icon.png",
   "author": "fy2ne",
@@ -38,9 +38,10 @@
     "tools": {
       "browser_map": {
         "category": "vision",
-        "description": "Snapshot interactive DOM with stable ref IDs (w:NN). For complex SPAs, use scope or query to constrain tokens. Supports delta temporal diffing (up to 97% token reduction), semantic pruning (dropping hidden elements), AX tree fallback (Shadow DOM traversal), scope filtering, query filtering, and forced rebuilds.",
+        "description": "Snapshot interactive DOM with stable ref IDs (w:NN). For complex SPAs, use scope or query to constrain tokens. Supports delta temporal diffing (up to 97% token reduction), semantic pruning (dropping hidden elements), Set-of-Marks visual grounding (visual: true / \"auto\" for canvas/WebGL pages), AX tree fallback (Shadow DOM traversal), scope filtering, query filtering, and forced rebuilds.",
         "features": [
           "Semantic DOM pruning (up to 97% token reduction with delta)",
+          "Set-of-Marks visual grounding (visual: true / \"auto\")",
           "Per-tab snapshot temporal diffing (delta mode)",
           "Shadow DOM / AX tree fallback parsing",
           "Scope and query filtering for complex SPAs",
@@ -59,8 +60,9 @@
       },
       "browser_click": {
         "category": "input",
-        "description": "Click a DOM element. Physical click engine incorporating Bézier curve trajectory kinematics (Ghost Cursor). Multi-stage targeting fallback: ref ID -> selector -> label -> intent -> coordinates -> backendNodeId.",
+        "description": "Click a DOM element. Physical click engine incorporating Bézier curve trajectory kinematics (Ghost Cursor). Multi-stage targeting fallback: mark number (SoM visual grounding) -> ref ID -> selector -> label -> intent -> coordinates -> backendNodeId.",
         "features": [
+          "Direct mark number targeting (mark: N) from visual mode",
           "Bézier curve trajectory kinematics",
           "Humanized acceleration and velocity curves",
           "Multi-stage fallback targeting resolution",
@@ -158,13 +160,13 @@
       },
       "browser_thoughts": {
         "category": "dialog_and_interaction",
-        "description": "Agent-to-user communication layer rendered as a Shadow DOM overlay. Supports 'question' mode (two-way blocking prompt) and 'feedback' mode (one-way green sticky status update). Consolidates former ask/feedback tools.",
+        "description": "Agent-to-user communication layer rendered in the middle down of the page. Supports question mode (interactive prompt with answer submission) and feedback mode (status, observation, decision, or warning update). Supports contextual element anchoring (anchor: 'w:NN') and visual styles ('observation', 'decision', 'warning', 'question').",
         "features": [
-          "Shadow DOM HUD thought bubble overlay",
-          "Feedback mode (asynchronous status notification)",
-          "Question mode (blocking interactive user response)",
-          "Sentence and paragraph user input modes",
-          "Configurable response timeout"
+          "Middle-down floating card HUD with precision dark styling",
+          "Contextual element anchoring (anchor: 'w:NN') with auto-highlighting",
+          "Feedback mode (observation, decision, warning updates)",
+          "Question mode (interactive user response directly on page)",
+          "Configurable auto-fade and response timeout"
         ]
       },
       "browser_pointer": {
@@ -179,7 +181,7 @@
       },
       "browser_select": {
         "category": "input",
-        "description": "Select an option from a native dropdown by visible text or value. Utilizes native property setters and dispatches input/change events for framework compatibility (React, Vue, Angular).",
+        "description": "Select an option from a native dropdown by visible text or value. Uses native property setters and dispatches input/change events for framework compatibility (React, Vue, Angular).",
         "features": [
           "Option matching by visible text or value",
           "Framework-safe prototype property setter invocation",
@@ -198,11 +200,13 @@
       },
       "browser_highlight": {
         "category": "canvas_and_visual",
-        "description": "Highlight an element with a colored overlay. Renders temporary visual CDP overlay highlights over target elements without DOM tree mutations.",
+        "description": "Highlight elements on page. Renders temporary visual overlays over target elements without DOM tree mutations. Supports multi-element consideration overlays (refs: ['w:12', 'w:15']), presentation styles ('consideration', 'target', 'danger', 'success', 'shimmer'), floating badges, and configurable durations.",
         "features": [
-          "CDP visual overlay highlighting",
-          "Configurable overlay color and duration",
-          "Targeting via ref ID, selector, or nodeId"
+          "Multi-candidate consideration overlay (refs array)",
+          "Five visual styles: consideration, target lock, danger, success, shimmer",
+          "Floating label badge display above highlighted elements",
+          "Configurable duration and color override",
+          "Targeting via ref IDs (w:NN), CSS selectors, or CDP backendNodeId"
         ]
       },
       "browser_upload": {
@@ -424,6 +428,27 @@
           "Full compatibility with browser_burst engine"
         ]
       },
+      "browser_memory_profile": {
+        "category": "memory",
+        "description": "Inspect or retrieve the persistent site profile for the current or given origin from ~/.weavetab-system/memory/sites/. Returns known workflow patterns with reliability scores, site quirks (cookie banners, rate limits), detected framework, and captcha frequency. Use at session start to determine whether a fast-path (reliability ≥ 0.8) or exploratory approach is needed.",
+        "features": [
+          "Full SiteProfile inspection per origin",
+          "Pattern reliability and strike-count visibility",
+          "Site quirk summary (cookie banners, rate limits, modal popups)",
+          "Compact hint string output for agent context injection"
+        ]
+      },
+      "browser_pattern_learn": {
+        "category": "memory",
+        "description": "Register, update, or record execution outcome for a named workflow pattern on a given origin in ~/.weavetab-system/memory/sites/. Use after successfully completing a multi-step workflow to persist it for future fast-path replay. Use record_execution to update reliability scores after replay attempts.",
+        "features": [
+          "Named pattern creation and update (merge-on-write, no duplicates)",
+          "Volatile selector stabilization before persistence",
+          "EWMA reliability score update on execution outcome",
+          "3-strike degradation and re-learn flagging",
+          "Site quirk registration (cookie_banner, rate_limit, modal_popup)"
+        ]
+      },
       "github_analyze": {
         "category": "github",
         "description": "Analyze a GitHub repository structure, file tree, and README snippet directly via raw endpoints without API key rate limits.",
@@ -500,11 +525,14 @@
     },
     "resources": {
       "session_memory": {
-        "description": "Per-domain persistent profile store (~/.weavetab-system/memory/) tracking detected web frameworks, Shadow DOM utilization, and interaction strategies across sessions.",
+        "description": "Two-tier persistent memory system. Tier 1 (~/.weavetab-system/memory/): per-domain selector confidence cache tracking detected web frameworks, Shadow DOM utilization, and interaction strategies. Tier 2 (~/.weavetab-system/memory/sites/): named workflow patterns with EWMA reliability scores, site quirks (cookie banners, rate limits), and fast-path eligibility flags — all accumulated and refined across sessions.",
         "features": [
           "Framework detection (React, Vue, Angular, Lit, Svelte, Next, Nuxt, Gatsby)",
-          "Successful selector strategy caching",
-          "Interaction history accumulation"
+          "Successful selector strategy caching with confidence decay (Tier 1)",
+          "Named workflow pattern compilation with EWMA reliability scoring (Tier 2)",
+          "Site quirk registration: cookie banners, rate limits, modal popups (Tier 2)",
+          "3-strike pattern degradation with re-learn flagging (Tier 2)",
+          "Fast-path eligibility: patterns with reliability ≥ 0.8 skip exploratory DOM navigation"
         ]
       },
       "knowledge_hints": {
@@ -558,7 +586,7 @@
         ]
       },
       "vision_fallback": {
-        "description": "Local pixel analysis pipeline utilizing sharp for visual layout evaluation when accessibility trees return zero nodes.",
+        "description": "Local pixel analysis pipeline using sharp for visual layout evaluation when accessibility trees return zero nodes.",
         "pipeline": "AX Tree Check -> Screenshot -> Grayscale -> 4x4 Grid Heatmap -> Text Density -> Clickable Region Analysis",
         "features": [
           "Local execution (zero external API dependencies)",
@@ -610,7 +638,7 @@
       "rbac": {
         "description": "Role-Based Access Control enforcing tool execution boundaries based on configured session role.",
         "roles": {
-          "admin": "Full access to all 47 tools and system operations",
+          "admin": "Full access to all 50 tools and system operations",
           "system": "Full tool access excluding system-level operations",
           "viewer": "Read-only access (browser_map, browser_find, browser_scrape, browser_screenshot, browser_inspect, browser_snapshot, browser_console, browser_pdf, browser_storage, browser_cookies, browser_tabs, browser_wait, github_*)",
           "automation": "Restricted execution set for non-interactive automated workflows"
@@ -827,7 +855,7 @@
     }
   },
   "metadata": {
-    "total_tools": 48,
+    "total_tools": 50,
     "tool_categories": 15,
     "latency": "3-8ms mean",
     "token_efficiency": "Up to 97% reduction via semantic delta engine + DOM pruner",

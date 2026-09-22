@@ -191,7 +191,7 @@ export async function ensureVisualLayer(
         returnByValue: true
       });
       if (checkResult?.value) {
-        logDebug(`[Weavetab] [OK] Minimal overlay injected successfully`);
+        logDebug(`[Weavetab] overlay injected`);
       } else {
         logDebug(`[Weavetab] [!] Minimal overlay injection failed - element not found`);
       }
@@ -215,7 +215,7 @@ export async function setFaviconState(
   _session: CDP.Client,
   _state: CursorState
 ): Promise<void> {
-  // Handled robustly via extension content.js
+  // handled via extension content.js
 }
 
 export async function removeTitleBadge(_session: CDP.Client): Promise<void> {

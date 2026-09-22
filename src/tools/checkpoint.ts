@@ -101,7 +101,7 @@ export async function browserCheckpoint(
       action: "delete",
       name: args.name,
       message: existed
-        ? `Checkpoint '${args.name}' deleted successfully.`
+        ? `Checkpoint '${args.name}' deleted.`
         : `Checkpoint '${args.name}' not found.`,
     };
   }

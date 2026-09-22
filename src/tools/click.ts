@@ -19,6 +19,7 @@ import { labelCache } from "../cdp/label_cache.js";
 import type { Config } from "../config/loader.js";
 import { getBestSelectorForIntent, logMemorySuccess, logMemoryFailure, type SelectorFingerprint } from "../intelligence/sessionMemory.js";
 import { verifyActionability, quickHitCheck, type ActionabilityResult } from "../sensors/actionability.js";
+import { marksGet } from "../intelligence/marks.js";
 
 export interface WeaveError {
   success: false;
@@ -63,7 +64,7 @@ function describeOccluder(occ: NonNullable<ActionabilityResult['occludedBy']>): 
 
 export async function weaveClick(
   session: CDP.Client,
-  args: { id?: string; label?: string; intent?: string; backendNodeId?: number; x?: number; y?: number; include_map?: boolean },
+  args: { id?: string; label?: string; intent?: string; backendNodeId?: number; x?: number; y?: number; include_map?: boolean; mark?: number },
   config: Config
 ): Promise<ClickResult | WeaveError> {
   const { id, label, intent, backendNodeId: directNodeId } = args;
@@ -71,7 +72,38 @@ export async function weaveClick(
   const startMs = Date.now();
   const clientMatch = sessionRegistry.getAll().find(c => c.session === session);
   const targetId = clientMatch?.targetId ?? (session as any).targetId ?? "default";
-  
+
+  // ── MARK FAST PATH: resolve by SoM mark number ─────────────────────────────
+  // Highest priority — zero DOM walk, straight coordinate dispatch.
+  if (args.mark !== undefined) {
+    const entry = marksGet(targetId, args.mark);
+    if (!entry) {
+      return {
+        success: false,
+        error_code: "MARK_NOT_FOUND",
+        message: `[!] Mark [${args.mark}] not found. Call browser_map({ visual: true }) or browser_map({ visual: "auto" }) first to generate marks.`,
+      };
+    }
+    // Ghost-move to coordinates, then dispatch hardware click
+    await ghostMove(session, entry.x, entry.y, config).catch(() => {});
+    await Input.dispatchMouseEvent({ type: "mousePressed", x: entry.x, y: entry.y, button: "left", clickCount: 1 });
+    await Input.dispatchMouseEvent({ type: "mouseReleased", x: entry.x, y: entry.y, button: "left", clickCount: 1 });
+    const initialUrl = (await Page.getFrameTree()).frameTree.frame.url;
+    logAction("browser_click", initialUrl, `mark:${args.mark} @(${entry.x},${entry.y})`);
+    return {
+      success: true,
+      clicked: entry.label ?? `mark:${args.mark}`,
+      ref: entry.ref ?? `mark:${args.mark}`,
+      execution_ms: Date.now() - startMs,
+      tab_id: targetId,
+      url: initialUrl,
+      title: "",
+      url_changed: false,
+      dom_changed: false,
+      stuck_warning: false,
+    };
+  }
+
   // Track URL before click
   const initialUrl = (await Page.getFrameTree()).frameTree.frame.url;
   

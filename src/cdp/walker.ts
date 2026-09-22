@@ -274,7 +274,7 @@ export async function buildActionMap(
       try {
         const parsed = JSON.parse(liveIndexResult.value as string);
         if (parsed.source === 'live-index' && parsed.elements && Array.isArray(parsed.elements)) {
-          logDebug(`[Walker] Successfully read ${parsed.elements.length} elements from extension live index`);
+          logDebug(`[Walker] read ${parsed.elements.length} elements from extension live index`);
           extensionMap = parsed.elements;
         }
       } catch (e) {

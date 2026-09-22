@@ -222,6 +222,14 @@ export interface PluginMcpContext {
   [key: string]: any;
 }
 
+export interface PluginMemoryContext {
+  getSiteProfile(origin: string): Promise<any>;
+  learnPattern(origin: string, name: string, pattern: any): Promise<any>;
+  recordExecution(origin: string, name: string, success: boolean, durationMs?: number): Promise<any>;
+  getReliability(origin: string, patternName: string): Promise<number>;
+  recordQuirk(origin: string, quirkKey: string, quirkData: any): Promise<void>;
+}
+
 export interface PluginContext {
   name: string;
   version?: string;
@@ -231,6 +239,7 @@ export interface PluginContext {
   extension: IPluginExtensionBridge;
   mcp: PluginMcpContext;
   hooks: PluginHooksContext;
+  memory?: PluginMemoryContext;
   logger: {
     info: (...args: any[]) => void;
     warn: (...args: any[]) => void;

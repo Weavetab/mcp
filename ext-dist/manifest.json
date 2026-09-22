@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Weavetab Agent",
-  "version": "1.0.63031",
+  "version": "1.0.62054",
   "description": "Native browser agent for Weavetab MCP",
   "permissions": [
     "tabs",
@@ -16,17 +16,13 @@
     "alarms",
     "contextMenus",
     "downloads",
-    "browsingData",
-    "sidePanel"
+    "browsingData"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
-  },
-  "side_panel": {
-    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {

@@ -1,7 +1,7 @@
 /**
  * Weavetab — cdp/omni_broker.ts
  * Omni-Context Execution Broker
- * Handles Target.setAutoAttach to seamlessly execute code in cross-origin iframes.
+ * Handles Target.setAutoAttach to run code in cross-origin iframes.
  * Weavetab by fy2ne
  */
 

@@ -19,6 +19,7 @@ import { recordTabActivity } from "../tools/tabs.js";
 import { initDialogHandler } from "../tools/dialog.js";
 import { clearViewportCache, WT_REGISTRY_INIT_EXPR } from "./walker.js";
 import { urcInvalidate } from "./ref_cache.js";
+import { marksInvalidate } from "../intelligence/marks.js";
 import { readLock, clearLock, isLockValid, isLockPending, acquireMutex } from "./lock.js";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -132,7 +133,6 @@ async function waitForPageReady(session: CDP.Client): Promise<void> {
 async function initSession(session: CDP.Client, targetId: string, port: number, config: Config, isElectron?: boolean): Promise<void> {
   initDialogHandler(session);
 
-  // Initialize Omni-Context Broker for iframes
   const { initOmniBroker } = await import("./omni_broker.js");
   await initOmniBroker(session, targetId, port);
 
@@ -189,6 +189,7 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
     clearTabCache(targetId);
     // Invalidate URC on navigation — elements from the old page are stale
     urcInvalidate(targetId);
+    marksInvalidate(targetId);
     if (isElectron || activeEngine === "chromium") {
       try {
         await waitForPageReady(session);
@@ -262,8 +263,7 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
 
 export async function getOrConnect(config: Config, targetApp?: string): Promise<BrowserClient> {
   if (getConfigMode(config) === "attach" && !targetApp) {
-    // TODO: Attach mode (connect to an already-running real browser) is not yet implemented.
-    // Tracked as a known limitation — use session mode in the meantime.
+    // track as limitation - use session mode
     const err = new Error("[!] Attach mode is not yet supported. Use session mode (default) instead.");
     (err as any).code = "NOT_IMPLEMENTED";
     throw err;
@@ -561,7 +561,7 @@ export async function getOrConnect(config: Config, targetApp?: string): Promise<
         logDebug(`[Weavetab Security] Browser fingerprint verification failed: ${fingerprintCheck.reason}`);
         // Continue anyway for now - in production this should be a hard failure
       } else {
-        logDebug(`[Weavetab Security] Browser fingerprint verified successfully`);
+        logDebug(`[Weavetab Security] Browser fingerprint verified`);
       }
     }
     
@@ -578,7 +578,7 @@ export async function getOrConnect(config: Config, targetApp?: string): Promise<
       logDebug(`[Weavetab Security] Actual: ${profileCheck.actualProfile || 'unknown'}`);
       // Continue anyway for now - in production this should be a hard failure
     } else {
-      logDebug(`[Weavetab Security] Profile isolation verified successfully`);
+      logDebug(`[Weavetab Security] Profile isolation`);
     }
 
     await session.Target.setDiscoverTargets({ discover: true });

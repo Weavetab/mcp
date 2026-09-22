@@ -3,12 +3,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
+import { WEAVETAB_VERSION } from "../version.js";
+
 const _require = createRequire(import.meta.url);
 function getVersion(): string {
   try {
-    return _require("../../package.json").version || "2.5.0-beta.3";
+    return _require("../../package.json").version || WEAVETAB_VERSION;
   } catch {
-    return "2.5.0-beta.3";
+    return WEAVETAB_VERSION;
   }
 }
 

@@ -226,19 +226,18 @@ function __wt_safeAppendToBody(el) {
     if (msg.type === 'TOOL_CALL_EVENT' && iframe && iframe.contentWindow) {
       iframe.contentWindow.postMessage({ type: 'TOOL_CALL_EVENT', payload: msg.payload }, '*');
     }
-    // Relay sidepanel open/close state to HUD iframe so it can gate browser_thought pill
-    if (msg.type === 'WT_SIDEPANEL_STATE' && iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage({ type: 'WT_SIDEPANEL_STATE', open: msg.open }, '*');
-    }
-    // Background tells us to suppress the thought pill for this specific event
-    if (msg.type === 'WT_SUPPRESS_THOUGHT_HUD' && iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage({ type: 'WT_SUPPRESS_THOUGHT_HUD' }, '*');
-    }
-    // Scripted pill toggle from sidepanel settings — relay to HUD iframe
+    // Scripted pill toggle — relay to HUD iframe
     if (msg.type === 'WT_SCRIPTED_PILL_TOGGLE' && iframe && iframe.contentWindow) {
       iframe.contentWindow.postMessage({ type: 'WT_SCRIPTED_PILL_TOGGLE', enabled: msg.enabled }, '*');
     }
-    // Handle incoming user notes sent from the sidepanel input
+    // Handle agent thoughts in middle-down HUD
+    if (msg.type === 'WT_THOUGHT' || msg.type === 'Weavetab_THOUGHT') {
+      __wt_showThought(msg.text, msg);
+    }
+    if (msg.type === 'WT_CLEAR_THOUGHT' || msg.type === 'Weavetab_CLEAR_THOUGHT') {
+      __wt_removeThought();
+    }
+    // Handle incoming user notes from the extension
     if (msg.type === 'WT_USER_NOTE_INJECT' || msg.type === 'WT_USER_NOTE') {
       window.__wt_chat_queue = window.__wt_chat_queue || [];
       let formattedMsg = msg.text || '';
@@ -299,7 +298,7 @@ function __wt_safeAppendToBody(el) {
 
   // State persistence bridge: listen for state changes from iframe
   window.addEventListener('message', function(e) {
-    // Forward relevant events to the extension background/sidepanel
+    // Forward relevant events to the extension background
     if (e.data && (
       e.data.type === 'WT_TOOL_CALL' ||
       e.data.type === 'WT_PLAN_UPDATE' ||
@@ -477,133 +476,240 @@ function __wt_destroyBubble() {
   __wt_lastRemoveTime = Date.now();
 }
 
+// ── MIDDLE-DOWN THOUGHT & PRESENCE HUD ─────────────────────────────
+let __wt_thoughtHudEl = null;
+let __wt_thoughtHudTimer = null;
+let __wt_thoughtHudCountdown = null;
+
+function __wt_highlightAnchor(anchor) {
+  if (!anchor) return;
+  try {
+    let sel = anchor;
+    if (anchor.startsWith('w:')) {
+      const stripped = anchor.slice(2);
+      sel = `[data-wt-id="${stripped}"]`;
+    }
+    const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return;
+
+    const ring = document.createElement('div');
+    ring.setAttribute('data-wt-ignore', 'true');
+    ring.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;border:1.5px solid #38bdf8;box-shadow:0 0 16px rgba(56,189,248,0.5);border-radius:4px;z-index:2147483646;pointer-events:none;animation:wt-consider-pulse 1.2s ease-in-out infinite;`;
+    (document.getElementById('Weavetab-root')?.shadowRoot || document.body || document.documentElement).appendChild(ring);
+    setTimeout(() => {
+      ring.style.transition = 'opacity 0.25s ease-out';
+      ring.style.opacity = '0';
+      setTimeout(() => ring.remove(), 260);
+    }, 2400);
+  } catch(e) {}
+}
+
 function __wt_removeThought() {
-  if (__wt_feedbackSticky) return;
-  if (__wt_thoughtBirth && Date.now() - __wt_thoughtBirth < 300) return;
+  if (__wt_thoughtHudTimer) {
+    clearTimeout(__wt_thoughtHudTimer);
+    __wt_thoughtHudTimer = null;
+  }
+  if (__wt_thoughtHudCountdown) {
+    clearInterval(__wt_thoughtHudCountdown);
+    __wt_thoughtHudCountdown = null;
+  }
+  if (__wt_thoughtHudEl) {
+    const el = __wt_thoughtHudEl;
+    __wt_thoughtHudEl = null;
+    el.style.opacity = '0';
+    el.style.transform = 'translateX(-50%) translateY(10px)';
+    setTimeout(() => {
+      if (el.parentNode) el.remove();
+    }, 220);
+  }
+  __wt_feedbackSticky = false;
+  clearTimeout(window.__wt_feedbackStickyTimer);
   __wt_destroyBubble();
 }
 
 function __wt_showThought(text, options) {
-  // On-page thought bubbles removed — all tool calls/thoughts display inside sidepanel logs
-  return;
+  if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) return;
+  if (!text || typeof text !== 'string') return;
+
+  const opts = options || {};
+  const isQuestion = opts.action === 'question' || opts.kind === 'question' || !!opts.ask;
+  const anchor = opts.anchor || '';
+
+  // Contextual visual anchor highlight
+  if (anchor) {
+    __wt_highlightAnchor(anchor);
+  }
+
+  // Clear pending timers
+  if (__wt_thoughtHudTimer) {
+    clearTimeout(__wt_thoughtHudTimer);
+    __wt_thoughtHudTimer = null;
+  }
+  if (__wt_thoughtHudCountdown) {
+    clearInterval(__wt_thoughtHudCountdown);
+    __wt_thoughtHudCountdown = null;
+  }
+
+  let hud = __wt_thoughtHudEl;
+  if (!hud || !hud.parentNode) {
+    hud = document.createElement('div');
+    hud.id = '__wt_thought_hud';
+    hud.setAttribute('data-wt-ignore', 'true');
+    hud.style.cssText = `
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(8px);
+      z-index: 2147483647;
+      width: 320px;
+      max-width: calc(100vw - 32px);
+      background: #0b0d12;
+      border: 1px solid #1e222b;
+      border-radius: 4px;
+      padding: 10px 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8), 0 0 1px rgba(255,255,255,0.08);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+      color: #f3f4f6;
+      pointer-events: auto;
+      opacity: 0;
+      transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1), transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+      box-sizing: border-box;
+    `;
+    (document.getElementById('Weavetab-root')?.shadowRoot || document.body || document.documentElement).appendChild(hud);
+    __wt_thoughtHudEl = hud;
+  }
+
+  const cleanText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const anchorBadge = anchor ? `<span style="color:#2b70ff;font-size:10px;font-family:monospace;font-weight:600;margin-left:4px;">@${anchor.replace(/&/g,'&amp;')}</span>` : '';
+
+  if (isQuestion) {
+    const timeoutSec = (opts.timeout || (opts.ask && opts.ask.timeout) || 20);
+    hud.innerHTML = `
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px;">
+        <div style="font-size:12px;line-height:1.4;color:#ffffff;font-weight:500;word-break:break-word;">
+          ${cleanText}${anchorBadge}
+        </div>
+        <button id="wt-hud-close" title="Dismiss" style="background:transparent;border:none;color:#555d6d;font-size:12px;cursor:pointer;padding:0 2px;line-height:1;margin-top:1px;">✕</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input id="wt-hud-input" type="text" placeholder="Type answer..." style="height:28px;background:#14161f;border:1px solid #252a36;border-radius:3px;padding:0 8px;font-size:12px;color:#fff;outline:none;flex:1;min-width:0;caret-color:#2b70ff;font-family:inherit;box-sizing:border-box;" />
+        <button id="wt-hud-submit-btn" title="Send" style="width:28px;height:28px;background:#2b70ff;border:none;border-radius:3px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;padding:0;box-sizing:border-box;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </button>
+        <span id="wt-hud-countdown" style="font-size:10px;color:#64748b;font-family:monospace;margin-left:2px;min-width:20px;text-align:right;">${timeoutSec}s</span>
+      </div>
+    `;
+  } else {
+    // Feedback / observation mode — ultra compact single row
+    hud.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div style="display:flex;align-items:center;gap:7px;min-width:0;">
+          <span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#2b70ff;box-shadow:0 0 6px #2b70ff;flex-shrink:0;"></span>
+          <span style="font-size:12px;line-height:1.4;color:#f3f4f6;word-break:break-word;font-weight:450;">${cleanText}${anchorBadge}</span>
+        </div>
+        <button id="wt-hud-close" title="Dismiss" style="background:transparent;border:none;color:#555d6d;font-size:12px;cursor:pointer;padding:0 2px;line-height:1;flex-shrink:0;">✕</button>
+      </div>
+    `;
+  }
+
+  // Animate in
+  requestAnimationFrame(() => {
+    if (hud) {
+      hud.style.opacity = '1';
+      hud.style.transform = 'translateX(-50%) translateY(0)';
+    }
+  });
+
+  // Wire close button
+  const closeBtn = hud.querySelector('#wt-hud-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      __wt_removeThought();
+    });
+  }
+
+  if (isQuestion) {
+    let askBridge = document.getElementById('__wt_ask_bridge');
+    if (!askBridge) {
+      askBridge = document.createElement('div');
+      askBridge.id = '__wt_ask_bridge';
+      askBridge.style.display = 'none';
+      document.body.appendChild(askBridge);
+    }
+    askBridge.dataset.status = 'pending';
+    askBridge.dataset.result = '';
+
+    const input = hud.querySelector('#wt-hud-input');
+    const submitBtn = hud.querySelector('#wt-hud-submit-btn');
+    const countdownSpan = hud.querySelector('#wt-hud-countdown');
+
+    let remaining = opts.timeout || (opts.ask && opts.ask.timeout) || 20;
+
+    __wt_thoughtHudCountdown = setInterval(() => {
+      remaining--;
+      if (countdownSpan) countdownSpan.textContent = `${remaining}s`;
+      if (remaining <= 0) {
+        clearInterval(__wt_thoughtHudCountdown);
+        __wt_thoughtHudCountdown = null;
+        if (askBridge) {
+          askBridge.dataset.status = 'timeout';
+          askBridge.dataset.result = '';
+        }
+        __wt_removeThought();
+      }
+    }, 1000);
+
+    const submit = () => {
+      const val = input ? input.value.trim() : '';
+      if (askBridge) {
+        askBridge.dataset.status = 'submitted';
+        askBridge.dataset.result = val;
+      }
+      if (window.__wt_ask_bridge && window.__wt_ask_bridge.resolve) {
+        window.__wt_ask_bridge.resolve({ success: true, response: val, status: 'answered' });
+        window.__wt_ask_bridge = {};
+      }
+      __wt_removeThought();
+    };
+
+    if (submitBtn) submitBtn.addEventListener('click', submit);
+    if (input) {
+      input.addEventListener('focus', () => { input.style.borderColor = '#2b70ff'; });
+      input.addEventListener('blur', () => { input.style.borderColor = '#252a36'; });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submit();
+        if (e.key === 'Escape') __wt_removeThought();
+      });
+      setTimeout(() => { if (input) input.focus(); }, 80);
+    }
+  } else {
+    // Auto-fade timer for feedback
+    const autoDuration = Math.max(3800, Math.min(8000, text.length * 50));
+    __wt_thoughtHudTimer = setTimeout(() => {
+      __wt_removeThought();
+    }, autoDuration);
+  }
 }
 
 function __wt_renderThought(text, options) {
-  // On-page thought bubbles removed — all tool calls/thoughts display inside sidepanel logs
-  return;
+  __wt_showThought(text, options);
 }
 
 function __wt_processThoughtQueue() {
   if (__wt_thoughtQueue.length > 0) {
     var next = __wt_thoughtQueue.shift();
-    setTimeout(function() { __wt_renderThought(next.text, next.options); }, 200);
+    setTimeout(function() { __wt_showThought(next.text, next.options); }, 200);
   }
 }
 
-// ── QUESTION INPUT (merged into thought bubble system) ────────
-let __wt_askContainer = null;
-let __wt_askTimer = null;
-let __wt_askBridge = null;
-
 function __wt_showQuestion(text, inputType, timeoutSeconds) {
-  __wt_removeAsk();
-  __wt_feedbackSticky = true;
-  var ts = timeoutSeconds || 120;
-
-  // DOM bridge
-  __wt_askBridge = document.getElementById('__wt_ask_bridge');
-  if (!__wt_askBridge) {
-    __wt_askBridge = document.createElement('div');
-    __wt_askBridge.id = '__wt_ask_bridge';
-    __wt_askBridge.style.display = 'none';
-    document.body.appendChild(__wt_askBridge);
-  }
-  __wt_askBridge.dataset.status = 'pending';
-  __wt_askBridge.dataset.result = '';
-
-  // Update HUD to "waiting..." so the top bar doesn't show question text twice
-  updateHUD('waiting for your input...');
-
-  // Render green thought bubble (same as sticky feedback — 0ms delay)
-  __wt_renderThought(text, { active: false, sticky: true });
-
-  // Countdown timer
-  var remaining = ts;
-  __wt_askTimer = setInterval(function() {
-    remaining--;
-    if (remaining <= 0) {
-      clearInterval(__wt_askTimer);
-      __wt_askTimer = null;
-      if (__wt_askBridge) { __wt_askBridge.dataset.status = 'timeout'; __wt_askBridge.dataset.result = ''; }
-      __wt_removeAsk();
-    }
-  }, 1000);
-
-  // Smooth input row — delays slightly so bubble appears first, then input slides up
-  setTimeout(function() {
-    if (!__wt_askBridge) return;
-
-    var row = document.createElement('div');
-    row.setAttribute('data-wt-ignore', '');
-    row.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(8px);z-index:2147483640;display:flex;align-items:center;gap:0;pointer-events:auto;opacity:0;transition:opacity 0.25s ease-out, transform 0.25s ease-out;';
-
-    var input;
-    if (inputType === 'paragraph') {
-      input = document.createElement('textarea');
-      input.rows = 3;
-      input.style.cssText = 'min-width:280px;max-width:480px;font-size:11px;padding:6px 8px;border-radius:4px 0 0 4px;background:#042f2e;color:#e4e4e7;border:1px solid #059669;border-right:none;outline:none;resize:vertical;font-family:"IBM Plex Mono",monospace;';
-      input.placeholder = 'Type your response...';
-    } else {
-      input = document.createElement('input');
-      input.style.cssText = 'min-width:200px;font-size:11px;padding:4px 8px;border-radius:4px 0 0 4px;background:#042f2e;color:#e4e4e7;border:1px solid #059669;border-right:none;outline:none;caret-color:#10b981;font-family:"IBM Plex Mono",monospace;';
-      input.placeholder = 'Your answer...';
-    }
-
-    var btn = document.createElement('button');
-    btn.style.cssText = 'padding:4px 10px;background:#059670;border:1px solid #059670;border-left:none;border-radius:0 4px 4px 0;color:#fff;cursor:pointer;font-size:10px;font-family:"IBM Plex Mono",monospace;';
-    btn.textContent = 'Send';
-
-    row.appendChild(input);
-    row.appendChild(btn);
-    document.body.appendChild(row);
-    __wt_askContainer = row;
-
-    // Fade in
-    requestAnimationFrame(function() {
-      row.style.opacity = '1';
-      row.style.transform = 'translateX(-50%) translateY(0)';
-    });
-
-    setTimeout(function() { input.focus(); }, 150);
-
-    function submit() {
-      if (__wt_askBridge) { __wt_askBridge.dataset.status = 'submitted'; __wt_askBridge.dataset.result = input.value; }
-      __wt_removeAsk();
-    }
-    function cancel() {
-      if (__wt_askBridge) { __wt_askBridge.dataset.status = 'cancelled'; __wt_askBridge.dataset.result = ''; }
-      __wt_removeAsk();
-    }
-
-    btn.onclick = submit;
-    input.onkeydown = function(e) {
-      if (e.key === 'Enter') {
-        if (inputType === 'paragraph' && !e.ctrlKey && !e.metaKey) return;
-        submit();
-      }
-      if (e.key === 'Escape') cancel();
-    };
-  }, 400);
+  __wt_showThought(text, { action: 'question', timeout: timeoutSeconds || 20 });
 }
 
 function __wt_removeAsk() {
-  if (__wt_askTimer) { clearInterval(__wt_askTimer); __wt_askTimer = null; }
-  if (__wt_askContainer) { __wt_askContainer.remove(); __wt_askContainer = null; }
-  __wt_askBridge = null;
-  __wt_feedbackSticky = false;
-  clearTimeout(window.__wt_feedbackStickyTimer);
-  __wt_thoughtQueue = [];
-  __wt_destroyBubble();
+  __wt_removeThought();
 }
 
 // ── SHARED OVERLAY CONTAINER ────────────────────────────────────
@@ -960,6 +1066,33 @@ class WeaveCursor {
 
     const shadow = this._host.attachShadow({ mode: 'closed' });
 
+    // Liquid trail canvas inside shadow root (zero DOM reflows)
+    this._trailCanvas = document.createElement('canvas');
+    this._trailCanvas.setAttribute('data-wt-ignore', 'true');
+    Object.assign(this._trailCanvas.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      width: '100vw',
+      height: '100vh',
+      pointerEvents: 'none',
+      zIndex: '2147483645',
+      overflow: 'visible',
+    });
+    this._trailCanvas.width = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1920;
+    this._trailCanvas.height = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 1080;
+    shadow.appendChild(this._trailCanvas);
+    this._trailCtx = this._trailCanvas.getContext('2d');
+    this._trailPoints = [];
+    this._lastTrailRecord = 0;
+
+    window.addEventListener('resize', () => {
+      if (this._trailCanvas) {
+        this._trailCanvas.width = window.innerWidth;
+        this._trailCanvas.height = window.innerHeight;
+      }
+    });
+
     // Hotspot aligned with the top-left pointer tip (3.0, 5.0 in 32x32 viewBox)
     this._hotX = 3.0;
     this._hotY = 5.0;
@@ -1043,6 +1176,9 @@ class WeaveCursor {
     if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) {
       this._visible = false;
       this._cursor.style.opacity = '0';
+      if (this._trailCtx && this._trailCanvas) {
+        this._trailCtx.clearRect(0, 0, this._trailCanvas.width, this._trailCanvas.height);
+      }
       return;
     }
     this._visible = visible;
@@ -1140,7 +1276,7 @@ class WeaveCursor {
           }
         }
 
-        this._render();
+        this._render(currentTime);
       }
 
       this._animFrame = requestAnimationFrame(draw);
@@ -1149,15 +1285,66 @@ class WeaveCursor {
     this._animFrame = requestAnimationFrame(draw);
   }
 
-  _render() {
+  _render(currentTime) {
     if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) {
       this._cursor.style.opacity = '0';
+      if (this._trailCtx && this._trailCanvas) {
+        this._trailCtx.clearRect(0, 0, this._trailCanvas.width, this._trailCanvas.height);
+      }
       return;
     }
     const x = this._lerpX;
     const y = this._lerpY;
     if (x === -9999 || y === -9999) return;
-    this._cursor.style.transform = `translate3d(${x - this._hotX}px, ${y - this._hotY}px, 0) scale(${this._scale})`;
+
+    const now = currentTime || performance.now();
+
+    // 1. Trail decay tracking
+    const dx = this._targetX - this._lerpX;
+    const dy = this._targetY - this._lerpY;
+    const moveDist = Math.sqrt(dx * dx + dy * dy);
+
+    if (moveDist > 1.8 && now - this._lastTrailRecord > 22) {
+      this._trailPoints.push({ x, y, birth: now });
+      this._lastTrailRecord = now;
+      if (this._trailPoints.length > 14) this._trailPoints.shift();
+    }
+
+    // Render decaying trail
+    if (this._trailCtx && this._trailCanvas) {
+      this._trailCtx.clearRect(0, 0, this._trailCanvas.width, this._trailCanvas.height);
+      for (let i = this._trailPoints.length - 1; i >= 0; i--) {
+        const pt = this._trailPoints[i];
+        const age = (now - pt.birth) / 260;
+        if (age >= 1) {
+          this._trailPoints.splice(i, 1);
+          continue;
+        }
+        const alpha = (1 - age) * 0.45;
+        const radius = Math.max(1, (1 - age) * 2.8);
+        this._trailCtx.beginPath();
+        this._trailCtx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+        this._trailCtx.fillStyle = `rgba(18, 104, 255, ${alpha})`;
+        this._trailCtx.shadowColor = '#1268ff';
+        this._trailCtx.shadowBlur = 4;
+        this._trailCtx.fill();
+      }
+    }
+
+    // 2. Cursor scale and tactile micro-physics
+    let targetScale = this._scale;
+    if (this._state === 'clicking') {
+      targetScale = this._scale * 0.82; // Tactile compression on click
+    } else if (this._state === 'hover') {
+      targetScale = this._scale * 1.08; // Interactive focus
+    } else if (this._state === 'idle') {
+      targetScale = this._scale + Math.sin(now * 0.003) * 0.012; // Alive breathing oscillation
+    }
+
+    // 3. Dynamic velocity tilt (natural motion lag)
+    const tilt = Math.max(-5, Math.min(5, dx * 0.06));
+
+    this._cursor.style.transform = `translate3d(${x - this._hotX}px, ${y - this._hotY}px, 0) rotate(${tilt}deg) scale(${targetScale})`;
   }
 }
 
@@ -1175,16 +1362,24 @@ function moveCursor(x, y, state) {
   }
 }
 
-
-// Click ripple (kept as page-level effect, not inside shadow DOM)
+// Enhanced twin action ripples radiating from click target
 function ripple(x, y) {
   if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) return;
-  const el = document.createElement('div');
-  el.className = 'Weavetab-ripple';
-  el.setAttribute('data-wt-ignore', '');
-  el.style.cssText = `position:fixed;left:${x}px;top:${y}px;pointer-events:none;z-index:2147483646`;
-  getWeavetabRoot().appendChild(el);
-  el.addEventListener('animationend', () => el.remove());
+  const host = document.createElement('div');
+  host.className = 'Weavetab-ripple-host';
+  host.setAttribute('data-wt-ignore', 'true');
+  host.style.cssText = `position:fixed;left:${x}px;top:${y}px;pointer-events:none;z-index:2147483646;transform:translate(-50%, -50%);`;
+
+  const w1 = document.createElement('div');
+  w1.style.cssText = 'position:absolute;top:50%;left:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border:2px solid #1268ff;border-radius:50%;box-shadow:0 0 12px rgba(18,104,255,0.7);animation:__wt_ripple_expand 0.42s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;pointer-events:none;';
+
+  const w2 = document.createElement('div');
+  w2.style.cssText = 'position:absolute;top:50%;left:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border:1.5px solid #60a5fa;border-radius:50%;animation:__wt_ripple_expand 0.52s 0.08s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;pointer-events:none;';
+
+  host.appendChild(w1);
+  host.appendChild(w2);
+  (document.getElementById('Weavetab-root')?.shadowRoot || document.body || document.documentElement).appendChild(host);
+  setTimeout(() => host.remove(), 620);
 }
 
 // ── X-RAY SPOTLIGHT OVERLAY (Phase 5.2) ────────────────────────
@@ -1703,83 +1898,34 @@ function __wt_handleWeavetabMsg(msg) {
       setTimeout(function(){ __wt_feedbackSticky = false; }, 2000);
     }
 
-    // stickyFeedback=true: fired by Weavetab_logs when agent answers a user question.
-    // Pin the bubble for 10s so tool chatter (moving to..., typing...) cannot override it.
-    if (msg.stickyFeedback === true && msg.hud && msg.hud.action) {
-      __wt_thoughtQueue = [];
-      clearTimeout(window.__wt_feedbackStickyTimer);
-
-      if (msg.ask) {
-        window.__wt_feedbackStickyTimer = setTimeout(function(){
-          __wt_feedbackSticky = false;
-          __wt_removeAsk();
-        }, (msg.ask.timeout || 120) * 1000 + 2000);
-        __wt_showQuestion(msg.hud.action, msg.ask.input || 'sentence', msg.ask.timeout || 120);
-      } else {
-        __wt_feedbackSticky = true;
-        window.__wt_feedbackStickyTimer = setTimeout(function(){
-          __wt_feedbackSticky = false;
-          __wt_destroyBubble();
-        }, 10000);
-        __wt_renderThought(msg.hud.action, { active: false, sticky: true });
-        if (msg.hud) updateHUD(msg.hud.action, msg.hud.detail);
-      }
-      if (msg.cursor) {
-        __wt_lastCursor = { x: msg.cursor.x, y: msg.cursor.y };
-        if (msg.cursor.waypoints && msg.cursor.duration_ms) {
-          __weaveCursor.setWaypoints(msg.cursor.waypoints, msg.cursor.duration_ms);
-        }
-        moveCursor(msg.cursor.x, msg.cursor.y, msg.state);
-      }
-      else if (msg.state) { moveCursor(__wt_lastCursor.x, __wt_lastCursor.y, msg.state); }
-      return;
-    }
-
     if (msg.hud) {
       updateHUD(msg.hud.action, msg.hud.detail);
       var a = (msg.hud.action || '').trim();
       if (a === 'reading the page...') {
-        __wt_showReadingGlow();
-        __wt_showThought('Reading the page...', { active: true });
         __weaveCursor.setState('reading');
       } else if (a === 'Mission Running') {
-        // Tool call is starting — switch to eval animation and show tool bubble
         __wt_toolActive = true;
         __weaveCursor.setState('eval');
-        __wt_showThought('Executing tool...', { active: true });
       } else if (a.startsWith('[OK]')) {
-        // Tool completed successfully — revert to idle and instantly hide bubble
         __weaveCursor.setState('idle');
         __wt_toolActive = false;
-        if (!__wt_feedbackSticky) {
-          __wt_destroyBubble(); // Instant removal
-          __wt_processThoughtQueue();
-        }
       } else if (a.startsWith('[ERR]')) {
-        // Tool errored — show stuck cursor briefly
         __weaveCursor.setState('stuck');
         __wt_toolActive = false;
         setTimeout(function(){ __weaveCursor.setState('idle'); }, 3000);
-        if (!__wt_feedbackSticky) {
-          __wt_destroyBubble(); // Instant removal
-          __wt_processThoughtQueue();
-        }
-      } else if (a && a.length > 3) {
-        __wt_hideReadingGlow();
-        if (!__wt_feedbackSticky) {
-          __wt_showThought(a, { active: true });
-        }
-      } else {
-        if (!__wt_feedbackSticky) {
-          __wt_hideReadingGlow();
-          __wt_destroyBubble(); // Instant removal
-          __wt_processThoughtQueue();
-        }
       }
     }
     if (msg.cursor || msg.hud) {
       controlledIndicator.show('#3B82F6');
     }
+  }
+
+  // Pure thought event from browser_thoughts tool only
+  if (msg.type === 'WT_THOUGHT' || msg.type === 'Weavetab_THOUGHT') {
+    __wt_showThought(msg.text, msg);
+  }
+  if (msg.type === 'WT_CLEAR_THOUGHT' || msg.type === 'Weavetab_CLEAR_THOUGHT') {
+    __wt_removeThought();
   }
 
   // Handle plan updates via sendToExtension channel
@@ -2050,741 +2196,8 @@ function setFaviconHref(dataUrl) {
 
 
 
-// ── PERSISTENT MESSAGING PANEL (WeaveTab OS v2.5.0) ───────────────
-// Design inspired by designs/elements.html
-(function initWeaveTabUI() {
-  if (window.self !== window.top) return;
-  if (document.getElementById('wt-main-container')) return;
+// ── SIDE PANEL REMOVED (Replaced by pure middle-down Thought HUD) ──
 
-  const version = "2.5.0";
-  const isBeta = true; 
-
-  // ── CSS Injection ─────────────────────────────────────────────
-  const style = document.createElement('style');
-  style.id = 'wt-ui-styles';
-  style.textContent = `
-    /* ── Sidepanel Tokens ────────────────────────────────────── */
-    :host, .wt-sp-root { all: initial; }
-    .wt-sp-root, .wt-sp-root * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    .wt-sp-root {
-      --sp-bg: #ffffff;
-      --sp-bg-panel: #f9f9fb;
-      --sp-bg-item: #f4f4f5;
-      --sp-bg-hover: #e8e8ec;
-      --sp-border: #e4e4e7;
-      --sp-border-hi: #d4d4d8;
-      --sp-text: #18181b;
-      --sp-text-secondary: #52525b;
-      --sp-text-muted: #a1a1aa;
-      --sp-blue: #3b82f6;
-      --sp-blue-light: #60a5fa;
-      --sp-green: #16a34a;
-      --sp-green-bg: #f0fdf4;
-      --sp-red: #ef4444;
-      --sp-red-bg: #fef2f2;
-      --sp-yellow: #f59e0b;
-      --sp-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06);
-      --sp-font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
-      --sp-font-mono: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-    }
-
-    .wt-sp-root[data-theme='dark'] {
-      --sp-bg: #09090b;
-      --sp-bg-panel: #111113;
-      --sp-bg-item: #1c1c1f;
-      --sp-bg-hover: #27272a;
-      --sp-border: #27272a;
-      --sp-border-hi: #3f3f46;
-      --sp-text: #fafafa;
-      --sp-text-secondary: #a1a1aa;
-      --sp-text-muted: #52525b;
-      --sp-green-bg: #052e16;
-      --sp-red-bg: #450a0a;
-      --sp-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3);
-    }
-
-    /* ── Panel Shell ─────────────────────────────────────────── */
-    .wt-sp-root {
-      position: fixed;
-      top: 0; bottom: 0; right: 0;
-      width: 360px;
-      display: none !important;
-      flex-direction: column;
-      background: var(--sp-bg);
-      border-left: 1px solid var(--sp-border);
-      z-index: 2147483646;
-      pointer-events: auto;
-      font-family: var(--sp-font);
-      color: var(--sp-text);
-
-      transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
-      overflow: hidden;
-    }
-
-    .wt-sp-root.minimized {
-      transform: translateX(100%);
-      pointer-events: none;
-    }
-
-    /* ── Header ──────────────────────────────────────────────── */
-    .wt-sp-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--sp-border);
-      flex-shrink: 0;
-      -webkit-app-region: drag;
-    }
-
-    .wt-sp-brand {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--sp-text);
-      letter-spacing: -0.01em;
-    }
-
-    .wt-sp-controls {
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      -webkit-app-region: no-drag;
-    }
-
-    .wt-sp-ctrl-btn {
-      width: 28px; height: 28px;
-      display: flex; align-items: center; justify-content: center;
-      background: transparent;
-      border: none;
-      border-radius: 6px;
-      color: var(--sp-text-muted);
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s;
-      font-size: 14px;
-    }
-    .wt-sp-ctrl-btn:hover { background: var(--sp-bg-hover); color: var(--sp-text); }
-
-    /* ── Badge Row ───────────────────────────────────────────── */
-    .wt-sp-badges {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 14px;
-      border-bottom: 1px solid var(--sp-border);
-      flex-shrink: 0;
-    }
-
-    .wt-sp-badge {
-      font-size: 9px;
-      font-weight: 600;
-      padding: 2px 6px;
-      border-radius: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.03em;
-    }
-    .wt-sp-badge-dev { background: var(--sp-blue); color: #fff; }
-    .wt-sp-badge-beta { background: var(--sp-yellow); color: #fff; }
-
-    /* ── Body (scrollable) ───────────────────────────────────── */
-    .wt-sp-body {
-      flex: 1;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .wt-sp-body::-webkit-scrollbar { width: 5px; }
-    .wt-sp-body::-webkit-scrollbar-track { background: transparent; }
-    .wt-sp-body::-webkit-scrollbar-thumb { background: var(--sp-border-hi); border-radius: 3px; }
-
-    /* ── Section ─────────────────────────────────────────────── */
-    .wt-sp-section {
-      border-bottom: 1px solid var(--sp-border);
-    }
-
-    .wt-sp-section-hdr {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 14px;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--sp-text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      cursor: pointer;
-      user-select: none;
-      transition: color 0.15s;
-    }
-    .wt-sp-section-hdr:hover { color: var(--sp-text); }
-
-    .wt-sp-chevron {
-      font-size: 10px;
-      transition: transform 0.2s ease;
-      display: inline-block;
-      color: var(--sp-text-muted);
-    }
-    .wt-sp-section.closed .wt-sp-chevron { transform: rotate(-90deg); }
-
-    .wt-sp-section-body {
-      overflow: hidden;
-      transition: max-height 0.25s cubic-bezier(0.32, 0.72, 0, 1);
-      max-height: 500px;
-    }
-    .wt-sp-section.closed .wt-sp-section-body { max-height: 0; }
-
-    .wt-sp-section-grow { flex: 1; display: flex; flex-direction: column; }
-    .wt-sp-section-grow .wt-sp-section-body { flex: 1; overflow-y: auto; max-height: none; }
-
-    /* ── Tasks ────────────────────────────────────────────────── */
-    .wt-sp-tasks {
-      display: flex;
-      flex-direction: column;
-      padding: 0 14px 10px;
-      gap: 2px;
-    }
-
-    .wt-sp-task {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 6px 8px;
-      border-radius: 6px;
-      font-size: 12px;
-      line-height: 1.4;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .wt-sp-task:hover { background: var(--sp-bg-hover); }
-
-    .wt-sp-task.done { color: var(--sp-green); }
-    .wt-sp-task.active { color: var(--sp-text); background: var(--sp-bg-item); border-left: 2px solid var(--sp-blue); padding-left: 6px; }
-    .wt-sp-task.pending { color: var(--sp-text-muted); }
-
-    .wt-sp-task-icon { flex-shrink: 0; width: 16px; text-align: center; font-size: 11px; margin-top: 1px; }
-    .wt-sp-task.done .wt-sp-task-icon { color: var(--sp-green); }
-    .wt-sp-task.active .wt-sp-task-icon { color: var(--sp-blue); }
-
-    .wt-sp-task-desc { flex: 1; word-break: break-word; }
-    .wt-sp-task.done .wt-sp-task-desc { text-decoration: line-through; opacity: 0.7; }
-
-    .wt-sp-task-empty {
-      font-size: 11px;
-      color: var(--sp-text-muted);
-      padding: 8px;
-      text-align: center;
-    }
-
-    /* ── Activity Log ────────────────────────────────────────── */
-    .wt-sp-log {
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-      padding: 0 14px 10px;
-      font-family: var(--sp-font-mono);
-    }
-
-    .wt-sp-log-entry {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 5px 8px;
-      border-radius: 4px;
-      font-size: 11px;
-      line-height: 1.4;
-      transition: background 0.1s;
-    }
-    .wt-sp-log-entry:hover { background: var(--sp-bg-hover); }
-
-    .wt-sp-log-icon { flex-shrink: 0; width: 14px; text-align: center; margin-top: 1px; font-size: 10px; }
-    .wt-sp-log-icon.running { color: var(--sp-blue); }
-    .wt-sp-log-icon.done { color: var(--sp-green); }
-    .wt-sp-log-icon.error { color: var(--sp-red); }
-
-    .wt-sp-log-name {
-      font-weight: 500;
-      color: var(--sp-text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 140px;
-    }
-
-    .wt-sp-log-badge {
-      font-size: 9px;
-      font-weight: 600;
-      padding: 1px 5px;
-      border-radius: 3px;
-      text-transform: uppercase;
-      letter-spacing: 0.02em;
-      flex-shrink: 0;
-    }
-    .wt-sp-log-badge.running { background: rgba(59,130,246,0.12); color: var(--sp-blue); }
-    .wt-sp-log-badge.done { background: rgba(22,163,74,0.12); color: var(--sp-green); }
-    .wt-sp-log-badge.error { background: rgba(239,68,68,0.12); color: var(--sp-red); }
-    .wt-sp-log-badge.info { background: var(--sp-bg-item); color: var(--sp-text-muted); }
-
-    .wt-sp-log-time {
-      font-size: 10px;
-      color: var(--sp-text-muted);
-      margin-left: auto;
-      flex-shrink: 0;
-    }
-
-    .wt-sp-log-empty {
-      font-size: 11px;
-      color: var(--sp-text-muted);
-      padding: 8px;
-      text-align: center;
-      font-family: var(--sp-font);
-    }
-
-    /* ── Chat ─────────────────────────────────────────────────── */
-    .wt-sp-chat {
-      padding: 10px 14px;
-      border-top: 1px solid var(--sp-border);
-      flex-shrink: 0;
-    }
-
-    .wt-sp-chat-row {
-      display: flex;
-      gap: 6px;
-      align-items: flex-end;
-    }
-
-    .wt-sp-chat-input {
-      flex: 1;
-      padding: 8px 12px;
-      background: var(--sp-bg-item);
-      border: 1px solid var(--sp-border);
-      border-radius: 8px;
-      color: var(--sp-text);
-      font-family: var(--sp-font);
-      font-size: 12px;
-      outline: none;
-      resize: none;
-      min-height: 36px;
-      max-height: 100px;
-      transition: border-color 0.15s;
-      line-height: 1.4;
-    }
-    .wt-sp-chat-input::placeholder { color: var(--sp-text-muted); }
-    .wt-sp-chat-input:focus { border-color: var(--sp-blue); }
-
-    .wt-sp-send-btn {
-      width: 36px; height: 36px;
-      display: flex; align-items: center; justify-content: center;
-      background: var(--sp-blue);
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: background 0.15s, transform 0.1s;
-    }
-    .wt-sp-send-btn:hover { background: #2563eb; }
-    .wt-sp-send-btn:active { transform: scale(0.95); }
-    .wt-sp-send-btn.sent { background: var(--sp-green); }
-    .wt-sp-send-btn svg { width: 16px; height: 16px; stroke: #fff; fill: none; }
-
-    /* ── Debug Section ───────────────────────────────────────── */
-    .wt-sp-debug-area {
-      padding: 0 14px 10px;
-      position: relative;
-      min-height: 200px;
-    }
-
-    .wt-sp-f3-btn {
-      margin-left: auto;
-      font-size: 9px;
-      font-weight: 600;
-      padding: 2px 6px;
-      border-radius: 4px;
-      background: var(--sp-bg-item);
-      border: 1px solid var(--sp-border);
-      color: var(--sp-text-muted);
-      cursor: pointer;
-      text-transform: uppercase;
-      transition: all 0.15s;
-    }
-    .wt-sp-f3-btn:hover { color: var(--sp-text); border-color: var(--sp-border-hi); }
-
-    /* ── System Icon (minimized state) ───────────────────────── */
-    #wt-system-icon {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      width: 40px;
-      height: 40px;
-      background: var(--sp-bg);
-      border: 1px solid var(--sp-border);
-      border-radius: 10px;
-      display: none;
-      justify-content: center;
-      align-items: center;
-      cursor: pointer;
-      z-index: 2147483640;
-      box-shadow: var(--sp-shadow);
-      transition: background 0.15s, transform 0.15s;
-      pointer-events: auto;
-    }
-    #wt-system-icon:hover { background: var(--sp-bg-hover); transform: scale(1.05); }
-    #wt-system-icon svg { width: 18px; height: 18px; fill: var(--sp-text-muted); }
-
-    /* ── Utilities ────────────────────────────────────────────── */
-    .wt-sp-root .hidden, .wt-sp-root.hidden, .wt-hidden { display: none !important; }
-
-    @keyframes wt-sp-spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
-    }
-    .wt-sp-spinner {
-      display: inline-block;
-      width: 10px; height: 10px;
-      border: 1.5px solid var(--sp-border-hi);
-      border-top-color: var(--sp-blue);
-      border-radius: 50%;
-      animation: wt-sp-spin 0.8s linear infinite;
-    }
-  `;
-  (document.head || document.documentElement).appendChild(style);
-
-  // ── HTML Construction ─────────────────────────────────────────
-  const container = document.createElement('div');
-  container.id = 'wt-main-container';
-  container.className = 'wt-sp-root';
-  container.setAttribute('data-wt-ignore', 'true');
-  container.setAttribute('data-theme', 'dark');
-  
-  container.innerHTML = `
-    <div class="wt-sp-header">
-      <span class="wt-sp-brand">Weavetab</span>
-      <div class="wt-sp-controls">
-        <button class="wt-sp-ctrl-btn" id="wt-theme-toggle" title="Toggle theme">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        </button>
-        <button class="wt-sp-ctrl-btn" id="wt-minimize-btn" title="Minimize">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
-        </button>
-      </div>
-    </div>
-    <div class="wt-sp-badges">
-      <span class="wt-sp-badge wt-sp-badge-dev hidden" id="wt-badge-dev">DEV</span>
-      ${isBeta ? '<span class="wt-sp-badge wt-sp-badge-beta">BETA</span>' : ''}
-    </div>
-    <div class="wt-sp-body">
-      <div class="wt-sp-section" id="wt-sec-tasks">
-        <div class="wt-sp-section-hdr" id="wt-header-tasks">
-          <span class="wt-sp-chevron">›</span>
-          <span>Tasks</span>
-        </div>
-        <div class="wt-sp-section-body">
-          <div class="wt-sp-tasks" id="wt-todo-list">
-            <div class="wt-sp-task-empty">No active mission</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="wt-sp-section wt-sp-section-grow" id="wt-sec-logs">
-        <div class="wt-sp-section-hdr" id="wt-header-logs">
-          <span class="wt-sp-chevron">›</span>
-          <span>Activity</span>
-        </div>
-        <div class="wt-sp-section-body">
-          <div class="wt-sp-log" id="wt-log-container">
-            <div class="wt-sp-log-empty">Waiting for activity...</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="wt-sp-section closed" id="wt-sec-debug">
-        <div class="wt-sp-section-hdr" id="wt-header-debug">
-          <span class="wt-sp-chevron">›</span>
-          <span>Debug</span>
-        </div>
-        <div class="wt-sp-section-body">
-          <div class="wt-sp-debug-area" id="wt-debug-content-area"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="wt-sp-chat">
-      <div class="wt-sp-chat-row">
-        <textarea class="wt-sp-chat-input" id="wt-msg-input" placeholder="Send feedback..." rows="1"></textarea>
-        <button class="wt-sp-send-btn" id="wt-send-btn">
-          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-        </button>
-      </div>
-    </div>
-  `;
-  __wt_safeAppendToBody(container);
-
-  const systemIcon = document.createElement('div');
-  systemIcon.id = 'wt-system-icon';
-  systemIcon.title = 'Open Weavetab';
-  systemIcon.innerHTML = `
-    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M4 4h16v16H4V4zm2 2v12h12V6H6zm2 3h3v2H8V9zm4 4h4v2h-4v-2z" />
-    </svg>
-  `;
-  __wt_safeAppendToBody(systemIcon);
-
-  // ── PERSISTENT ACTIVITY LOG ──────────────────────────────────
-  // Logs never clear until browser close — append-only like Claude Chrome
-  window.__wt_logEntries = [];
-  const logContainer = document.getElementById('wt-log-container');
-
-  function __wt_addLogEntry(name, status, detail) {
-    const entry = {
-      name: name || 'unknown',
-      status: status || 'info',
-      detail: detail || '',
-      time: Date.now()
-    };
-    window.__wt_logEntries.push(entry);
-    __wt_renderLogEntry(entry);
-    // Auto-scroll to bottom
-    if (logContainer) {
-      logContainer.scrollTop = logContainer.scrollHeight;
-    }
-  }
-
-  function __wt_renderLogEntry(entry) {
-    if (!logContainer) return;
-    // Remove empty placeholder on first real entry
-    const empty = logContainer.querySelector('.wt-sp-log-empty');
-    if (empty) empty.remove();
-
-    const el = document.createElement('div');
-    el.className = 'wt-sp-log-entry';
-
-    const iconClass = entry.status === 'done' ? 'done' : entry.status === 'error' ? 'error' : entry.status === 'running' ? 'running' : '';
-    const icon = entry.status === 'running' ? '<span class="wt-sp-spinner"></span>'
-      : entry.status === 'done' ? '&#10003;'
-      : entry.status === 'error' ? '&#10007;'
-      : '&#9679;';
-
-    const badge = entry.status === 'running' ? 'RUNNING'
-      : entry.status === 'done' ? 'OK'
-      : entry.status === 'error' ? 'ERR'
-      : '';
-
-    const timeStr = new Date(entry.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    el.innerHTML = `
-      <span class="wt-sp-log-icon ${iconClass}">${icon}</span>
-      <span class="wt-sp-log-name">${__wt_escapeHtml(entry.name)}</span>
-      ${badge ? `<span class="wt-sp-log-badge ${entry.status}">${badge}</span>` : ''}
-      <span class="wt-sp-log-time">${timeStr}</span>
-    `;
-
-    if (entry.detail) {
-      const detailEl = document.createElement('div');
-      detailEl.style.cssText = 'width:100%;font-size:10px;color:var(--sp-text-muted);white-space:pre-wrap;word-break:break-all;margin-top:2px;';
-      detailEl.textContent = entry.detail;
-      el.appendChild(detailEl);
-    }
-
-    logContainer.appendChild(el);
-  }
-
-  function __wt_escapeHtml(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  // ── THEME SYSTEM ──────────────────────────────────────────────
-  function __wt_applyTheme(theme) {
-    container.setAttribute('data-theme', theme);
-    document.getElementById('wt-system-icon') && document.getElementById('wt-system-icon').setAttribute('data-theme', theme);
-    try { browserAPI.storage.local.set({ wt_theme: theme }); } catch(e) {}
-  }
-
-  function __wt_toggleTheme() {
-    const current = container.getAttribute('data-theme');
-    __wt_applyTheme(current === 'dark' ? 'light' : 'dark');
-  }
-
-  // Restore persisted theme
-  try {
-    browserAPI.storage.local.get(['wt_theme'], function(res) {
-      if (res.wt_theme) {
-        __wt_applyTheme(res.wt_theme);
-      }
-    });
-  } catch(e) {}
-
-
-
-  // ── HUD STATUS INTERCEPTION (for activity log) ────────────────
-  // Capture Weavetab_STATE hud updates and add to log
-  window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'Weavetab-msg-in' && e.data.data && e.data.data.type === 'Weavetab_STATE' && e.data.data.hud) {
-      const hud = e.data.data.hud;
-      if (hud.action && hud.action.length > 2) {
-        __wt_addLogEntry(hud.action, 'info', hud.detail || '');
-      }
-    }
-  });
-
-
-
-  // ── Panel State Persistence ────────────────────────────────────
-  // Sidepanel always opens on browser launch (background clears state on startup).
-  // Persists minimized state across page navigations within a session.
-  function minimizePanel() {
-      container.classList.add('minimized');
-      systemIcon.style.display = 'flex';
-      try { browserAPI.storage.local.set({ wt_panel_minimized: true }); } catch(e) {}
-  }
-
-  function restorePanel() {
-      systemIcon.style.display = 'none';
-      container.classList.remove('minimized');
-      try { browserAPI.storage.local.set({ wt_panel_minimized: false }); } catch(e) {}
-  }
-
-  // Restore minimized state from storage (respects user's last action)
-  try {
-      browserAPI.storage.local.get(['wt_panel_minimized'], function(res) {
-          if (res.wt_panel_minimized) {
-              container.classList.add('minimized');
-              systemIcon.style.display = 'flex';
-          }
-      });
-  } catch(e) {}
-
-  function toggleSection(id) {
-      document.getElementById(id).classList.toggle('closed');
-  }
-
-
-
-  function syncDevMode() {
-      const active = !!window.__wt_devMode;
-      const devBadge = document.getElementById('wt-badge-dev');
-      
-      if (devBadge) devBadge.classList.toggle('hidden', !active);
-  }
-
-  window.addEventListener('wt-config-sync', syncDevMode);
-
-  container.querySelector('#wt-minimize-btn').onclick = minimizePanel;
-  systemIcon.onclick = restorePanel;
-  container.querySelector('#wt-theme-toggle').onclick = __wt_toggleTheme;
-  container.querySelector('#wt-header-tasks').onclick = () => toggleSection('wt-sec-tasks');
-  container.querySelector('#wt-header-logs').onclick = () => toggleSection('wt-sec-logs');
-  container.querySelector('#wt-header-debug').onclick = () => toggleSection('wt-sec-debug');
-
-  
-  syncDevMode();
-
-  const msgInput = container.querySelector('#wt-msg-input');
-  const sendBtn = container.querySelector('#wt-send-btn');
-
-  // Auto-resize textarea
-  msgInput.addEventListener('input', function() {
-    this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 100) + 'px';
-  });
-
-  // ── Plan Rendering Integration ───────────────────────────────
-  function renderPlan(action, goal, tasks) {
-      const list = document.getElementById('wt-todo-list');
-      if (!list) return;
-
-      if (action === 'hide' || (!goal && (!tasks || tasks.length === 0))) {
-          list.innerHTML = '<div class="wt-sp-task-empty">No active mission</div>';
-          return;
-      }
-
-      list.innerHTML = '';
-      if (goal) {
-          const goalEl = document.createElement('div');
-          goalEl.className = 'wt-sp-task active';
-          goalEl.style.cssText = 'margin-bottom:4px;font-weight:500;';
-          goalEl.innerHTML = '<span class="wt-sp-task-icon">&#9654;</span><span class="wt-sp-task-desc">' + __wt_escapeHtml(goal) + '</span>';
-          list.appendChild(goalEl);
-      }
-      if (tasks && tasks.length > 0) {
-          tasks.forEach(task => {
-              const item = document.createElement('div');
-              const statusClass = task.status === 'done' ? 'done' : (task.status === 'in-progress' ? 'active' : 'pending');
-              const icon = task.status === 'done' ? '&#10003;' : (task.status === 'in-progress' ? '<span class="wt-sp-spinner"></span>' : '&#9675;');
-              
-              item.className = 'wt-sp-task ' + statusClass;
-              item.setAttribute('data-task-id', task.id);
-              item.innerHTML = '<span class="wt-sp-task-icon">' + icon + '</span><span class="wt-sp-task-desc">' + __wt_escapeHtml(task.description) + '</span>';
-
-              list.appendChild(item);
-          });
-      }
-
-      // Log the plan update
-      __wt_addLogEntry('Plan updated', 'info', (tasks ? tasks.length : 0) + ' tasks');
-  }
-
-  window.__wt_plan = renderPlan;
-
-  window.addEventListener('message', (e) => {
-      if (e.data && e.data.type === '__WT_PLAN') {
-          renderPlan(e.data.action, e.data.goal, e.data.tasks);
-      }
-      syncDevMode();
-  });
-
-  setInterval(syncDevMode, 2000);
-
-  try {
-      browserAPI.storage.local.get(['wt_plan_collapsed'], function(res) {});
-  } catch(e) {}
-
-  // Persist draft
-  msgInput.addEventListener('input', function() {
-    try { browserAPI.storage.local.set({ wt_chat_draft: msgInput.value }); } catch(e) {}
-  });
-
-  // Submit
-  function submitFeedback() {
-    var text = msgInput.value.trim();
-    if (!text) return;
-
-    window.postMessage({
-      type: '__WT_FEEDBACK',
-      text: text
-    }, '*');
-
-    window.dispatchEvent(new CustomEvent('Weavetab-msg-in', {
-      detail: {
-        type: 'USER_FEEDBACK',
-        text: text
-      }
-    }));
-
-    try {
-      var existing = JSON.parse(localStorage.getItem('__wt_chat_queue_persist') || '[]');
-      existing.push({ text: text, ts: Date.now() });
-      if (existing.length > 20) existing.splice(0, existing.length - 20);
-      localStorage.setItem('__wt_chat_queue_persist', JSON.stringify(existing));
-    } catch(e) {}
-
-    __wt_addLogEntry('Feedback sent', 'done', text.length > 60 ? text.substring(0, 60) + '...' : text);
-
-    msgInput.value = '';
-    msgInput.style.height = 'auto';
-    try { browserAPI.storage.local.remove('wt_chat_draft'); } catch(e) {}
-    sendBtn.classList.add('sent');
-    setTimeout(function(){ sendBtn.classList.remove('sent'); }, 1200);
-  }
-
-  sendBtn.onclick = submitFeedback;
-  msgInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitFeedback(); }
-    if (e.key === 'Escape') { minimizePanel(); }
-  });
-
-})();
-
-// ── GEMINI-STYLE AREA SNIPE & DIRECT ANNOTATION ENGINE ─────────────────────
 (function initAreaSnipeEngine() {
   let isSnipeActive = false;
   let currentSnipeMode = 'dom_target';
@@ -3051,7 +2464,7 @@ function setFaviconHref(dataUrl) {
     }
   }
 
-  // Listen for start snipe message from sidepanel/background
+  // Listen for snipe trigger from background
   browserAPI.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'WT_START_SNIPE') {
       createOverlay(msg.mode || 'dom_target');

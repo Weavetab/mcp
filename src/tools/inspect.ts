@@ -143,5 +143,5 @@ export async function browserInspect(
     eventListeners: listeners
   };
 
-  return { success: true, data, message: "Inspected element successfully" };
+  return { success: true, data, message: "inspected element" };
 }

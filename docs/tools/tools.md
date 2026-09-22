@@ -1,6 +1,6 @@
 ---
-title: "MCP Tools (47 Tools)"
-description: "Complete reference of all 47 production-grade Weavetab automation tools."
+title: "MCP Tools (50 Tools)"
+description: "Complete reference of all 50 production-grade Weavetab automation tools."
 product: mcp
 section: tools
 icon: Wrench
@@ -9,13 +9,13 @@ slug: tools
 
 # MCP Tools Master Reference
 
-Weavetab exposes **47 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
+Weavetab exposes **50 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
 
 Every tool adheres to a strict contract:
 - **Zod schema validation** for all runtime arguments
 - **`withSecurity()` pipeline** enforcing rate limits, domain policies, and RBAC roles
 - **Structured audit logging** via `logAction()`
-- **Zero-waste token models** utilizing volatile `w:NN` ref IDs, semantic deltas, and DOM pruning
+- **Zero-waste token models** using volatile `w:NN` ref IDs, semantic deltas, and DOM pruning
 
 ---
 
@@ -71,6 +71,8 @@ Every tool adheres to a strict contract:
 | 46 | `list_plugins` | Plugins & Extensions | Inspects installed SDK plugins, loaded tool overrides, custom schemas, and capability manifests. |
 | 47 | `load_plugin` | Plugins & Extensions | Dynamically loads Weavetab plugins by npm package name with isolated sandboxing. |
 | 48 | `browser_checkpoint` | Storage & Safety | Snapshot and restore browser state (cookies, storage, scroll/URL) into named checkpoints for session time-travel and rollback. Supports `app`. |
+| 49 | `browser_memory_profile` | Performance & Memory | Takes JS heap snapshots and diagnoses detached DOM nodes and memory leaks. |
+| 50 | `browser_pattern_learn` | Self-Learning & Heuristics | Records, clusters, and indexes selector patterns and action trajectories for autonomous navigation. |
 
 ---
 
@@ -92,6 +94,7 @@ High-density DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational
 | `prune` | `boolean?` | One-shot semantic compression: collapses repetitive elements and strips non-interactable noise. |
 | `scope` | `string?` | Restricts extraction to a semantic landmark or selector: `"navigation"`, `"main_content"`, `"sidebar"`, `"form"`, `"modal"`, `"utility"`, or CSS selector. |
 | `query` | `string?` | Filters elements by accessible name, ARIA role, or label substring. |
+| `visual` | `boolean \| "auto"?` | Set-of-Marks visual grounding. Injects numbered badges `[1]…[N]` and returns an annotated screenshot. Use `"auto"` for canvas/WebGL pages with < 5 DOM elements. |
 | `ax_tree` | `boolean?` | Uses Chromium Accessibility Tree directly (essential for closed Shadow DOM and canvas SPAs). |
 | `full` | `boolean?` | Return full markdown table format with bounding boxes instead of compact list. |
 | `tab_id` | `string?` | Read a specific background tab ID. |
@@ -100,6 +103,9 @@ High-density DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational
 ```typescript
 // Standard high-density read
 browser_map()
+
+// Visual grounding for canvas/WebGL/Figma pages (auto-activates when DOM < 5 elements)
+browser_map({ visual: "auto" })
 
 // Scope specifically to open modal or active form
 browser_map({ scope: "modal" })
@@ -177,19 +183,23 @@ browser_extract_design({
 ## 2. Input & Interaction
 
 ### `browser_click`
-Physical click engine using Ghost Cursor Bézier curve trajectories. Resolves targets through a 5-layer fallback cascade: `ref` → `selector` → `label` → `intent` → `coords`.
+Physical click engine using Ghost Cursor Bézier curve trajectories. Resolves targets through a multi-layer cascade: `mark` (SoM visual grounding) → `ref` → `selector` → `label` → `intent` → `coords`.
 
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
-| `id` | `string?` | Volatile `w:NN` ref ID from `browser_map` (preferred). |
+| `mark` | `number?` | Numbered badge from `browser_map({ visual: true/\"auto\" })`. Zero DOM walk — instant hardware coordinate click. Ideal for canvas/WebGL/Figma. |
+| `id` | `string?` | Volatile `w:NN` ref ID from `browser_map` (preferred for DOM). |
 | `selector` | `string?` | CSS selector of target element. |
 | `label` | `string?` | Visible text label of the target element. |
 | `intent` | `string?` | Semantic intent for AI-assisted Memory Intent Intercept. |
 | `app` | `string?` | Target Electron desktop application. |
 
 ```typescript
-// Preferred: stable ref ID
+// Click visual mark from browser_map({ visual: "auto" })
+browser_click({ mark: 3 })
+
+// Preferred for DOM: stable ref ID
 browser_click({ id: "w:14" })
 
 // Target desktop application
@@ -528,6 +538,70 @@ browser_tabs({ action: "list", app: "discord" })
 
 // Open a new tab in the web browser
 browser_tabs({ action: "open", url: "https://github.com" })
+```
+
+---
+
+## 8. Memory, Learning & Profiles
+
+### `browser_memory_profile`
+Inspects persistent site profile, workflow patterns, and quirks for a given or active origin. Call at session start to decide between fast-path replay (reliability ≥ 0.8) or exploratory navigation.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `origin` | `string?` | Target origin (e.g. `'https://github.com'`). If omitted, reads the active tab origin. |
+| `pattern` | `string?` | If provided, returns reliability score for this specific named pattern only. |
+
+```typescript
+// Inspect site memory profile and known workflow patterns for active tab
+browser_memory_profile()
+
+// Check reliability for a specific workflow pattern
+browser_memory_profile({ origin: "https://github.com", pattern: "create_pull_request" })
+```
+
+---
+
+### `browser_pattern_learn`
+Registers, updates, or records execution outcomes for named workflow patterns and site quirks. Persists successful multi-step flows to fast-track future navigation.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `origin` | `string` *(required)* | Full origin associated with the pattern. |
+| `action` | `"learn" \| "record_execution" \| "record_quirk"` | Default `"learn"`. Operation to perform. |
+| `name` | `string?` | Pattern name in snake_case (required for `learn` and `record_execution`). |
+| `steps` | `object[]?` | Workflow steps array containing tool calls and parameters (required for `learn`). |
+| `success_indicator` | `string?` | CSS selector or URL confirming workflow success. |
+| `entry` | `string?` | URL path or pattern where workflow starts. |
+| `success` | `boolean?` | Execution outcome (required for `record_execution`). |
+| `duration_ms` | `number?` | Execution duration in milliseconds. |
+| `quirk_key` | `string?` | Quirk key: `"cookie_banner"`, `"rate_limit"`, or `"modal_popups"`. |
+| `quirk_data` | `object?` | Quirk payload details. |
+
+```typescript
+// Learn a successful checkout flow
+browser_pattern_learn({
+  origin: "https://shop.example.com",
+  action: "learn",
+  name: "cart_checkout",
+  entry: "/cart",
+  steps: [
+    { tool: "browser_click", target: "#checkout-button" },
+    { tool: "browser_type", target: "#promo-code", value: "SUMMER" }
+  ],
+  success_indicator: ".order-confirmation"
+})
+
+// Update pattern reliability score following an execution
+browser_pattern_learn({
+  origin: "https://shop.example.com",
+  action: "record_execution",
+  name: "cart_checkout",
+  success: true,
+  duration_ms: 2400
+})
 ```
 
 

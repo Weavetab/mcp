@@ -103,7 +103,7 @@ export async function browserEval(
   // result.value is undefined and result.description is unhelpfully a type string.
   // Return a clear message so agents know the eval succeeded — it just returned no value.
   const rawResult = result.type === 'undefined'
-    ? "(expression ran successfully — returned undefined. To get a confirmation value, append ; 'ok' or return a string explicitly.)"
+    ? "(eval returned undefined. append ; 'ok' or return a string explicitly.)"
     : result.value !== undefined ? result.value : result.description;
   const redactedResult = typeof rawResult === 'string' 
     ? SessionSecretTracker.redact(targetId, rawResult) 

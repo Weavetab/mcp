@@ -122,7 +122,7 @@ export async function browserUpload(
 
     return { 
       success: uploaded, 
-      message: `Successfully attached ${filePaths.length} file(s)`,
+      message: `attached ${filePaths.length} file(s)`,
       file: path.basename(filePaths[0])
     };
   } catch (error) {

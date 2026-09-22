@@ -32,7 +32,8 @@ Global system directory holding cross-session learning and process locks:
 
 ```
 ~/.weavetab-system/
-├── memory/                    # Per-domain frontend framework & strategy profiles
+├── memory/                    # Per-domain frontend framework & strategy profiles (selector cache)
+│   └── sites/                 # Persistent site profiles: workflows, quirks & reliability scores
 ├── sessions/
 │   └── context.json           # Rolling 50-action trail for loop detection
 ├── apps/                      # Dedicated user profiles for Electron apps

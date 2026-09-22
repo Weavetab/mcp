@@ -6,12 +6,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
+import { WEAVETAB_VERSION } from "../version.js";
+
 const _require = createRequire(import.meta.url);
 function getVersion(): string {
   try {
-    return _require("../../package.json").version || "2.5.0-beta.3";
+    return _require("../../package.json").version || WEAVETAB_VERSION;
   } catch {
-    return "2.5.0-beta.3";
+    return WEAVETAB_VERSION;
   }
 }
 
@@ -204,7 +206,7 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
     return;
   }
 
-  spinner.succeed(pc.green(`Successfully installed ${pc.bold(selectedPkg)}`));
+  spinner.succeed(pc.green(`installed ${pc.bold(selectedPkg)}`));
 
   // Inspect installed package for weavetab.json
   const targetDir = path.join(process.cwd(), "node_modules", selectedPkg);
@@ -466,7 +468,7 @@ export async function runPluginRemove(pkgName: string, args: string[] = []): Pro
     return;
   }
 
-  spinner.succeed(pc.green(`Successfully removed ${pc.bold(pkgName)}`));
+  spinner.succeed(pc.green(`removed ${pc.bold(pkgName)}`));
   console.log(pc.dim("The plugin and its tools have been uninstalled.\n"));
 }
 

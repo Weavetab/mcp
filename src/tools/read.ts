@@ -16,8 +16,10 @@ import { cacheActionMap, getCachedActionMap, getRawCachedActionMap } from "../st
 import { startReadingSimulation } from "../overlay/ghost.js";
 import { suppressOverlays, restoreOverlays } from "../cdp/extension.js";
 import { sendToExtension } from "../cdp/helpers.js";
+import { hideWeaveTabOverlay, restoreWeaveTabOverlay } from "../cdp/helpers.js";
 
 import { analyzeVisualFallback } from "../intelligence/vision.js";
+import { marksSet, type MarkEntry } from "../intelligence/marks.js";
 import type { Config } from "../config/loader.js";
 import { getConfigAgentId } from "../config/loader.js";
 import type { ActionElement } from "../cdp/walker.js";
@@ -31,6 +33,25 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
     p,
     new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`browserMap timed out after ${ms}ms`)), ms)),
   ]);
+}
+
+export interface VisualMark {
+  mark: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  ref?: string;
+  label?: string;
+  type?: MarkEntry["type"];
+}
+
+export interface BrowserMapResult {
+  text: string;
+  /** Base64 JPEG of the page annotated with numbered SoM badges. Only present in visual mode. */
+  imageBase64?: string;
+  /** Structured mark list — numbers match badges visible on the screenshot. */
+  marks?: VisualMark[];
 }
 
 export interface ReadOptions {
@@ -48,6 +69,13 @@ export interface ReadOptions {
   deep?: boolean;
   /** Semantic DOM pruning. Defaults to true to drop non-interactive noise and SVGs. */
   prune?: boolean;
+  /**
+   * Visual grounding mode (Set-of-Marks).
+   * - true  → always inject numbered badges + screenshot.
+   * - "auto" → activate only when DOM interactive count < 5 (canvas/WebGL pages).
+   * Use browser_click({ mark: N }) to interact with numbered marks.
+   */
+  visual?: boolean | "auto";
 }
 
 function formatLite(el: ActionElement, activeElementId?: string, changedIds?: Set<string>): string {
@@ -216,12 +244,116 @@ function formatFull(elements: ActionElement[], url: string, title: string, hint?
   return lines.join('\n');
 }
 
+/**
+ * Inject numbered Set-of-Marks badges over all interactive elements,
+ * take a screenshot, then strip the badges. Returns structured mark data
+ * and the annotated image. Zero page pollution after completion.
+ */
+async function buildVisualGrounding(
+  session: CDP.Client,
+  targetId: string,
+  elements: ActionElement[]
+): Promise<{ marks: VisualMark[]; imageBase64: string } | null> {
+  try {
+    // Build mark data from DOM elements that have coordinates
+    const domMarks: VisualMark[] = [];
+    for (const el of elements) {
+      if (el.x === undefined || el.y === undefined) continue;
+      const w = (el as any).width ?? 80;
+      const h = (el as any).height ?? 24;
+      domMarks.push({
+        mark: domMarks.length + 1,
+        x: el.x,
+        y: el.y,
+        width: w,
+        height: h,
+        ref: el.id,
+        label: el.label || undefined,
+        type: el.role === "link" ? "link"
+          : el.role === "button" ? "button"
+          : (el.role === "textbox" || el.role === "searchbox" || el.role === "combobox") ? "input"
+          : el.role === "canvas" ? "canvas_region"
+          : "unknown",
+      });
+    }
+
+    // Also discover canvas elements that may not be in the DOM map
+    const { result: canvasRes } = await session.Runtime.evaluate({
+      expression: `(function(){
+        var canvases = [...document.querySelectorAll('canvas')];
+        return JSON.stringify(canvases.map(function(c){
+          var r = c.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 ? {
+            x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2),
+            w: Math.round(r.width), h: Math.round(r.height)
+          } : null;
+        }).filter(Boolean));
+      })()`,
+      returnByValue: true,
+    }).catch(() => ({ result: { value: '[]' } }));
+    const extraCanvas = JSON.parse(canvasRes.value as string ?? '[]') as Array<{ x: number; y: number; w: number; h: number }>;
+    // Add canvas regions not already covered by a nearby DOM mark
+    for (const c of extraCanvas) {
+      const alreadyCovered = domMarks.some(m => Math.abs(m.x - c.x) < 40 && Math.abs(m.y - c.y) < 40);
+      if (!alreadyCovered) {
+        domMarks.push({ mark: domMarks.length + 1, x: c.x, y: c.y, width: c.w, height: c.h, type: "canvas_region" });
+      }
+    }
+
+    if (domMarks.length === 0) return null;
+
+    // Inject badges — fixed-position, shadow-safe, above everything
+    const injectExpr = `(function(marks){
+      var BADGE_KEY = '__wt_som_badges__';
+      if (window[BADGE_KEY]) window[BADGE_KEY].forEach(function(d){ d.parentNode && d.parentNode.removeChild(d); });
+      window[BADGE_KEY] = [];
+      marks.forEach(function(m){
+        var d = document.createElement('div');
+        d.setAttribute('data-wt-som', String(m.mark));
+        d.style.cssText = 'position:fixed;left:'+(m.x - 10)+'px;top:'+(m.y - 10)+'px;width:20px;height:20px;z-index:2147483647;pointer-events:none;background:#7c3aed;color:#fff;font:bold 11px/20px monospace;text-align:center;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.5);';
+        d.textContent = String(m.mark);
+        document.documentElement.appendChild(d);
+        window[BADGE_KEY].push(d);
+      });
+      return true;
+    })(${JSON.stringify(domMarks)})`;
+    await session.Runtime.evaluate({ expression: injectExpr, returnByValue: true }).catch(() => {});
+
+    // Hide Weavetab overlay so badges are the only overlay in the shot
+    await hideWeaveTabOverlay(session).catch(() => {});
+
+    // Capture screenshot
+    const { data } = await session.Page.captureScreenshot({ format: 'jpeg', quality: 75 });
+
+    // Restore overlay
+    await restoreWeaveTabOverlay(session).catch(() => {});
+
+    // Strip badges immediately
+    await session.Runtime.evaluate({
+      expression: `(function(){ var b=window['__wt_som_badges__']; if(b) b.forEach(function(d){ d.parentNode&&d.parentNode.removeChild(d); }); window['__wt_som_badges__']=[]; })()`,
+      returnByValue: true,
+    }).catch(() => {});
+
+    // Persist in mark cache for browser_click({ mark: N }) resolution
+    const markMap = new Map<number, import("../intelligence/marks.js").MarkEntry>();
+    for (const m of domMarks) {
+      markMap.set(m.mark, { x: m.x, y: m.y, width: m.width, height: m.height, ref: m.ref, label: m.label, type: m.type });
+    }
+    marksSet(targetId, markMap);
+
+    return { marks: domMarks, imageBase64: data };
+  } catch (err) {
+    logDebug(`[buildVisualGrounding] failed: ${err}`);
+    return null;
+  }
+}
+
 export async function browserMap(
   session: CDP.Client,
   options: ReadOptions = {},
   targetId = "default",
   config: Config
-): Promise<string> {
+): Promise<string | BrowserMapResult> {
   logDebug(`[browserMap] Initiating read for targetId: ${targetId}, options: ${JSON.stringify(options)}`);
 
   // ── Wait for DOM and Visual Stability ──────────────────────────────────────
@@ -625,6 +757,23 @@ export async function browserMap(
   const wordCount = output.split(/\s+/).length;
   startReadingSimulation(session, wordCount, config);
   sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } }).catch(() => {});
+
+  // ── Visual Grounding (Set-of-Marks) ────────────────────────────────────────
+  // Trigger when: visual:true (always) OR visual:"auto" (DOM element count < 5).
+  const shouldVisual =
+    options.visual === true ||
+    (options.visual === "auto" && capped.length < 5);
+
+  if (shouldVisual) {
+    const vg = await buildVisualGrounding(session, targetId, map.elements);
+    if (vg) {
+      const markSummary = vg.marks
+        .map(m => `  [${m.mark}] ${m.type ?? "unknown"}${m.ref ? ` ${m.ref}` : ""} "${m.label ?? ""}" @(${m.x},${m.y})`)
+        .join("\n");
+      const annotatedText = output + `\n\n── Visual Marks (use browser_click({ mark: N })) ──\n${markSummary}`;
+      return { text: annotatedText, imageBase64: vg.imageBase64, marks: vg.marks } satisfies BrowserMapResult;
+    }
+  }
 
   return output;
 }
