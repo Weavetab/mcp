@@ -152,6 +152,16 @@ async function main(): Promise<void> {
       await runPluginCli(args.slice(1));
       process.exit(0);
     }
+    if (cmd === "skills") {
+      const { execSync: exec } = await import("node:child_process");
+      const subArgs = args.slice(1).join(" ");
+      try {
+        exec(`npx -y @weavetab/skills@latest ${subArgs}`.trim(), { stdio: "inherit" } as any);
+      } catch {
+        process.exit(1);
+      }
+      process.exit(0);
+    }
     if (cmd === "init" || cmd === "create" || cmd === "build" || cmd === "manifest") {
       console.log(pc.yellow(`\n[Weavetab] Plugin authoring commands are part of the developer SDK (@weavetab/sdk).`));
       console.log(pc.dim("To scaffold a new plugin:   ") + pc.cyan("npx -y @weavetab/sdk init <name>"));
@@ -444,6 +454,7 @@ async function main(): Promise<void> {
             }, "browserType"),
             S.cf("Enable Weavetab browser extension?", "extension", true),
             S.cf("Persist cookies across sessions?", "cookies", false),
+            S.cf("Sync browser data across profiles?", "syncDataAcrossBrowsers", false),
             S.tx("Extra browser flags (space-separated)", "browserFlagsRaw", ""),
             S.tx("Custom browser profile directory", "profileDir", ""),
           ])) === "back") process.exit(0);
@@ -460,6 +471,7 @@ async function main(): Promise<void> {
             S.tx("Idle timeout (ms)", "idleTimeout", "60000", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 5000) return "Min 5000 ms."; }),
             S.tx("Max actions per minute", "maxActionsPerMinute", "60", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 1) return "Positive integer."; }),
             S.tx("Actionability timeout (ms)", "actionabilityTimeout", "500", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 100) return "Min 100 ms."; }),
+            S.tx("Ref cache TTL (ms) — stale element handle expiry", "refCacheTtlMs", "30000", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 1000) return "Min 1000 ms."; }),
           ])) === "back") process.exit(0);
         }
 
@@ -477,6 +489,10 @@ async function main(): Promise<void> {
           console.log(boxen(pc.cyan("SECTION D: STORAGE & PROXY"), { padding: 1, borderStyle: 'round', borderColor: 'cyan' }));
           if ((await run([
             S.tx("Download directory", "downloadDir", ""),
+            S.tx("PDF output directory", "pdfDir", ""),
+            S.tx("Snapshot directory (screenshots)", "snapshotDir", ""),
+            S.tx("Recording output directory", "recordingDir", ""),
+            S.tx("Design extraction directory", "designDir", ""),
             S.tx("Proxy URL (or $WT_PROXY_URL)", "proxy", ""),
           ])) === "back") process.exit(0);
         }
@@ -526,6 +542,7 @@ async function main(): Promise<void> {
           browserType: a.browserType || "chromium",
           extension: a.extension !== undefined ? a.extension : true,
           cookies: a.cookies || false,
+          syncDataAcrossBrowsers: a.syncDataAcrossBrowsers || false,
           browserFlags: a.browserFlags || [],
           profileDir: a.profileDir || "",
           sessionTimeout: parseInt(a.sessionTimeout as string) || 3600,
@@ -533,9 +550,14 @@ async function main(): Promise<void> {
           idleTimeout: parseInt(a.idleTimeout as string) || 60000,
           maxActionsPerMinute: parseInt(a.maxActionsPerMinute as string) || 60,
           actionabilityTimeout: parseInt(a.actionabilityTimeout as string) || 500,
+          refCacheTtlMs: parseInt(a.refCacheTtlMs as string) || 30000,
           telemetry: a.telemetry || false,
           githubCacheTtlMs: parseInt(a.githubCacheTtlMs as string) || 1800000,
           downloadDir: a.downloadDir || "",
+          pdfDir: a.pdfDir || "",
+          snapshotDir: a.snapshotDir || "",
+          recordingDir: a.recordingDir || "",
+          designDir: a.designDir || "",
           proxy: typeof a.proxy === "string" && a.proxy.trim() ? a.proxy.trim() : undefined,
           policies: a.policies || [],
         });
@@ -651,7 +673,46 @@ async function main(): Promise<void> {
         }
       }
 
-      // ── PHASE 5: SUMMARY ───────────────────────────────────────────────────────
+      // ── PHASE 5: AGENT SKILLS ────────────────────────────────────────────────────
+      console.log(boxen(pc.blue("PHASE 5: AGENT SKILLS"), { padding: 1, borderStyle: 'round', borderColor: 'blue' }));
+
+      let skillsInstalled = false;
+      const installSkillsNow = await p.confirm({
+        message: "Install or update Weavetab agent skills? (domain guides for your AI agent)",
+        initialValue: true
+      });
+
+      if (!p.isCancel(installSkillsNow) && installSkillsNow) {
+        const agentFramework = await p.select({
+          message: "Select your target AI agent framework:",
+          options: [
+            { value: ".agent", label: "Antigravity", hint: ".agent/skills/<domain>/SKILL.md" },
+            { value: ".cursor", label: "Cursor IDE", hint: ".cursor/rules/weavetab-<domain>.mdc" },
+            { value: ".clinerules", label: "Cline", hint: ".clinerules" },
+            { value: ".windsurf", label: "Windsurf", hint: ".windsurf/rules/" },
+            { value: ".openclaw", label: "OpenClaw", hint: ".openclaw/skills/" },
+            { value: ".roocode", label: "RooCode", hint: ".roocode/rules/" },
+            { value: "generic", label: "Raw Markdown", hint: "weavetab-skills/ directory" },
+          ]
+        });
+
+        if (!p.isCancel(agentFramework)) {
+          const { execSync: exec } = await import("node:child_process");
+          p.note(
+            `${pc.dim("Installing skills for")} ${pc.cyan(agentFramework as string)} ${pc.dim("via")} ${pc.cyan("npx @weavetab/skills@latest")}...`,
+            "SKILLS INSTALLER"
+          );
+          console.log();
+          try {
+            exec(`npx -y @weavetab/skills@latest --framework ${agentFramework}`, { stdio: "inherit" } as any);
+            skillsInstalled = true;
+          } catch {
+            console.log(pc.yellow(`[WARN] Skills install failed — run 'npx @weavetab/skills@latest -f ${agentFramework}' manually`));
+          }
+        }
+      }
+
+      // ── PHASE 6: SUMMARY ───────────────────────────────────────────────────────
       console.log(boxen(pc.green("CONFIGURATION COMPLETE"), { padding: 1, borderStyle: 'round', borderColor: 'green' }));
 
       const summary: string[] = [
@@ -662,6 +723,7 @@ async function main(): Promise<void> {
         `${pc.dim("Max tabs:")}       ${partialConfig.maxTabs}`,
         `${pc.dim("Config location:")} ~/.weavetab/config.json`,
         `${pc.dim("MCP Config:")}     ${mcpConfigured ? pc.green("[OK] Configured") : pc.yellow("Pending")}`,
+        `${pc.dim("Skills:")}         ${skillsInstalled ? pc.green("[OK] Installed") : pc.dim("Skipped")}`,
       ];
 
       if (a.block?.length) summary.push(`${pc.dim("Blocked:")}   ${a.block.join(", ")}`);
@@ -1166,11 +1228,17 @@ async function main(): Promise<void> {
     console.log(pc.bold("COMMANDS"));
     console.log(`  ${pc.cyan("plugin")}        Manage Weavetab plugins (add, list, remove, search, browse, verify)`);
     console.log(`  ${pc.cyan("config")}        Launch the interactive configuration wizard`);
+    console.log(`  ${pc.cyan("skills")}        Install or update AI agent skills (@weavetab/skills)`);
     console.log(`  ${pc.cyan("view")}          Display the current active configuration`);
     console.log(`  ${pc.cyan("reset")}         Purge browser profiles, lockfiles, and orphan processes`);
     console.log(`  ${pc.cyan("secrets")}       Manage blind-injected credentials (set, list, rm)`);
     console.log(`  ${pc.cyan("reload-ext")}    Send a reload signal to the browser extension`);
     console.log(`  ${pc.cyan("help")}          Show this help message`);
+    console.log();
+
+    console.log(pc.bold("AGENT SKILLS (@weavetab/skills)"));
+    console.log(`  ${pc.dim("Install/update skills:")} ${pc.cyan("npx -y @weavetab/skills@latest")}`);
+    console.log(`  ${pc.dim("Via CLI:")}               ${pc.cyan("weavetab skills [options]")}`);
     console.log();
 
     console.log(pc.bold("PLUGIN COMMANDS (User)"));
