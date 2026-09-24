@@ -574,7 +574,7 @@ export async function weaveType(
 
   const loopDiag = getLoopDiagnostics("browser_type", target.ref);
   if (loopDiag.severity === "critical") {
-    return { success: false, error_code: "STUCK_LOOP_WARNING", message: `[!] Loop detected: You have tried to type into [${target.ref}] ${loopDiag.strikes} times without success. Call browser_reset_loop_counter if this is a new task.` };
+    return { success: false, error_code: "STUCK_LOOP_WARNING", message: `[!] Loop detected: You have tried to type into [${target.ref}] ${loopDiag.strikes} times without success. Run browser_map({ force: true }) if this is a new task.` };
   }
   if (loopDiag.severity === "warning") {
     logAction("browser_type", target.ref, `loop warning: ${loopDiag.strikes} consecutive strikes on [${target.ref}]`);

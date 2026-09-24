@@ -255,7 +255,6 @@ src/
 │   ├── click_and_wait.ts # browser_click_and_wait
 │   ├── browser_detect.ts # browser_detect
 │   ├── performance.ts    # browser_performance
-│   ├── macro_compiler.ts # browser_macro_compile
 │   ├── accessibility.ts  # browser_accessibility
 │   └── integration.test.ts
 ├── overlay/        # Shadow DOM UI injector

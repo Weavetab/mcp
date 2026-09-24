@@ -108,7 +108,7 @@ browser_click({ id: "w:42" })
 
 **Cause:** The warning previously relied on strict text matching.
 
-**Solution:** `stuck_warning` now respects the underlying `delta` computation. If the DOM changed, the warning will not fire. If you still see false positives, use `browser_reset_loop_counter` to manually reset.
+**Solution:** `stuck_warning` now respects the underlying `delta` computation. If the DOM changed, the warning will not fire. If you still see false positives, use `browser_map({ force: true })` or `browser_wait({ reset_loop: true })` to manually reset.
 
 ---
 

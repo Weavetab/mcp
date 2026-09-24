@@ -38,14 +38,15 @@
     "tools": {
       "browser_map": {
         "category": "vision",
-        "description": "Snapshot interactive DOM with stable ref IDs (w:NN). For complex SPAs, use scope or query to constrain tokens. Supports delta temporal diffing (up to 97% token reduction), semantic pruning (dropping hidden elements), Set-of-Marks visual grounding (visual: true / \"auto\" for canvas/WebGL pages), AX tree fallback (Shadow DOM traversal), scope filtering, query filtering, and forced rebuilds.",
+        "description": "Snapshot interactive DOM with stable ref IDs (w:NN). For complex SPAs, use scope or query to constrain tokens. Supports delta temporal diffing (up to 97% token reduction), semantic pruning (dropping hidden elements), Set-of-Marks visual grounding (visual: true / \"auto\" for canvas/WebGL pages), AX tree fallback (Shadow DOM traversal), scope filtering, query filtering, and forced rebuilds with automatic loop strike reset (force: true).",
         "features": [
           "Semantic DOM pruning (up to 97% token reduction with delta)",
           "Set-of-Marks visual grounding (visual: true / \"auto\")",
           "Per-tab snapshot temporal diffing (delta mode)",
           "Shadow DOM / AX tree fallback parsing",
           "Scope and query filtering for complex SPAs",
-          "Framework auto-detection injection"
+          "Framework auto-detection injection",
+          "Loop strike counter reset on forced re-mapping (force: true)"
         ]
       },
       "browser_navigate": {
@@ -121,10 +122,12 @@
       },
       "browser_burst": {
         "category": "mission_execution",
-        "description": "Chain multiple tool calls in one round-trip. High-throughput macro execution engine executing serial action pipelines in a single MCP request, bypassing JSON-RPC serialization overhead. Supports macro steps: type_and_send, navigate_and_read, click_and_wait, scroll_and_read, fill_form, drag_and_drop (ref -> end_ref), and hover_and_read.",
+        "description": "HIGH-SPEED MULTI-ACTION PIPELINE: Executes 2 or more sequential browser actions in a single round-trip without waiting for LLM turns between steps. PREFER THIS over individual single-action calls to slash latency and token burn. Supports native primitives (browser_click, browser_fill, browser_type, browser_type_secret, browser_navigate, browser_key, browser_scroll, browser_wait, browser_map) plus compound macros (type_and_send, click_and_wait, navigate_and_read, scroll_and_read, fill_form). If compile_from_history: true is passed, automatically compiles and executes recent successful session trail actions into a burst macro.",
         "features": [
-          "Single-request multi-action pipeline execution",
-          "Compound macro step abstractions (type_and_send, navigate_and_read, click_and_wait, scroll_and_read, fill_form, drag_and_drop, hover_and_read)",
+          "Single-request multi-action pipeline execution with zero intermediate LLM round-trips",
+          "Compound macro abstractions (type_and_send, click_and_wait, navigate_and_read, scroll_and_read, fill_form, drag_and_drop, hover_and_read)",
+          "Automatic session history compilation into replayable burst macros (compile_from_history: true)",
+          "Fail-fast execution guard (stop_on_error: true) to prevent cascading errors",
           "Automatic loop counter reset on execution start"
         ]
       },
@@ -393,14 +396,6 @@
           "Automated raw frame cleanup"
         ]
       },
-      "browser_reset_loop_counter": {
-        "category": "wait_and_timing",
-        "description": "Reset the loop detection strike counter to zero when legitimate repetitive actions flag automated safeguards.",
-        "features": [
-          "Atomic strike counter reset",
-          "Explicit reset reason logging"
-        ]
-      },
       "browser_detect": {
         "category": "tabs",
         "description": "CRITICAL INITIALIZATION TOOL. Detect available browsers and configured desktop apps (Discord, Slack, etc.). Call this FIRST before interacting with the environment to know if apps are online/offline and what tabs they have open.",
@@ -419,29 +414,11 @@
           "Resource loading timing distributions"
         ]
       },
-      "browser_macro_compile": {
-        "category": "macro",
-        "description": "Compile a recent action trail into a reusable browser_burst macro sequence for deterministic replay.",
-        "features": [
-          "Interaction trail analysis and compilation",
-          "Reusable macro structure generation",
-          "Full compatibility with browser_burst engine"
-        ]
-      },
-      "browser_memory_profile": {
-        "category": "memory",
-        "description": "Inspect or retrieve the persistent site profile for the current or given origin from ~/.weavetab-system/memory/sites/. Returns known workflow patterns with reliability scores, site quirks (cookie banners, rate limits), detected framework, and captcha frequency. Use at session start to determine whether a fast-path (reliability ≥ 0.8) or exploratory approach is needed.",
-        "features": [
-          "Full SiteProfile inspection per origin",
-          "Pattern reliability and strike-count visibility",
-          "Site quirk summary (cookie banners, rate limits, modal popups)",
-          "Compact hint string output for agent context injection"
-        ]
-      },
       "browser_pattern_learn": {
         "category": "memory",
-        "description": "Register, update, or record execution outcome for a named workflow pattern on a given origin in ~/.weavetab-system/memory/sites/. Use after successfully completing a multi-step workflow to persist it for future fast-path replay. Use record_execution to update reliability scores after replay attempts.",
+        "description": "Read (action=get), register (action=learn), update, or record execution outcome for a named workflow pattern on a given origin in ~/.weavetab-system/memory/sites/. Use action=get at session start to inspect site profiles and reliability scores. Use learn after completing a flow to persist it for future fast-path replay.",
         "features": [
+          "Site profile inspection via action=get (reads ~/.weavetab-system/memory/sites/)",
           "Named pattern creation and update (merge-on-write, no duplicates)",
           "Volatile selector stabilization before persistence",
           "EWMA reliability score update on execution outcome",
@@ -449,41 +426,14 @@
           "Site quirk registration (cookie_banner, rate_limit, modal_popup)"
         ]
       },
-      "github_analyze": {
+      "browser_github": {
         "category": "github",
-        "description": "Analyze a GitHub repository structure, file tree, and README snippet directly via raw endpoints without API key rate limits.",
+        "description": "Interact with GitHub repositories without burning browser turns. Analyze repo trees, read raw source files, search/inspect issues, and examine PR diffs and review comments.",
         "features": [
-          "Repository metadata parsing",
-          "Directory tree listing",
-          "README payload extraction",
-          "Zero GitHub API token requirement"
-        ]
-      },
-      "github_read": {
-        "category": "github",
-        "description": "Read file contents from a GitHub repository via raw content endpoints.",
-        "features": [
-          "Raw file content retrieval",
-          "Branch, tag, and commit ref targeting",
-          "Line range subset reading"
-        ]
-      },
-      "github_issues": {
-        "category": "github",
-        "description": "Interact with GitHub issues. List, search, and fetch issue details with comment threads.",
-        "features": [
-          "Issue state filtering (open, closed, all)",
-          "Full-text issue search",
-          "Comment thread extraction"
-        ]
-      },
-      "github_get_pr": {
-        "category": "github",
-        "description": "Interact with GitHub pull requests. Retrieve metadata, changed files, diff summaries, and review comments.",
-        "features": [
-          "Pull request metadata parsing",
-          "Changed file list enumeration",
-          "Review comment thread extraction"
+          "Action-based repo analysis, file reading, issues, and PR review",
+          "Zero GitHub API token requirement for raw reads",
+          "Automated active tab repository context resolution",
+          "Line range subset reading and issue/PR search"
         ]
       },
       "browser_office": {
@@ -604,7 +554,7 @@
         "features": [
           "Rolling action window evaluation",
           "Escalating alert tiers",
-          "Manual reset via browser_reset_loop_counter"
+          "Manual reset via browser_map({ force: true }) or browser_wait({ reset_loop: true })"
         ]
       },
       "framework_detection": {
@@ -638,9 +588,9 @@
       "rbac": {
         "description": "Role-Based Access Control enforcing tool execution boundaries based on configured session role.",
         "roles": {
-          "admin": "Full access to all 50 tools and system operations",
+          "admin": "Full access to all 44 tools and system operations",
           "system": "Full tool access excluding system-level operations",
-          "viewer": "Read-only access (browser_map, browser_find, browser_scrape, browser_screenshot, browser_inspect, browser_snapshot, browser_console, browser_pdf, browser_storage, browser_cookies, browser_tabs, browser_wait, github_*)",
+          "viewer": "Read-only access (browser_map, browser_find, browser_scrape, browser_screenshot, browser_inspect, browser_snapshot, browser_console, browser_pdf, browser_storage, browser_cookies, browser_tabs, browser_wait, browser_github)",
           "automation": "Restricted execution set for non-interactive automated workflows"
         }
       },

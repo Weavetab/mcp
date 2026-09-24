@@ -1,6 +1,6 @@
 ---
-title: "MCP Tools (50 Tools)"
-description: "Complete reference of all 50 production-grade Weavetab automation tools."
+title: "MCP Tools (44 Tools)"
+description: "Complete reference of all 44 production-grade Weavetab automation tools."
 product: mcp
 section: tools
 icon: Wrench
@@ -9,7 +9,7 @@ slug: tools
 
 # MCP Tools Master Reference
 
-Weavetab exposes **50 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
+Weavetab exposes **49 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
 
 Every tool adheres to a strict contract:
 - **Zod schema validation** for all runtime arguments
@@ -58,21 +58,15 @@ Every tool adheres to a strict contract:
 | 33 | `browser_extract_design` | Vision & Reading | Extracts design tokens, typography, colors, clean CSS, and Tailwind themes with pixel fidelity. Supports `app`. |
 | 34 | `browser_automation` | Mission & Automation | Injects self-running background tracking scripts into the page context for polling/monitoring. Supports `app`. |
 | 35 | `browser_recording` | Output & Media | Video screencast recording into `.webp`, `.gif`, `.webm`, or `.mp4` formats. Supports `app`. |
-| 36 | `browser_reset_loop_counter` | Wait, Timing & Safety | Resets the repetitive action strike counter to zero for long-running automated workflows. |
-| 37 | `browser_detect` | Tabs & Windows | CRITICAL INITIALIZATION TOOL. Detects local browsers and configured desktop apps (Discord, Slack, etc.) and reports connection status, active tabs, and port. |
-| 38 | `browser_performance` | Performance & Vitals | Retrieves Core Web Vitals (FCP, LCP, CLS) and detailed network resource timings. Supports `app`. |
-| 39 | `browser_macro_compile` | Mission & Automation | Compiles recent action trails from session history into reusable `browser_burst` macros. |
-| 40 | `github_analyze` | GitHub Intelligence | Analyzes GitHub repository structure, file trees, and READMEs without API token limits. |
-| 41 | `github_read` | GitHub Intelligence | Reads raw file contents and specific line ranges from GitHub repositories. |
-| 42 | `github_issues` | GitHub Intelligence | Lists, searches, and inspects GitHub issues and discussion threads. |
-| 43 | `github_get_pr` | GitHub Intelligence | Inspects GitHub Pull Requests including changed files, diffs, and review comments. |
-| 44 | `browser_office` | Office Documents | Parses Word (`.docx`), Excel (`.xlsx`), PDF, and CSV files into structured data. |
-| 45 | `browser_emulate` | Navigation & Environment | Emulates network throttling (3G/4G/Offline), CPU slowdown, geolocation, and custom User-Agent. Supports `app`. |
-| 46 | `list_plugins` | Plugins & Extensions | Inspects installed SDK plugins, loaded tool overrides, custom schemas, and capability manifests. |
-| 47 | `load_plugin` | Plugins & Extensions | Dynamically loads Weavetab plugins by npm package name with isolated sandboxing. |
-| 48 | `browser_checkpoint` | Storage & Safety | Snapshot and restore browser state (cookies, storage, scroll/URL) into named checkpoints for session time-travel and rollback. Supports `app`. |
-| 49 | `browser_memory_profile` | Performance & Memory | Takes JS heap snapshots and diagnoses detached DOM nodes and memory leaks. |
-| 50 | `browser_pattern_learn` | Self-Learning & Heuristics | Records, clusters, and indexes selector patterns and action trajectories for autonomous navigation. |
+| 36 | `browser_detect` | Tabs & Windows | CRITICAL INITIALIZATION TOOL. Detects local browsers and configured desktop apps (Discord, Slack, etc.) and reports connection status, active tabs, and port. |
+| 37 | `browser_performance` | Performance & Vitals | Retrieves Core Web Vitals (FCP, LCP, CLS) and detailed network resource timings. Supports `app`. |
+| 38 | `browser_github` | GitHub Intelligence | Analyzes repository structure, reads raw files, searches issues, and inspects PRs. |
+| 39 | `browser_office` | Office Documents | Parses Word (`.docx`), Excel (`.xlsx`), PDF, and CSV files into structured data. |
+| 40 | `browser_emulate` | Navigation & Environment | Emulates network throttling (3G/4G/Offline), CPU slowdown, geolocation, and custom User-Agent. Supports `app`. |
+| 41 | `list_plugins` | Plugins & Extensions | Inspects installed SDK plugins, loaded tool overrides, custom schemas, and capability manifests. |
+| 42 | `load_plugin` | Plugins & Extensions | Dynamically loads Weavetab plugins by npm package name with isolated sandboxing. |
+| 43 | `browser_checkpoint` | Storage & Safety | Snapshot and restore browser state (cookies, storage, scroll/URL) into named checkpoints for session time-travel and rollback. Supports `app`. |
+| 44 | `browser_pattern_learn` | Self-Learning & Heuristics | Read, register, update, and record execution outcomes for named workflow patterns and site quirks per origin. Use `action: "get"` to inspect site profiles. |
 
 ---
 
@@ -97,6 +91,7 @@ High-density DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational
 | `visual` | `boolean \| "auto"?` | Set-of-Marks visual grounding. Injects numbered badges `[1]…[N]` and returns an annotated screenshot. Use `"auto"` for canvas/WebGL pages with < 5 DOM elements. |
 | `ax_tree` | `boolean?` | Uses Chromium Accessibility Tree directly (essential for closed Shadow DOM and canvas SPAs). |
 | `full` | `boolean?` | Return full markdown table format with bounding boxes instead of compact list. |
+| `force` | `boolean?` | Force full DOM map rebuild even if loop detection says nothing changed. Bypasses skip guard and resets loop strikes. |
 | `tab_id` | `string?` | Read a specific background tab ID. |
 | `app` | `string?` | Target desktop Electron app name (e.g. `"discord"`, `"vscode"`, `"figma"`). |
 
@@ -391,23 +386,32 @@ browser_emulate({
 ## 3. Mission & Automation
 
 ### `browser_burst`
-High-performance atomic action pipeline. Executes multiple sequential actions in a single MCP JSON-RPC round-trip, eliminating protocol latency overhead.
+High-speed multi-action pipeline. Executes multiple sequential actions in a single MCP round-trip without waiting for LLM turns between steps. PREFER THIS over individual single-action calls to slash latency and token burn. Supports native primitives (`browser_click`, `browser_fill`, `browser_type`, `browser_type_secret`, `browser_navigate`, `browser_key`, `browser_scroll`, `browser_wait`, `browser_map`) plus compound macros (`type_and_send`, `click_and_wait`, `navigate_and_read`, `scroll_and_read`, `fill_form`).
 
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
-| `steps` | `array` *(required)* | Array of compound macro step objects. |
-| `batch` | `boolean?` | Run in batch mode. |
+| `steps` | `array?` | Array of step objects (`{ tool, args }` or flat `{ tool, ...args }`). Alias: `actions`. |
+| `actions` | `array?` | Alias for `steps`. |
+| `compile_from_history` | `boolean?` | Compile recent successful session trail actions into a macro. If `steps` omitted, executes compiled macro directly. |
+| `history_limit` | `number?` | Recent trail entries to inspect when compiling (default `20`). |
+| `dry_run` | `boolean?` | With `compile_from_history: true`, returns compiled steps without executing. |
+| `stop_on_error` | `boolean?` | Halt execution immediately if a step fails to prevent cascade errors (default `true`). |
+| `batch` | `boolean?` | Defer action map generation until all steps are complete. |
 | `app` | `string?` | Target Electron desktop application context. |
 
 ```typescript
+// Burst form filling and submission in a single round-trip
 browser_burst({
   steps: [
-    { action: "navigate_and_read", url: "https://example.com/login" },
-    { action: "type_and_send", selector: "#username", text: "admin@corp.internal" },
-    { action: "click_and_wait", selector: "#submit-btn" }
+    { tool: "browser_fill", ref: "w:12", value: "admin@corp.internal" },
+    { tool: "browser_fill", ref: "w:14", value: "securePassword123" },
+    { tool: "click_and_wait", ref: "w:18" }
   ]
 })
+
+// Compile and replay recent exploratory actions
+browser_burst({ compile_from_history: true })
 ```
 
 ---
@@ -429,7 +433,41 @@ browser_captcha({ action: "solve", timeout: 45000 })
 
 ---
 
-## 5. Enterprise Documents & Office
+## 5. GitHub Intelligence
+
+### `browser_github`
+Interact with GitHub repositories without burning browser turns. Analyze repository structure and trees, read raw source files (with optional line ranges), search and inspect issues with comment threads, and examine PR diffs and reviews.
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `action` | `"analyze" \| "read" \| "issues" \| "pr"` *(required)* | Operation to perform. |
+| `repo` | `string?` | Optional 'owner/repo' slug or GitHub URL. If omitted, uses active tab's repository. |
+| `paths` | `string[]?` | For action: 'read'. File paths relative to repository root. |
+| `line_range` | `[number, number]?` | For action: 'read'. Optional [start, end] 1-indexed line range. |
+| `number` | `number?` | For action: 'issues' or 'pr'. Issue or PR number. |
+| `search` | `string?` | For action: 'issues'. Search query to find issues. |
+| `labels` | `string[]?` | For action: 'issues'. Filter issues by labels. |
+| `state` | `"open" \| "closed" \| "all"?` | For action: 'issues'. Filter issues by state. |
+| `limit` | `number?` | For action: 'issues'. Max number of issues to return (default 5). |
+
+```typescript
+// Analyze repo metadata, file tree, and README
+browser_github({ action: "analyze", repo: "weavetab/mcp" })
+
+// Read file contents without API rate limit consumption
+browser_github({ action: "read", repo: "weavetab/mcp", paths: ["src/server.ts"], line_range: [1, 50] })
+
+// Inspect PR details and review comments
+browser_github({ action: "pr", repo: "weavetab/mcp", number: 42 })
+
+// Search repository issues
+browser_github({ action: "issues", repo: "weavetab/mcp", search: "rate limit", state: "open" })
+```
+
+---
+
+## 6. Enterprise Documents & Office
 
 ### `browser_office`
 Parses and extracts structured tabular content, text paragraphs, and metadata from Word (`.docx`), Excel (`.xlsx`/`.xls`), PDF, and CSV files downloaded during browser sessions or referenced via URL.
@@ -452,7 +490,7 @@ browser_office({
 
 ---
 
-## 6. Plugins & Extensions
+## 7. Plugins & Extensions
 
 ### `list_plugins`
 Inspects all dynamically loaded Weavetab SDK plugins, active tool overrides, registered capability manifests, and isolated plugin storage directories.
@@ -503,7 +541,7 @@ browser_checkpoint({ action: "restore", name: "pre-checkout-state" })
 
 ---
 
-## 7. Tabs, Windows & Desktop Environment
+## 8. Tabs, Windows & Desktop Environment
 
 ### `browser_detect`
 CRITICAL INITIALIZATION TOOL. Detects local browser engines and configured desktop applications (Discord, Slack, VS Code, etc.) and reports connection status, active tabs, and port.
@@ -540,37 +578,17 @@ browser_tabs({ action: "list", app: "discord" })
 browser_tabs({ action: "open", url: "https://github.com" })
 ```
 
----
-
 ## 8. Memory, Learning & Profiles
 
-### `browser_memory_profile`
-Inspects persistent site profile, workflow patterns, and quirks for a given or active origin. Call at session start to decide between fast-path replay (reliability ≥ 0.8) or exploratory navigation.
-
-**Parameters:**
-| Parameter | Type | Description |
-|---|---|---|
-| `origin` | `string?` | Target origin (e.g. `'https://github.com'`). If omitted, reads the active tab origin. |
-| `pattern` | `string?` | If provided, returns reliability score for this specific named pattern only. |
-
-```typescript
-// Inspect site memory profile and known workflow patterns for active tab
-browser_memory_profile()
-
-// Check reliability for a specific workflow pattern
-browser_memory_profile({ origin: "https://github.com", pattern: "create_pull_request" })
-```
-
----
-
 ### `browser_pattern_learn`
-Registers, updates, or records execution outcomes for named workflow patterns and site quirks. Persists successful multi-step flows to fast-track future navigation.
+Read, register, update, and record execution outcomes for named workflow patterns and site quirks. Use `action: "get"` at session start to inspect a site profile and decide between fast-path replay (reliability ≥ 0.8) or exploratory navigation.
 
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
-| `origin` | `string` *(required)* | Full origin associated with the pattern. |
-| `action` | `"learn" \| "record_execution" \| "record_quirk"` | Default `"learn"`. Operation to perform. |
+| `origin` | `string?` | Full origin (e.g. `'https://github.com'`). Required for write actions. If omitted with `get`, reads the active tab origin. |
+| `action` | `"get" \| "learn" \| "record_execution" \| "record_quirk"` | Default `"learn"`. `"get"` returns the full site profile. |
+| `pattern` | `string?` | With `get`: returns reliability score for this specific named pattern only. |
 | `name` | `string?` | Pattern name in snake_case (required for `learn` and `record_execution`). |
 | `steps` | `object[]?` | Workflow steps array containing tool calls and parameters (required for `learn`). |
 | `success_indicator` | `string?` | CSS selector or URL confirming workflow success. |
@@ -581,6 +599,12 @@ Registers, updates, or records execution outcomes for named workflow patterns an
 | `quirk_data` | `object?` | Quirk payload details. |
 
 ```typescript
+// Inspect site memory profile at session start
+browser_pattern_learn({ action: "get" })
+
+// Check reliability for a specific workflow pattern
+browser_pattern_learn({ action: "get", origin: "https://github.com", pattern: "create_pull_request" })
+
 // Learn a successful checkout flow
 browser_pattern_learn({
   origin: "https://shop.example.com",

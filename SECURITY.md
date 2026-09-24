@@ -102,9 +102,9 @@ The old `EnvSecretProvider` (`.env`-based) is **deprecated and no longer support
 | Tool Category | admin | viewer | system |
 |---------------|-------|--------|--------|
 | All mutation tools | ✅ | ❌ | ❌ |
-| Read-only (map, find, scrape, console, eval, inspect, snapshot, screenshot, pdf, cookies, tabs, wait, github_*) | ✅ | ✅ | ❌ |
+| Read-only (map, find, scrape, console, eval, inspect, snapshot, screenshot, pdf, cookies, tabs, wait, browser_github) | ✅ | ✅ | ❌ |
 | burst, plan, wait, map | ✅ | ❌ | ✅ |
-| System (logs, detect, performance, reset_loop_counter) | ✅ | ❌ | ❌ |
+| System (logs, detect, performance) | ✅ | ❌ | ❌ |
 
 ### Role Definitions
 

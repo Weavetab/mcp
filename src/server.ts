@@ -1,6 +1,6 @@
 /**
  * Weavetab — server.ts
- * MCP server: 50 browser automation tools with security, rate limiting, and visual overlay.
+ * MCP server: 44 browser automation tools with security, rate limiting, and visual overlay.
  * Weavetab by fy2ne
  */
 
@@ -51,7 +51,6 @@ import { browserExtractDesign } from "./tools/design_extract.js";
 import { browserAutomation } from "./tools/automation.js";
 import { browserRecording } from "./tools/recording.js";
 import { browserPerformance } from "./tools/performance.js";
-import { compileTraceToMacro } from "./tools/macro_compiler.js";
 import { detectBrowsers } from "./tools/browser_detect.js";
 import { browserThought } from "./tools/thought.js";
 import { browserCaptcha } from "./tools/captcha.js";
@@ -71,10 +70,7 @@ import { SessionSecretTracker } from "./security/secrets.js";
 import { sessionRegistry } from "./state/session.js";
 
 // GitHub tools
-import { githubAnalyze } from "./tools/github/analyze.js";
-import { githubRead } from "./tools/github/read.js";
-import { githubIssues } from "./tools/github/issues.js";
-import { githubGetPr } from "./tools/github/pr.js";
+import { browserGithub } from "./tools/github/index.js";
 
 // Office document tools
 import { browserOfficeParse, browserOfficeList } from "./tools/office/index.js";
@@ -86,9 +82,9 @@ type ToolHandler<T> = (session: any, config: Config) => Promise<T>;
 const ROLE_TOOL_ALLOW: Record<string, Set<string>> = {
   admin: new Set(["*"]),
   operator: new Set(["*"]),
-  viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait", "browser_memory_profile"]),
+  viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait", "browser_pattern_learn", "browser_github"]),
   automation: new Set(["*"]), // Allowed all except interactive tools (enforced in isToolAllowedForRole)
-  system: new Set(["browser_thoughts", "browser_reset_loop_counter", "browser_detect", "browser_performance", "browser_checkpoint", "browser_memory_profile", "browser_pattern_learn"]),
+  system: new Set(["browser_thoughts", "browser_detect", "browser_performance", "browser_checkpoint", "browser_pattern_learn"]),
 };
 
 function isToolAllowedForRole(role: Role, toolName: string): { allowed: boolean; reason?: string } {
@@ -99,7 +95,7 @@ function isToolAllowedForRole(role: Role, toolName: string): { allowed: boolean;
   if (!allowed) return { allowed: true };
   if (allowed.has("*")) return { allowed: true };
   if (allowed.has(toolName)) return { allowed: true };
-  return { allowed: false, reason: `Role '${role}' does not have permission to use '${toolName}'. ${role === "viewer" ? "Viewer role only permits read-only tools (map/find/scrape/console/eval/inspect/snapshot/pdf/cookies/github_*)." : ""}` };
+  return { allowed: false, reason: `Role '${role}' does not have permission to use '${toolName}'. ${role === "viewer" ? "Viewer role only permits read-only tools (map/find/scrape/console/eval/inspect/snapshot/pdf/cookies/browser_github)." : ""}` };
 }
 
 /** Push a rich log card to every active browser session's overlay. Only shown when devMode is on. */
@@ -551,7 +547,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       tab_id: z.string().optional().describe("Read a specific background tab instead of the active one."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
       show_overlays: z.boolean().optional().describe("Default false. Debug only — draws colored element borders via extension (ugly). The blue edge glow is the standard visual indicator, shown automatically during reading states. Only enable this for debugging element boundaries."),
-      force: z.boolean().optional().describe("Force a full DOM map rebuild even if loop detection says nothing changed. Bypasses the map skip guard."),
+      force: z.boolean().optional().describe("Force a full DOM map rebuild even if loop detection says nothing changed. Bypasses the map skip guard and resets loop strikes."),
       prune: z.boolean().optional().describe("Semantic DOM pruning: compress the current snapshot before returning. Drops hidden elements with no interactive descendants and not referenced by any toggle trigger (aria-controls etc.). Replaces SVG icons with [SVG Icon: label] tokens. Distinct from delta:true — delta diffs across time, prune compresses this snapshot once. Combine both for maximum token efficiency."),
       visual: z.union([z.boolean(), z.literal("auto")]).optional().describe("Set-of-Marks visual grounding. true = always inject numbered badges + return annotated screenshot. \"auto\" = only activate when DOM interactive count < 5 (canvas/WebGL/Figma pages). After receiving marks, use browser_click({ mark: N }) to interact with numbered elements."),
     },
@@ -569,6 +565,10 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
             const client = await connectToTab(args.tab_id, undefined, undefined, undefined, args.app);
             targetSession = client.session;
             targetId = args.tab_id;
+          }
+
+          if (args.force) {
+            resetLoopCounter("map_force");
           }
 
           // Structural block — map after no-change click/type is a pure wasted round-trip
@@ -835,13 +835,18 @@ server.tool(
   // ── 8. browser_burst ───────────────────────────────────────────────────────
   server.tool(
     "browser_burst",
-    "Chain multiple tool calls in one round-trip. Use the 'click_and_wait' macro step instead of a standard click for buttons like login or buttons that will take time to load a new page.",
+    "HIGH-SPEED MULTI-ACTION PIPELINE: Executes 2 or more sequential browser actions in a single round-trip without waiting for LLM turns between steps. PREFER THIS over individual single-action calls (e.g. typing + pressing Enter, filling multiple form fields, clicking tabs/buttons then waiting, searching, navigating + reading) to drastically slash latency and token burn. Supports native primitives (browser_click, browser_fill, browser_type, browser_type_secret, browser_navigate, browser_key, browser_scroll, browser_wait, browser_map, etc.) plus ergonomic macro steps (type_and_send, click_and_wait, navigate_and_read, scroll_and_read, fill_form). If compile_from_history: true is passed, automatically compiles recent successful session trail actions into a burst macro.",
     {
       steps: z.array(z.object({
-        tool: z.enum(["browser_click", "browser_type", "browser_navigate", "browser_key", "browser_scroll", "browser_wait", "browser_map", "browser_pointer", "browser_eval", "browser_select", "type_and_send", "navigate_and_read", "click_and_wait", "scroll_and_read"]),
-        args: z.record(z.unknown()).describe("Arguments for the respective tool. For type_and_send: { text, x?, y?, id?, label?, pressEnter? }. For navigate_and_read: { url }. For click_and_wait: { id?, label?, x?, y?, wait_for?, wait_value? }. For scroll_and_read: { direction, distance? }.")
-      })).describe("Ordered array of tool calls to execute serially. Use macro steps to save tokens."),
-      batch: z.boolean().optional().describe("If true, defers action map generation until all steps are complete to save time."),
+        tool: z.string().describe("Tool name or macro step (e.g. browser_click, browser_fill, browser_type, type_and_send, click_and_wait, navigate_and_read, scroll_and_read, fill_form)."),
+        args: z.record(z.unknown()).optional().describe("Tool arguments. Alternatively, arguments may be specified flat on the step object."),
+      }).passthrough()).optional().describe("Ordered array of tool calls or macros to execute serially. Either 'steps' or 'actions' may be passed."),
+      actions: z.array(z.any()).optional().describe("Alias for 'steps'."),
+      compile_from_history: z.boolean().optional().describe("Compile recent successful session trail actions into a macro. If steps are omitted, executes the compiled macro directly."),
+      history_limit: z.number().optional().describe("Number of recent session trail entries to consider when compile_from_history is true (default: 20)."),
+      dry_run: z.boolean().optional().describe("If true with compile_from_history, returns the compiled steps without executing them."),
+      stop_on_error: z.boolean().optional().describe("Halt execution immediately if a step fails to prevent cascading failures (default: true)."),
+      batch: z.boolean().optional().describe("If true, defers action map generation until all steps are complete to maximize throughput."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1514,21 +1519,6 @@ server.tool(
     }
   );
 
-  // ── 38. browser_reset_loop_counter ─────────────────────────────────────────
-  server.tool(
-    "browser_reset_loop_counter",
-    "Reset the loop detection counter.",
-    {
-      reason: z.string().optional().describe("Optional reason for the reset (e.g. 'new_task', 'manual_recovery')."),
-    },
-    async (args) => {
-      resetLoopCounter(args.reason || "manual_tool_call");
-      return { content: [{ type: "text", text: JSON.stringify({ success: true, reason: args.reason || "manual_tool_call" }) }] };
-    }
-  );
-
-
-
   // ── 37. browser_detect ─────────────────────────────────────────────────────
   server.tool(
     "browser_detect",
@@ -1559,84 +1549,15 @@ server.tool(
     }
   );
 
-  // ── browser_macro_compile ─────────────────────────────────────────────────
-  server.tool(
-    "browser_macro_compile",
-    "Compile a recent trail into a burst macro.",
-    {
-      trail_steps: z.array(z.any()).describe("An array of TrailStep objects representing successful steps.")
-    },
-    async (args) => {
-      try {
-        const result = compileTraceToMacro(args.trail_steps);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (e) { return wrapError(e); }
-    }
-  );
-
-  // ── browser_memory_profile ────────────────────────────────────────────────
-  server.tool(
-    "browser_memory_profile",
-    "Inspect the persistent site profile for an origin from ~/.weavetab-system/memory/sites/. Returns known workflow patterns with reliability scores, quirks, detected framework, and fast-path eligibility. Call at session start to decide between fast-path replay (reliability ≥ 0.8) or exploratory navigation.",
-    {
-      origin: z.string().optional().describe("Full origin to inspect, e.g. 'https://github.com'. If omitted, reads the current tab's origin."),
-      pattern: z.string().optional().describe("If provided, returns reliability score for this specific named pattern only.")
-    },
-    async (args) => {
-      try {
-        let resolvedOrigin = args.origin;
-        if (!resolvedOrigin) {
-          return await withSecurity(config, "browser_memory_profile", async (session, _liveConfig) => {
-            try {
-              const res = await session.Runtime.evaluate({
-                expression: "window.location.origin",
-                returnByValue: true,
-              });
-              resolvedOrigin = res?.result?.value as string | undefined;
-            } catch { /* fall through */ }
-
-            if (!resolvedOrigin) {
-              return { content: [{ type: "text", text: JSON.stringify({ error: "Could not determine origin from active tab. Pass origin explicitly." }) }] };
-            }
-
-            if (args.pattern) {
-              const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
-              return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
-            }
-
-            const profile = await getSiteProfile(resolvedOrigin);
-            if (!profile) {
-              return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
-            }
-
-            const hint = formatSiteProfileHint(profile);
-            return { content: [{ type: "text", text: JSON.stringify({ ...profile, _hint: hint }) }] };
-          });
-        }
-
-        if (args.pattern) {
-          const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
-          return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
-        }
-
-        const profile = await getSiteProfile(resolvedOrigin);
-        if (!profile) {
-          return { content: [{ type: "text", text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
-        }
-
-        const hint = formatSiteProfileHint(profile);
-        return { content: [{ type: "text", text: JSON.stringify({ ...profile, _hint: hint }) }] };
-      } catch (e) { return wrapError(e); }
-    }
-  );
 
   // ── browser_pattern_learn ─────────────────────────────────────────────────
   server.tool(
     "browser_pattern_learn",
-    "Register or update a named workflow pattern for a site in ~/.weavetab-system/memory/sites/. Use after completing a multi-step flow to persist it. Set action='record_execution' to update the reliability score after a replay attempt. Set action='record_quirk' to store a site quirk (cookie_banner, rate_limit, modal_popup).",
+    "Read, register, update, and record execution outcomes for named workflow patterns and site quirks in ~/.weavetab-system/memory/sites/. Use action='get' at session start to inspect a site profile and decide between fast-path replay (reliability ≥ 0.8) or exploratory navigation. Use action='learn' after completing a multi-step flow to persist it. Use action='record_execution' to update reliability scores after replay attempts.",
     {
-      origin: z.string().describe("Full origin to associate the pattern with, e.g. 'https://github.com'."),
-      action: z.enum(["learn", "record_execution", "record_quirk"]).default("learn").describe("'learn': create/update a named pattern. 'record_execution': update reliability after replay. 'record_quirk': store a site quirk."),
+      origin: z.string().optional().describe("Full origin associated with the pattern, e.g. 'https://github.com'. Required for write actions. If omitted with action='get', reads the active tab origin."),
+      action: z.enum(["get", "learn", "record_execution", "record_quirk"]).default("learn").describe("'get': inspect site profile and known workflow patterns. 'learn': create/update a named pattern. 'record_execution': update reliability after replay. 'record_quirk': store a site quirk."),
+      pattern: z.string().optional().describe("With action='get': returns reliability score for this specific named pattern only."),
       name: z.string().optional().describe("Pattern name in snake_case (required for 'learn' and 'record_execution')."),
       steps: z.array(z.object({
         tool: z.string().describe("MCP tool name, e.g. 'browser_click'."),
@@ -1653,31 +1574,78 @@ server.tool(
     },
     async (args) => {
       try {
+        if (args.action === "get") {
+          let resolvedOrigin = args.origin;
+          if (!resolvedOrigin) {
+            return await withSecurity(config, "browser_pattern_learn", async (session, _liveConfig) => {
+              try {
+                const res = await session.Runtime.evaluate({
+                  expression: "window.location.origin",
+                  returnByValue: true,
+                });
+                resolvedOrigin = res?.result?.value as string | undefined;
+              } catch { /* fall through */ }
+
+              if (!resolvedOrigin) {
+                return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Could not determine origin from active tab. Pass origin explicitly." }) }] };
+              }
+
+              if (args.pattern) {
+                const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
+                return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
+              }
+
+              const profile = await getSiteProfile(resolvedOrigin);
+              if (!profile) {
+                return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
+              }
+
+              const hint = formatSiteProfileHint(profile);
+              return { content: [{ type: "text" as const, text: JSON.stringify({ ...profile, _hint: hint }) }] };
+            });
+          }
+
+          if (args.pattern) {
+            const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
+            return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
+          }
+
+          const profile = await getSiteProfile(resolvedOrigin);
+          if (!profile) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
+          }
+
+          const hint = formatSiteProfileHint(profile);
+          return { content: [{ type: "text" as const, text: JSON.stringify({ ...profile, _hint: hint }) }] };
+        }
+
+        if (!args.origin) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "origin is required for write actions" }) }] };
+
         if (args.action === "learn") {
-          if (!args.name) return { content: [{ type: "text", text: JSON.stringify({ error: "name is required for action='learn'" }) }] };
+          if (!args.name) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "name is required for action='learn'" }) }] };
           const pattern = await learnPattern(args.origin, args.name, {
             steps: args.steps ?? [],
             success_indicator: args.success_indicator,
             entry: args.entry,
           });
-          return { content: [{ type: "text", text: JSON.stringify({ ok: true, pattern }) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, pattern }) }] };
         }
 
         if (args.action === "record_execution") {
-          if (!args.name) return { content: [{ type: "text", text: JSON.stringify({ error: "name is required for action='record_execution'" }) }] };
-          if (args.success === undefined) return { content: [{ type: "text", text: JSON.stringify({ error: "success (boolean) is required for action='record_execution'" }) }] };
+          if (!args.name) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "name is required for action='record_execution'" }) }] };
+          if (args.success === undefined) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "success (boolean) is required for action='record_execution'" }) }] };
           const updated = await recordPatternExecution(args.origin, args.name, args.success, args.duration_ms);
-          return { content: [{ type: "text", text: JSON.stringify({ ok: true, pattern: updated }) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, pattern: updated }) }] };
         }
 
         if (args.action === "record_quirk") {
-          if (!args.quirk_key) return { content: [{ type: "text", text: JSON.stringify({ error: "quirk_key is required for action='record_quirk'" }) }] };
-          if (!args.quirk_data) return { content: [{ type: "text", text: JSON.stringify({ error: "quirk_data is required for action='record_quirk'" }) }] };
+          if (!args.quirk_key) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "quirk_key is required for action='record_quirk'" }) }] };
+          if (!args.quirk_data) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "quirk_data is required for action='record_quirk'" }) }] };
           await recordQuirk(args.origin, args.quirk_key, args.quirk_data);
-          return { content: [{ type: "text", text: JSON.stringify({ ok: true, origin: args.origin, quirk_key: args.quirk_key }) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, origin: args.origin, quirk_key: args.quirk_key }) }] };
         }
 
-        return { content: [{ type: "text", text: JSON.stringify({ error: "Unknown action" }) }] };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Unknown action" }) }] };
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1686,75 +1654,27 @@ server.tool(
 
 
 
-  // ── GitHub Tools (v2.5.0 Core Inclusion) ──────────────────────────────────
-  server.tool(
-    "github_analyze",
-    "Analyze a GitHub repository.",
-    {
-      repo: z.string().optional().describe("Optional 'owner/repo' slug. If omitted, uses the active tab's repository.")
-    },
-    async (args) => {
-      try {
-        return await withSecurity(config, "github_analyze", async (session, liveConfig) => {
-          // Defence-in-depth: coerce to string | undefined at the server boundary.
-          // Zod marks `repo` as optional(string) but (args as any) bypasses that
-          // guarantee, so we normalise here before forwarding to githubAnalyze.
-          const rawRepo = (args as any).repo;
-          const repo: string | undefined =
-            typeof rawRepo === "string" && rawRepo.trim() !== ""
-              ? rawRepo.trim()
-              : undefined;
-          return await githubAnalyze(session, liveConfig, repo);
-        });
-      } catch (e) { return wrapError(e); }
-    }
-  );
 
-  server.tool(
-    "github_read",
-    "Read file contents from a GitHub repository.",
-    {
-      paths: z.array(z.string()).describe("List of file paths to read, relative to the repository root."),
-      line_range: z.array(z.number()).length(2).optional().describe("Optional [start, end] line range to read specific lines instead of the default first 200 lines. 1-indexed.")
-    },
-    async (args) => {
-      try {
-        return await withSecurity(config, "github_read", async (session, liveConfig) => {
-          return await githubRead(session, args as any, liveConfig);
-        });
-      } catch (e) { return wrapError(e); }
-    }
-  );
 
+  // ── GitHub Tool (v2.5.0 Consolidated) ──────────────────────────────────
   server.tool(
-    "github_issues",
-    "Interact with GitHub issues.",
+    "browser_github",
+    "Interact with GitHub repositories without burning browser turns. Analyze repo trees, read raw source files, search/inspect issues, and examine PR diffs and review comments.",
     {
-      search: z.string().optional().describe("Search query to find issues."),
-      number: z.number().optional().describe("Specific issue number to fetch details and comments for."),
-      labels: z.array(z.string()).optional().describe("Filter issues by labels."),
-      state: z.enum(["open", "closed", "all"]).optional().describe("Filter issues by state."),
-      limit: z.number().optional().describe("Max number of issues to list. Default 5.")
+      action: z.enum(["analyze", "read", "issues", "pr"]).describe("GitHub operation: 'analyze' (repo structure & README), 'read' (raw file contents), 'issues' (list/search/inspect issues), 'pr' (PR details, diff files & comments)."),
+      repo: z.string().optional().describe("Optional 'owner/repo' slug or GitHub URL. If omitted, uses active tab's repository."),
+      paths: z.array(z.string()).optional().describe("For action: 'read'. File paths relative to repo root."),
+      line_range: z.array(z.number()).length(2).optional().describe("For action: 'read'. Optional [start, end] line range (1-indexed)."),
+      number: z.number().optional().describe("For action: 'issues' or 'pr'. Issue or PR number to fetch details and comments."),
+      search: z.string().optional().describe("For action: 'issues'. Search query to find issues."),
+      labels: z.array(z.string()).optional().describe("For action: 'issues'. Filter issues by labels."),
+      state: z.enum(["open", "closed", "all"]).optional().describe("For action: 'issues'. Filter issues by state."),
+      limit: z.number().optional().describe("For action: 'issues'. Max number of issues to list (default 5).")
     },
     async (args) => {
       try {
-        return await withSecurity(config, "github_issues", async (session) => {
-          return await githubIssues(session, args as any);
-        });
-      } catch (e) { return wrapError(e); }
-    }
-  );
-
-  server.tool(
-    "github_get_pr",
-    "Interact with GitHub pull requests.",
-    {
-      number: z.number().optional().describe("Specific pull request number to fetch details, changed files, and comments for. If omitted, lists recent PRs.")
-    },
-    async (args) => {
-      try {
-        return await withSecurity(config, "github_get_pr", async (session) => {
-          return await githubGetPr(session, args as any);
+        return await withSecurity(config, "browser_github", async (session, liveConfig) => {
+          return await browserGithub(session, args as any, liveConfig);
         });
       } catch (e) { return wrapError(e); }
     }

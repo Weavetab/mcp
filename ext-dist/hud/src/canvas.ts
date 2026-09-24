@@ -70,16 +70,11 @@ const toolThoughts: Record<string, string[]> = {
   // High-Level Logic
   'browser_thought': ['Thinking...', 'Processing query...', 'Asking question...'],
   'browser_burst': ['Executing burst actions...', 'Running macro...', 'Batching commands...'],
-  'browser_macro_compile': ['Compiling macro...', 'Optimizing action sequence...', 'Building script...'],
   'browser_automation': ['Running automation...', 'Executing workflow...', 'Processing sequence...'],
   'browser_performance': ['Profiling performance...', 'Measuring layout shifts...', 'Analyzing render time...'],
-  'browser_reset_loop_counter': ['Resetting loops...', 'Clearing state...', 'Restarting sequence...'],
   
   // GitHub Integration
-  'github_analyze': ['Analyzing repository...', 'Reading source code...', 'Checking structure...'],
-  'github_read': ['Reading file...', 'Fetching blob...', 'Parsing code...'],
-  'github_issues': ['Checking issues...', 'Reading tickets...', 'Fetching discussions...'],
-  'github_get_pr': ['Fetching Pull Request...', 'Reading diff...', 'Analyzing changes...'],
+  'browser_github': ['Inspecting GitHub...', 'Fetching git metadata...', 'Analyzing repository...'],
   
   // System
   'browser_upload': ['Uploading file...', 'Transferring data...', 'Sending payload...'],

@@ -136,7 +136,7 @@ Loop Detection Algorithm
 - Navigation events
 - Tab switches
 - Burst mode start
-- Manual override via `browser_reset_loop_counter`
+- Manual override via `browser_map({ force: true })` or `browser_wait({ reset_loop: true })`
 
 ### Knowledge Hints (Rule 16)
 

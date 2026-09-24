@@ -25,7 +25,7 @@ Weavetab tracks a rolling 50-action window in `~/.weavetab-system/sessions/conte
 
 ## Resolution
 
-1. Call `browser_reset_loop_counter({ reason: "new_task" })` to clear strikes
+1. Call `browser_map({ force: true })` or `browser_wait({ reset_loop: true })` to clear strikes
 2. Call `browser_map({ delta: true })` to verify if DOM elements actually changed
 3. Call `browser_inspect` to check if target element is hidden or occluded by modals
 4. Use `browser_wait({ for: "stable" })` before triggering inputs

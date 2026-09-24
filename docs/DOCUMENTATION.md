@@ -10,7 +10,7 @@ Weavetab is a production-grade, in-process MCP (Model Context Protocol) server p
 
 ### Core Capabilities
 
-- **50 Built-in MCP Tools** across 15 functional categories (Vision, Navigation, Input, Tabs, Mission Execution, Dialog, Wait, Storage, Device, Network, Canvas, Output, Evaluation, GitHub, Office Documents)
+- **44 Built-in MCP Tools** across functional categories (Vision, Navigation, Input, Tabs, Mission Execution, Dialog, Wait, Storage, Device, Network, Canvas, Output, Evaluation, GitHub, Office Documents)
 - **Direct CDP WebSocket** — 3-8ms mean latency, zero process overhead
 - **Semantic Delta Engine** — 5-10x token reduction via per-tab snapshot diffing
 - **Ghost Cursor** — Bézier curve click engine with human acceleration and jitter
@@ -20,7 +20,7 @@ Weavetab is a production-grade, in-process MCP (Model Context Protocol) server p
 - **Security Stack** — domain blacklist, RBAC (4 roles), rate limiter, loop detection, input filter, root guard
 - **Burst Mode** — chain N actions in 1 MCP call via `browser_burst`
 - **Plugin System** — Extensible plugin ecosystem supporting tool additions, overrides (with originalHandler wrapping), and tool removals across 3 trust tiers (Official, Verified, Unverified)
-- **GitHub Integration** — 4 built-in tools for repo analysis, file reading, issues, and PRs
+- **GitHub Integration** — Unified `browser_github` tool for repo analysis, file reading, issues, and PRs
 
 ### Weavetab Skills
 
@@ -61,7 +61,7 @@ MCP Client → stdio/WebSocket → WithSecurity Pipeline → CDP WebSocket → C
 
 ---
 
-## Tool Reference (44+ Tools)
+## Tool Reference (44 Tools)
 
 All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting + domain policy + RBAC), structured audit logging.
 
@@ -119,12 +119,11 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | `browser_thought` | Green thought bubbles: feedback (one-way) or question with input (sentence/paragraph modes) |
 | `browser_clipboard` | System clipboard R/W (text + images) |
 
-### Wait & Timing (2 tools)
+### Wait & Timing (1 tool)
 
 | Tool | Description |
 |------|-------------|
-| `browser_wait` | Wait for element/text/URL/stable/network/auto — timeout configurable |
-| `browser_reset_loop_counter` | Manual loop detection override |
+| `browser_wait` | Wait for element/text/URL/stable/network/auto — timeout configurable, optional loop counter reset (`reset_loop: true`) |
 
 ### Storage & Cookies (2 tools)
 
@@ -171,20 +170,11 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 |------|-------------|
 | `browser_performance` | FCP, LCP, TTI metrics, resource timings |
 
-### Macro (1 tool)
+### GitHub (1 tool)
 
 | Tool | Description |
 |------|-------------|
-| `browser_macro_compile` | Compile successful trails into burst macros |
-
-### GitHub (4 tools)
-
-| Tool | Description |
-|------|-------------|
-| `github_analyze` | Repo metadata, file tree, README snippet |
-| `github_read` | Read file contents via raw.githubusercontent.com (no API limit cost) |
-| `github_issues` | List/search/fetch issues with comments |
-| `github_get_pr` | PR details + changed files + comments |
+| `browser_github` | Action-based repo metadata analysis, raw source file reading, issue triage, and PR inspection |
 
 ### Utility (2 tools)
 

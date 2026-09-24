@@ -293,7 +293,7 @@ export async function weaveClick(
 
     const loopDiag = getLoopDiagnostics("browser_click", element.id);
     if (loopDiag.severity === "critical") {
-      return { success: false, error_code: "STUCK_LOOP_WARNING", message: `[!] Loop detected: You have tried to click [${element.id}] ${loopDiag.strikes} times without success. Call browser_reset_loop_counter if this is a new task.` };
+      return { success: false, error_code: "STUCK_LOOP_WARNING", message: `[!] Loop detected: You have tried to click [${element.id}] ${loopDiag.strikes} times without success. Run browser_map({ force: true }) if this is a new task.` };
     }
     if (loopDiag.severity === "warning") {
       logAction("browser_click", element.id, `loop warning: ${loopDiag.strikes} consecutive strikes on [${element.id}]`);

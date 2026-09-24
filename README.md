@@ -11,7 +11,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6?style=flat-square" alt="license" /></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square" alt="Node" />
-  <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-50-ec4899?style=flat-square" alt="tools" /></a>
+  <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-44-ec4899?style=flat-square" alt="tools" /></a>
   <a href="https://github.com/sponsors/fy2ne"><img src="https://img.shields.io/badge/sponsor-fy2ne-ea4aaa?style=flat-square&logo=github-sponsors" alt="sponsor" /></a>
 </p>
 
@@ -192,18 +192,18 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 
 ## Tool Suite
 
-50 tools across 9 categories. Full parameter reference: [`docs/tools/tools.md`](docs/tools/tools.md)
+44 tools across 9 categories. Full parameter reference: [`docs/tools/tools.md`](docs/tools/tools.md)
 
 | Category | Tools |
 |---|---|
 | **Vision & DOM** | `browser_map` `browser_find` `browser_scrape` `browser_inspect` `browser_snapshot` `browser_screenshot` `browser_console` `browser_extract_design` |
 | **Input & Interaction** | `browser_click` `browser_type` `browser_type_secret` `browser_key` `browser_pointer` `browser_select` `browser_fill` `browser_upload` `browser_scroll` |
 | **Navigation & Environment** | `browser_navigate` `browser_tabs` `browser_detect` `browser_viewport` `browser_emulate` |
-| **Mission & Automation** | `browser_burst` `browser_automation` `browser_macro_compile` `browser_recording` `browser_pattern_learn` |
-| **Safety & Human Oversight** | `browser_dialog` `browser_thoughts` `browser_clipboard` `browser_wait` `browser_reset_loop_counter` |
+| **Mission & Automation** | `browser_burst` `browser_automation` `browser_recording` `browser_pattern_learn` |
+| **Safety & Human Oversight** | `browser_dialog` `browser_thoughts` `browser_clipboard` `browser_wait` |
 | **Autonomous CAPTCHA** | `browser_captcha` |
-| **Network & Storage** | `browser_network_intercept` `browser_storage` `browser_cookies` `browser_checkpoint` `browser_performance` `browser_memory_profile` |
-| **GitHub & Documents** | `github_analyze` `github_read` `github_issues` `github_get_pr` `browser_office` |
+| **Network & Storage** | `browser_network_intercept` `browser_storage` `browser_cookies` `browser_checkpoint` `browser_performance` |
+| **GitHub & Documents** | `browser_github` `browser_office` |
 | **Canvas, Eval & Plugins** | `browser_eval` `browser_pdf` `browser_canvas` `browser_highlight` `list_plugins` `load_plugin` |
 
 ---
