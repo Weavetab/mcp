@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="weavetab-banner.png" width="96" alt="Weavetab" /><br /><br />
+<img src="weavetab-banner.png"  alt="Weavetab" /><br /><br />
 
 <p>A local <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server that gives AI agents<br />direct, physical control over browsers and desktop applications via the Chrome DevTools Protocol.</p>
 
