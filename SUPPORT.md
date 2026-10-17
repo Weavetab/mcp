@@ -8,7 +8,7 @@ Thank you for building with **Weavetab**! Whether you are integrating Weavetab i
 
 Before opening an issue or asking for help, check our official references:
 
-* **[Master Tool Reference](docs/tools/tools.md)** — Detailed parameters, signatures, and code examples for all 44 tools.
+* **[Master Tool Reference](docs/tools/tools.md)** — Detailed parameters, signatures, and code examples for all 42 tools.
 * **[Complete Documentation](docs/DOCUMENTATION.md)** — Architectural specs, security boundaries, and runtime configurations.
 * **[Troubleshooting Guide](TROUBLESHOOTING.md)** — Solutions for common CDP connection, lock contention, and headless issues.
 * **[Desktop & Electron Automation Guide](docs/desktop-automation/electron-apps.md)** — How to automate Discord, VS Code, Figma, and local Electron apps.

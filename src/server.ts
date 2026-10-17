@@ -1,6 +1,6 @@
 /**
  * Weavetab — server.ts
- * MCP server: 44 browser automation tools with security, rate limiting, and visual overlay.
+ * MCP server: 42 browser automation tools with security, rate limiting, and visual overlay.
  * Weavetab by fy2ne
  */
 

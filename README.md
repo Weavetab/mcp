@@ -9,7 +9,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6?style=flat-square" alt="license" /></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square" alt="Node" />
-  <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-44-ec4899?style=flat-square" alt="tools" /></a>
+  <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-42-ec4899?style=flat-square" alt="tools" /></a>
   <a href="https://github.com/sponsors/fy2ne"><img src="https://img.shields.io/badge/sponsor-fy2ne-ea4aaa?style=flat-square&logo=github-sponsors" alt="sponsor" /></a>
 </p>
 
@@ -190,7 +190,7 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 
 ## Tool Suite
 
-44 tools across 9 categories. Full parameter reference: [`docs/tools/tools.md`](docs/tools/tools.md)
+42 tools across 9 categories. Full parameter reference: [`docs/tools/tools.md`](docs/tools/tools.md)
 
 | Category | Tools |
 |---|---|
@@ -202,7 +202,7 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 | **Autonomous CAPTCHA** | `browser_captcha` |
 | **Network & Storage** | `browser_network_intercept` `browser_storage` `browser_cookies` `browser_checkpoint` `browser_performance` |
 | **GitHub & Documents** | `browser_github` `browser_office` |
-| **Canvas, Eval & Plugins** | `browser_eval` `browser_pdf` `browser_canvas` `browser_highlight` `list_plugins` `load_plugin` |
+| **Canvas & Eval** | `browser_eval` `browser_pdf` `browser_canvas` `browser_highlight` |
 
 ---
 
