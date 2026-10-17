@@ -23,3 +23,5 @@ Reports/
 .clinerules
 mcp-publisher.exe
 mcp-publisher.tar.gz
+.mcp-registry-key.json
+*.key
