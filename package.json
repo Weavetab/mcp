@@ -47,7 +47,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "mcpName": "io.github.Weavetab/mcp",
+  "mcpName": "dev.weavetab/mcp",
   "files": [
     "dist/",
     "!dist/**/*.map",
