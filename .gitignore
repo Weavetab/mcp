@@ -21,3 +21,5 @@ src/**/*.js.map
 # Agent-generated audit reports and AI tool config — not product docs
 Reports/
 .clinerules
+mcp-publisher.exe
+mcp-publisher.tar.gz

@@ -1,8 +1,8 @@
 # Weavetab MCP Tool Reference
 
-> **Version:** 2.5.0-beta.4 | **Total Tools:** 44 | **Architecture:** Layer 0 Direct CDP
+> **Version:** 2.5.0-beta.5 | **Total Tools:** 42 | **Architecture:** Layer 0 Direct CDP
 
-Weavetab provides 44 production-grade MCP tools organized into functional categories.
+Weavetab provides 42 production-grade MCP tools organized into functional categories.
 
 | Tool Name | Category | Description | Key Features |
 | :--- | :--- | :--- | :--- |
@@ -48,9 +48,7 @@ Weavetab provides 44 production-grade MCP tools organized into functional catego
 | `browser_github` | `github` | Interact with GitHub repositories without burning browser turns. Analyze repo trees, read raw source files, search/inspect issues, and examine PR diffs and review comments. | Action-based repo analysis, file reading, issues, and PR review, Zero GitHub API token requirement for raw reads, Automated active tab repository context resolution |
 | `browser_office` | `documents` | Read and extract structured content from office documents (Excel, Word, PDF, CSV) via live browser session cookies or local downloads directory. | In-session authenticated document fetching, Structured tabular extraction (.xlsx, .csv), Document text and metadata extraction (.docx, .pdf) |
 | `browser_emulate` | `environment` | Emulate browser environmental conditions over CDP: network throttling profiles, CPU slowdown multipliers, geolocation overrides, timezone IDs, and custom User-Agent strings. | Network throttling (Offline, Slow 3G, Fast 3G, 4G), CPU throttling multipliers, Geolocation and timezone overrides |
-| `list_plugins` | `plugins` | Inspect installed Weavetab SDK plugins, available unloadable plugins, tool overrides, custom schemas, and capability manifests. | Installed plugin discovery, Manifest and schema introspection, Ecosystem capability listing |
-| `load_plugin` | `plugins` | Dynamically load any published Weavetab plugin by npm package name into the active runtime with isolated sandboxing and hot tool registration. | Dynamic npm package loading, Hot tool registration with client notification, Isolated plugin execution context |
 
 ---
 
-*Auto-generated via `npm run docs:generate` on 2026-09-24.*
+*Auto-generated via `npm run docs:generate` on 2026-10-17.*

@@ -30,14 +30,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r weavetab && useradd -r -g weavetab -d /home/weavetab -s /sbin/nologin weavetab
 RUN mkdir -p /home/weavetab/.weavetab && chown -R weavetab:weavetab /home/weavetab
 
-ENV CHROME_PATH=/usr/bin/chromium
 ENV NODE_ENV=production
-ENV WEAVETAB_HEADLESS=true
-ENV CHROMIUM_FLAGS="--no-first-run --no-default-browser-check --disable-dev-shm-usage"
 
 COPY --from=build /app /app
 WORKDIR /app
 
 USER weavetab
-EXPOSE 3000
+# stdio transport: the client spawns the server, no ports are opened.
 ENTRYPOINT ["node", "dist/index.js"]

@@ -15,7 +15,7 @@ Weavetab is decomposed into **five functional layers**, all running in-process w
 
 | # | Layer | Responsibility |
 |---|---|---|
-| 1 | **Transport** | JSON-RPC 2.0 over stdio or WebSocket (`--ws --port 3000`) |
+| 1 | **Transport** | JSON-RPC 2.0 over stdio (default) or WebSocket (`--ws --port 3000`) |
 | 2 | **Security & Governance** | Domain blacklist, rate limiter (mutex), RBAC roles, policy engine, root guard |
 | 3 | **Intelligence Engine** | Session memory, semantic delta diffing, DOM pruner, loop detection, intent intercept |
 | 4 | **Sensor Systems** | Network telemetry, DOM mutation observer, human pacing, agent state machine |

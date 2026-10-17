@@ -65,7 +65,7 @@ MCP Client → stdio/WebSocket → WithSecurity Pipeline → CDP WebSocket → C
 
 All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting + domain policy + RBAC), structured audit logging.
 
-### Vision & Reading (7 tools)
+### Vision & Reading (8 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -76,6 +76,7 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | `browser_snapshot` | MHTML capture/restore of DOM state + resources |
 | `browser_screenshot` | PNG/JPEG capture via CDP, full-page + clip region, returns base64 data URL (no file pollution) |
 | `browser_console` | Read/clear buffered console logs and exceptions |
+| `browser_extract_design` | Extract design tokens, typography, colors, and clean CSS with pixel fidelity |
 
 ### Navigation (1 tool)
 
@@ -116,14 +117,15 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | Tool | Description |
 |------|-------------|
 | `browser_dialog` | Accept/dismiss JavaScript alert/confirm/prompt dialogs |
-| `browser_thought` | Green thought bubbles: feedback (one-way) or question with input (sentence/paragraph modes) |
+| `browser_thoughts` | Green thought bubbles: feedback (one-way) or question with input (sentence/paragraph modes) |
 | `browser_clipboard` | System clipboard R/W (text + images) |
 
-### Wait & Timing (1 tool)
+### Wait & Timing (2 tools)
 
 | Tool | Description |
 |------|-------------|
 | `browser_wait` | Wait for element/text/URL/stable/network/auto — timeout configurable, optional loop counter reset (`reset_loop: true`) |
+| `browser_captcha` | Autonomous zero-API detection and solving for Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha via CDP mouse physics |
 
 ### Storage & Cookies (2 tools)
 
@@ -132,11 +134,12 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | `browser_storage` | localStorage & sessionStorage get/set/clear |
 | `browser_cookies` | Cookies get/set/delete |
 
-### Device & Environment (1 tool)
+### Device & Environment (2 tools)
 
 | Tool | Description |
 |------|-------------|
 | `browser_viewport` | Viewport, device emulation, geolocation, timezone override |
+| `browser_emulate` | Network throttling (3G/4G/offline), CPU slowdown, geolocation, timezone, and User-Agent override |
 
 ### Network (1 tool)
 
@@ -176,12 +179,15 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 |------|-------------|
 | `browser_github` | Action-based repo metadata analysis, raw source file reading, issue triage, and PR inspection |
 
-### Utility (2 tools)
+### Utility (5 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_thoughts` | Ask user a question or show a green sticky feedback |
-| Plugins | Dynamic loading from any npm package with `weavetab.json` (or `@weavetab/plugin-*`) |
+| `list_plugins` | Inspect installed SDK plugins, loaded tool overrides, and capability manifests |
+| `load_plugin` | Dynamically load a Weavetab plugin by npm package name with isolated sandboxing |
+| `browser_checkpoint` | Snapshot and restore browser state (cookies, storage, scroll/URL) into named checkpoints for time-travel and rollback |
+| `browser_pattern_learn` | Read, register, and update named workflow patterns and site quirks per origin |
+| `browser_office` | Parse Word (`.docx`), Excel (`.xlsx`), PDF, and CSV files into structured data |
 
 ---
 
@@ -341,10 +347,11 @@ Configure policies directly in your config file (or via `~/.Weavetab/policy.json
 
 | Role | Permissions |
 |------|-------------|
-| `admin` | Full access to all tools and system operations |
-| `operator` | Full tool access except system operations (logs, detect, performance) |
-| `viewer` | Read-only access to observation tools only |
-| `automation` | Restricted to burst/plan/wait/map for automated workflows |
+| `admin` | Full access to all tools |
+| `operator` | Full access to all tools (standard agent role) |
+| `viewer` | Read-only observation tools only (`browser_map`, `browser_find`, `browser_scrape`, `browser_console`, `browser_eval`, `browser_inspect`, `browser_extract_design`, `browser_snapshot`, `browser_screenshot`, `browser_pdf`, `browser_cookies`, `browser_tabs`, `browser_wait`, `browser_pattern_learn`, `browser_github`) |
+| `automation` | Full access except `browser_thoughts` (non-interactive CI/CD mode) |
+| `system` | Internal tools only (`browser_thoughts`, `browser_detect`, `browser_performance`, `browser_checkpoint`, `browser_pattern_learn`) |
 
 ### Setting Role
 

@@ -1,6 +1,6 @@
 ---
 title: "Locations & Merge"
-description: "Three-tier merge: local → global → built-in defaults."
+description: "Two-tier merge: global config → built-in defaults."
 product: mcp
 section: configuration
 icon: FolderTree
@@ -11,9 +11,8 @@ slug: config-locations
 
 ## Priority Tiers
 
-1. **Local (Project-scoped)** — `./.weavetab/config.json` (takes top priority)
-2. **Global** — `~/.weavetab/config.json`
-3. **Built-in defaults** — defined in `DEFAULT_CONFIG`
+1. **Global** — `~/.weavetab/config.json` (the only config file Weavetab reads)
+2. **Built-in defaults** — defined in `DEFAULT_CONFIG`
 
 ## Live Reload
 

@@ -9,7 +9,7 @@ slug: tools
 
 # MCP Tools Master Reference
 
-Weavetab exposes **49 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
+Weavetab exposes **44 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
 
 Every tool adheres to a strict contract:
 - **Zod schema validation** for all runtime arguments

@@ -31,18 +31,15 @@ AI Agent (MCP) ──► withSecurity()
 
 ---
 
-## Interactive App Configurator & Agent Generator
+## Interactive App Configurator
 
-Use the interactive configurator below to customize your desktop applications. Select presets or add custom apps, toggle between executable path strings, remote debug ports, or advanced objects, and copy the ready-to-use JSON or an automated setup prompt for your AI coding agent:
-
-```electron-configurator
-```
+Build your `electron` block in the [Desktop app configurator](/mcp/desktop) — presets for Discord, VS Code, Figma, Slack and more, path / port / advanced formats, plus a copy-ready agent setup prompt. Then paste the block into your global `~/.weavetab/config.json`.
 
 ---
 
 ## 1. Configuring Desktop Apps in `config.json`
 
-Add an `"electron"` object to your local `./.weavetab/config.json` or global `~/.weavetab/config.json`:
+Add an `"electron"` object to your global `~/.weavetab/config.json` (the only config file Weavetab reads):
 
 ```json
 {

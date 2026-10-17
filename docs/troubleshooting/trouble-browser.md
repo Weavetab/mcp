@@ -24,4 +24,4 @@ slug: trouble-browser
 
 **Fixes:**
 1. Run `weavetab reset` to purge corrupted profiles
-2. Check `CHROME_PATH` environment variable points to a valid Chromium executable
+2. Run `weavetab config` and set the browser executable path (or `browserPath: "auto"` to detect)

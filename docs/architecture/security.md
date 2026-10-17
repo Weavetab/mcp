@@ -19,7 +19,7 @@ Weavetab executes direct Layer 0 CDP commands — security is layered and **deny
 | **Domain Policy Engine** | Per-domain enforcement modes: `allow`, `read-only`, `deny`, `audit`. |
 | **Localhost Binding** | WebSocket server and CDP endpoints strictly bound to `127.0.0.1`. |
 | **Rate Limiting** | Mutex-enforced actions-per-minute rate limiter. |
-| **RBAC Roles** | 4 strict roles gating tool access (`admin`, `operator`, `viewer`, `automation`). |
+| **RBAC Roles** | 5 roles gating tool access (`admin`, `operator`, `viewer`, `automation`, `system`). |
 | **Root Guard** | Prevents execution as root/superuser on Unix systems. |
 | **Blind Injection** | Credential injection from `secrets.json` without exposing raw text to LLM context. |
 | **Shadow DOM Isolation** | All injected HUD and modal overlays run in isolated Shadow DOM trees. |
@@ -27,9 +27,10 @@ Weavetab executes direct Layer 0 CDP commands — security is layered and **deny
 
 ## RBAC Role Matrix
 
-| Tool Category | admin | operator | viewer | automation |
-|---|:---:|:---:|:---:|:---:|
-| Mutation tools (`click`, `type`, `fill`, etc.) | yes | yes | no | yes |
-| Read-only tools (`map`, `find`, `scrape`, `screenshot`) | yes | yes | yes | yes |
-| High-level orchestration (`burst`, `plan`, `wait`) | yes | yes | no | yes |
-| System management (`detect`, `reset_loop_counter`) | yes | no | no | no |
+| Tool Category | admin | operator | viewer | automation | system |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Mutation tools (`click`, `type`, `fill`, etc.) | yes | yes | no | yes | no |
+| Read-only tools (`map`, `find`, `scrape`, `screenshot`) | yes | yes | yes | yes | no |
+| High-level orchestration (`burst`, `automation`, `wait`) | yes | yes | no | yes | no |
+| Interactive HUD (`thoughts`) | yes | yes | no | no | yes |
+| System introspection (`detect`, `performance`, `checkpoint`) | yes | yes | no | yes | yes |

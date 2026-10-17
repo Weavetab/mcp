@@ -18,8 +18,11 @@ weavetab reset --yes
 # List stored secrets
 weavetab secrets list
 
-# Start the MCP server in WebSocket mode for custom scripts
-weavetab --ws --port 3000 --headless &
+# List installed plugins
+weavetab plugin list
+
+# Start the MCP server in WebSocket daemon mode for custom scripts
+weavetab --ws --port 3000 &
 ```
 
 ## CI/CD Pipeline
@@ -28,5 +31,5 @@ weavetab --ws --port 3000 --headless &
 # In GitHub Actions or Docker CI
 npm install -g @weavetab/mcp
 weavetab reset --yes
-weavetab --ws --port 3000 --headless &
+weavetab --ws --port 3000 &
 ```

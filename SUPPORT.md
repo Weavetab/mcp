@@ -49,7 +49,7 @@ ode -v)
 Please do **NOT** report security vulnerabilities via public GitHub issues. 
 
 Consult our **[Security Policy](SECURITY.md)** and report sensitive security issues directly to:
-📧 **security@fy2ne.me** or **hello@fy2ne.me**
+📧 **security@weavetab.dev**
 
 ---
 

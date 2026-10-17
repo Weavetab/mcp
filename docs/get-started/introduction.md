@@ -43,11 +43,11 @@ npm install -D @weavetab/sdk@latest
 
 ## What You Get
 
-- **49 built-in MCP tools** covering DOM vision, input synthesis, desktop apps, tabs, network interception, office files, design extraction, and plugin lifecycle
+- **44 built-in MCP tools** covering DOM vision, input synthesis, desktop apps, tabs, network interception, office files, design extraction, and plugin lifecycle
 - **Universal Desktop App Runtime** — control Chrome and native Electron apps (Discord, Figma, VS Code) side-by-side without port conflicts
 - **Autonomous Zero-API CAPTCHA Solver** — solve Cloudflare Turnstile, GeeTest, and reCAPTCHA locally via CDP mouse physics with $0 API costs
-- **Two transport modes** — stdio (Claude Desktop, Cursor, VS Code, Windsurf, Antigravity) and WebSocket (`--ws --port 3000`)
-- **Four RBAC roles** — `admin`, `operator`, `viewer`, and `automation`
+- **Two transport modes** — stdio (Claude Desktop, Cursor, VS Code, Windsurf, Antigravity) and WebSocket (`weavetab --ws --port 3000`)
+- **Five RBAC roles** — `admin`, `operator`, `viewer`, `automation`, and `system`
 - **Per-domain policies** — ring-fences sensitive banking, internal, and production surfaces
 - **Blind Injection** — credentials resolved server-side from `secrets.json` and never exposed to the LLM
 - **Extensible Plugin System** — auto-discovers and mounts custom MCP tools from `node_modules`
@@ -57,4 +57,4 @@ npm install -D @weavetab/sdk@latest
 - **[Quickstart](quickstart.md)** — install and run a first mission in 60 seconds
 - **[Desktop & Electron Apps](../desktop-automation/electron-apps.md)** — configure and control desktop apps
 - **[Autonomous CAPTCHA Solver](../captcha-stealth/captcha-solver.md)** — zero-API anti-bot solving
-- **[MCP Tools Reference](../tools/tools.md)** — full reference for all 49 built-in automation tools
+- **[MCP Tools Reference](../tools/tools.md)** — full reference for all 44 built-in automation tools

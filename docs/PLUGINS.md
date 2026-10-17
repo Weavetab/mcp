@@ -1,6 +1,6 @@
-﻿# Weavetab Plugin System & SDK Specification
+# Weavetab Plugin System & SDK Specification
 
-> **Version:** 2.5.0-beta.2 | **SDK:** @weavetab/sdk | **License:** AGPL-3.0-only
+> **Version:** 2.5.0-beta.5 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
 
 The **Weavetab Plugin System** allows developers to extend the MCP runtime with custom tools, visual HUD overlays, thought bubbles, lifecycle hooks, and tool overrides.
 
@@ -9,14 +9,14 @@ The **Weavetab Plugin System** allows developers to extend the MCP runtime with 
 ## 1. Quick Start
 
 ### Scaffold a New Plugin
-`ash
+````bash
 npx @weavetab/sdk init my-custom-plugin
 cd my-custom-plugin
 npm install
 `
 
 ### Build & Compile
-`ash
+````bash
 npm run build
 `
 
@@ -104,7 +104,7 @@ Plugins require a weavetab.json manifest in their package root:
 
 ## 5. Installing Plugins
 
-`ash
+```bash
 # Install an official plugin
 weavetab plugin add @weavetab/plugin-youtube
 
