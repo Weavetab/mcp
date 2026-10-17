@@ -1,6 +1,6 @@
 # Weavetab MCP Tool Reference
 
-> **Version:** 2.5.0-beta.5 | **Total Tools:** 42 | **Architecture:** Layer 0 Direct CDP
+> **Version:** 2.5.0 | **Total Tools:** 42 | **Architecture:** Layer 0 Direct CDP
 
 Weavetab provides 42 production-grade MCP tools organized into functional categories.
 
