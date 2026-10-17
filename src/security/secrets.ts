@@ -126,7 +126,36 @@ import { GLOBAL_CONFIG_DIR } from "../config/loader.js";
 
 export const GLOBAL_SECRETS_PATH = path.join(GLOBAL_CONFIG_DIR, "secrets.json");
 
+export const PROJECT_SECRETS_DIRNAME = ".weavetab";
+export const PROJECT_SECRETS_FILENAME = "secrets.json";
+
+/** Absolute path of the project-scoped secrets file for a directory (default: cwd). */
+export function getProjectSecretsPath(cwd: string = process.cwd()): string {
+  return path.join(cwd, PROJECT_SECRETS_DIRNAME, PROJECT_SECRETS_FILENAME);
+}
+
+/** Creates an empty project-scoped secrets file (chmod 600). Returns its path. */
+export function initProjectSecrets(cwd: string = process.cwd()): string {
+  const filePath = getProjectSecretsPath(cwd);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({ version: 1, secrets: {} }, null, 2),
+      { mode: 0o600 }
+    );
+  }
+  return filePath;
+}
+
 function resolveSecretsPath(): string {
+  // Project-scoped file wins when present — lets a checkout carry its own keys.
+  try {
+    const projectPath = getProjectSecretsPath();
+    if (fs.existsSync(projectPath)) return projectPath;
+  } catch {
+    // fall through to global
+  }
   return GLOBAL_SECRETS_PATH;
 }
 

@@ -17,7 +17,7 @@ function resolvePort(_config: Config, appName?: string): number {
     throw new Error(`[!] No active session for Electron app "${appName}". Launch it first.`);
   }
   const port = getPort() || readLock()?.port;
-  if (!port) throw new Error("[!] No active browser session. Run browser_go first.");
+  if (!port) throw new Error("[!] No active browser session. Run browser_navigate first.");
   return port;
 }
 

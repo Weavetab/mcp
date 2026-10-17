@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/weavetab/sdk/main/schema/plugin.json",
+  "$id": "https://weavetab.dev/schema/plugin.json",
   "title": "WeavetabPluginManifest",
   "description": "Schema definition for Weavetab plugin manifest (weavetab.json)",
   "type": "object",
@@ -72,7 +72,7 @@
       "properties": {
         "weavetab": {
           "type": "string",
-          "description": "Semver range of compatible Weavetab versions (e.g., '^2.5.0-beta.4')."
+          "description": "Semver range of compatible Weavetab versions (e.g., '^2.5.0-beta.5')."
         },
         "node": {
           "type": "string",
@@ -85,10 +85,6 @@
       "type": "array",
       "description": "Environments where this plugin can execute (e.g. ['mcp', 'cli', 'browser']).",
       "items": { "type": "string" }
-    },
-    "lazy": {
-      "type": "boolean",
-      "description": "If true, the plugin will not be loaded into the MCP server automatically at startup, but on demand."
     },
     "defaultConfig": {
       "type": "object",
@@ -161,9 +157,9 @@
             "tools": {
               "type": "object",
               "properties": {
+                "add": { "type": "boolean", "description": "Permission to register new MCP tools." },
                 "override": { "type": "array", "items": { "type": "string" } },
                 "remove": { "type": "array", "items": { "type": "string" } },
-                "hooks": { "type": "boolean" },
                 "reason": { "type": "string" }
               }
             },
@@ -174,6 +170,7 @@
                 "onBeforeAction": { "type": "boolean" },
                 "onAfterAction": { "type": "boolean" },
                 "onDOMMutation": { "type": "boolean" },
+                "onPageNavigate": { "type": "boolean" },
                 "reason": { "type": "string" }
               }
             }

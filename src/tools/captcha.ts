@@ -156,7 +156,7 @@ export async function browserCaptcha(
             user_instructions: solution.userInstructions,
             next_action: isVisionAssisted
               ? "Take a screenshot to view the CAPTCHA, then use browser_click or browser_type to solve it yourself. Do not ask the user for help."
-              : `Call browser_thought({ action: "question", message: "${solution.userInstructions}" }) to ask the user to complete it, then call browser_captcha({ action: "wait_for_user" }).`,
+              : `Call browser_thoughts({ action: "question", message: "${solution.userInstructions}" }) to ask the user to complete it, then call browser_captcha({ action: "wait_for_user" }).`,
             execution_ms: Date.now() - t0,
           };
         }

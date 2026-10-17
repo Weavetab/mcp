@@ -60,7 +60,7 @@ import { getActiveEngine } from "./cdp/connector.js";
 import { resetLoopCounter } from "./intelligence/trail.js";
 import { getSiteProfile, learnPattern, recordPatternExecution, recordQuirk, getPatternReliability, formatSiteProfileHint } from "./intelligence/patternCompiler.js";
 
-import { discoverPlugins, listInstalledPlugins, loadPluginByName } from "./plugin/loader.js";
+import { discoverPlugins } from "./plugin/loader.js";
 import type { WeavetabPlugin } from "./plugin/interface.js";
 import { hookPipeline } from "./plugin/pipeline.js";
 import { agentAction } from "./sensors/pacing.js";
@@ -1937,14 +1937,17 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
 
     // 1. Tool Removals (disable built-in tools)
     const manifestPerms = plugin.manifest?.permissions;
-    const manifestToolsRemove = Array.isArray(manifestPerms)
+    const declaredRemove: string[] = Array.isArray(manifestPerms)
       ? []
       : manifestPerms?.tools?.remove || [];
     const toRemove = [
       ...(plugin.removeTools || []),
-      ...manifestToolsRemove,
     ];
     for (const toolName of toRemove) {
+      if (!declaredRemove.includes(toolName)) {
+        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to remove "${toolName}" but it's not listed in permissions.tools.remove — skipped.\x1b[0m\n`);
+        continue;
+      }
       if ((server as any)._registeredTools?.[toolName]) {
         delete (server as any)._registeredTools[toolName];
         removedNames.push(toolName);
@@ -1952,8 +1955,16 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     }
 
     // 2. Tool Overrides (replace or wrap built-in tools)
+    const declaredOverride: string[] = Array.isArray(manifestPerms)
+      ? []
+      : manifestPerms?.tools?.override || [];
     const overrides = plugin.overrides || [];
     for (const ov of overrides) {
+      if (!declaredOverride.includes(ov.name)) {
+        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to override "${ov.name}" but it's not listed in permissions.tools.override — skipped.\x1b[0m\n`);
+        continue;
+      }
+
       const existingTool = (server as any)._registeredTools?.[ov.name];
       const existingDesc = existingTool?.description || "";
       const existingSchema = existingTool?.parameters?.shape || {};
@@ -1995,12 +2006,18 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     }
 
     // 3. Tool Additions (new tools)
+    const canAdd = !Array.isArray(manifestPerms) && manifestPerms?.tools?.add === true;
     const newTools = plugin.tools || [];
     for (const td of newTools) {
+      if (!canAdd) {
+        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to add tool "${td.name}" but permissions.tools.add is not declared — skipped.\x1b[0m\n`);
+        continue;
+      }
       if ((server as any)._registeredTools?.[td.name]) {
         process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} registered tool "${td.name}" which replaced an existing tool.\x1b[0m\n`);
         delete (server as any)._registeredTools[td.name];
       }
+
       server.tool(
         td.name,
         td.description,
@@ -2028,6 +2045,10 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     const fullPluginCtx = (plugin as any)._context;
     if (fullPluginCtx && fullPluginCtx.mcp) {
       fullPluginCtx.mcp.registerTool = (tool: any) => {
+        if (!canAdd) {
+          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic registerTool("${tool?.name}"): permissions.tools.add not declared — skipped.\x1b[0m\n`);
+          return;
+        }
         if ((server as any)._registeredTools?.[tool.name]) {
           process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic tool "${tool.name}" replaced an existing tool.\x1b[0m\n`);
           delete (server as any)._registeredTools[tool.name];
@@ -2046,6 +2067,10 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       };
 
       fullPluginCtx.mcp.overrideTool = (toolName: string, overrideHandler: any) => {
+        if (!declaredOverride.includes(toolName)) {
+          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic overrideTool("${toolName}"): not in permissions.tools.override — skipped.\x1b[0m\n`);
+          return;
+        }
         const existingTool = (server as any)._registeredTools?.[toolName];
         if (existingTool) {
           delete (server as any)._registeredTools[toolName];
@@ -2071,12 +2096,20 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       };
 
       fullPluginCtx.mcp.removeTool = (toolName: string) => {
+        if (!declaredRemove.includes(toolName)) {
+          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic removeTool("${toolName}"): not in permissions.tools.remove — skipped.\x1b[0m\n`);
+          return;
+        }
         if ((server as any)._registeredTools?.[toolName]) {
           delete (server as any)._registeredTools[toolName];
         }
       };
 
       fullPluginCtx.mcp.unregisterTool = (toolName: string) => {
+        if (!declaredRemove.includes(toolName)) {
+          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic unregisterTool("${toolName}"): not in permissions.tools.remove — skipped.\x1b[0m\n`);
+          return;
+        }
         if ((server as any)._registeredTools?.[toolName]) {
           delete (server as any)._registeredTools[toolName];
         }
@@ -2105,54 +2138,10 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     }
   };
 
-  // Add the built-in ecosystem tools
-  server.tool(
-    "list_plugins",
-    "List all available Weavetab plugins that can be loaded.",
-    {},
-    async () => {
-      const installed = listInstalledPlugins();
-      const available = installed
-        .filter(info => !loadedPluginNames.has(info.packageName))
-        .map(info => `- ${info.packageName}: ${info.manifest?.description || "No description"}`);
-          
-      if (available.length === 0) {
-        return { content: [{ type: "text", text: "No un-loaded plugins available." }] };
-      }
-      return { content: [{ type: "text", text: `Available plugins:\n${available.join("\n")}\n\nUse load_plugin with the plugin package name to load one.` }] };
-    }
-  );
-
-  server.tool(
-    "load_plugin",
-    "Load any Weavetab plugin dynamically by npm package name (e.g. '@fy2ne/wt-youtube', 'my-plugin').",
-    {
-      name: z.string().describe("The exact npm package name of the plugin to load (e.g. '@fy2ne/wt-youtube', 'my-plugin')")
-    },
-    async ({ name }) => {
-      if (loadedPluginNames.has(name)) {
-        return { content: [{ type: "text", text: `Plugin ${name} is already loaded.` }] };
-      }
-      
-      const plugin = loadPluginByName(name);
-      if (!plugin) {
-        return { content: [{ type: "text", text: `Plugin "${name}" not found. Make sure it is installed via "weavetab plugin add ${name}".` }] };
-      }
-      
-      await registerPluginTools(plugin);
-      const toolsList = (plugin.tools || []).map((t: any) => t.name).join(", ");
-      
-      return { content: [{ type: "text", text: `loaded plugin ${name}. Tools registered: ${toolsList || "(dynamic tools registered)"}` }] };
-    }
-  );
-
-  // Auto-load plugins by default unless explicitly marked with lazy: true
+  // Auto-load all installed plugins at startup
   const allPlugins = discoverPlugins();
   for (const plugin of allPlugins) {
-    const isExplicitlyLazy = plugin.manifest?.lazy === true;
-    if (!isExplicitlyLazy) {
-      await registerPluginTools(plugin);
-    }
+    await registerPluginTools(plugin);
   }
 
   let transport;

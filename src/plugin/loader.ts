@@ -39,9 +39,9 @@ function getNodeModulesDirs(customDir?: string): string[] {
 export function normalizePermissions(perms?: any): WeavetabPermissions {
   if (!perms) return {};
 
-  // Handle flat string array: ["browser.evaluate", "browser.navigate", "fs.read", ...]
+  // Handle flat string array: ["browser.evaluate", "tools.add", "tools", "fs.read", ...]
   if (Array.isArray(perms)) {
-    const normalized: WeavetabPermissions = { cdp: {}, fs: {}, extension: {} };
+    const normalized: WeavetabPermissions = { cdp: {}, fs: {}, filesystem: {}, extension: {}, tools: {}, hooks: {} };
     for (const item of perms) {
       if (typeof item !== "string") continue;
       const [cat, sub] = item.split(".");
@@ -49,8 +49,22 @@ export function normalizePermissions(perms?: any): WeavetabPermissions {
         (normalized.cdp as any)[sub || "evaluate"] = true;
       } else if (cat === "fs" || cat === "filesystem") {
         (normalized.fs as any)[sub || "read"] = ["*"];
+        (normalized.filesystem as any)[sub || "read"] = ["*"];
       } else if (cat === "extension" || cat === "hud") {
         (normalized.extension as any)[sub || "hud"] = true;
+      } else if (cat === "tools") {
+        normalized.tools = normalized.tools || {};
+        if (!sub || sub === "add") {
+          normalized.tools.add = true;
+        }
+      } else if (cat === "hooks") {
+        normalized.hooks = normalized.hooks || {};
+        if (sub) {
+          (normalized.hooks as any)[sub] = true;
+        } else {
+          normalized.hooks.onBeforeAction = true;
+          normalized.hooks.onAfterAction = true;
+        }
       }
     }
     return normalized;
@@ -181,9 +195,6 @@ export function listInstalledPlugins(pluginDir?: string): InstalledPluginInfo[] 
   return results;
 }
 
-/**
- * Builds the canonical rich PluginContext for a loaded plugin.
- */
 export function buildPluginContext(
   plugin: WeavetabPlugin,
   storageManager: PluginStorageManager,
@@ -195,8 +206,11 @@ export function buildPluginContext(
     onPageNavigate: Array<(url: string, session?: any) => Promise<void> | void>;
   }
 ): PluginContext {
+  const perms = (plugin.manifest?.permissions as WeavetabPermissions) ?? {};
+  const pname = plugin.name;
+
   return {
-    name: plugin.name,
+    name: pname,
     version: plugin.version,
     pluginDir: storageManager.getDirectory(),
     config: pluginConfig,
@@ -204,32 +218,59 @@ export function buildPluginContext(
     extension: extensionBridge,
     mcp: {
       registerTool: (tool: any) => {
+        if (!perms.tools?.add) {
+          console.error(`[Plugin: ${pname}] blocked registerTool("${tool?.name}"): permissions.tools.add not declared`);
+          return;
+        }
         plugin.tools = plugin.tools || [];
-        const existingIndex = plugin.tools.findIndex((t: any) => t.name === tool.name);
-        if (existingIndex >= 0) {
-          plugin.tools[existingIndex] = tool;
+        const idx = plugin.tools.findIndex((t: any) => t.name === tool.name);
+        if (idx >= 0) {
+          plugin.tools[idx] = tool;
         } else {
           plugin.tools.push(tool);
         }
       },
       overrideTool: (toolName: string, overrideHandler: any) => {
+        const allowed = perms.tools?.override ?? [];
+        if (!allowed.includes(toolName)) {
+          console.error(`[Plugin: ${pname}] blocked overrideTool("${toolName}"): not listed in permissions.tools.override`);
+          return;
+        }
         plugin.overrides = plugin.overrides || [];
         plugin.overrides.push({ name: toolName, handler: overrideHandler });
       },
       removeTool: (toolName: string) => {
+        const allowed = perms.tools?.remove ?? [];
+        if (!allowed.includes(toolName)) {
+          console.error(`[Plugin: ${pname}] blocked removeTool("${toolName}"): not listed in permissions.tools.remove`);
+          return;
+        }
         plugin.removeTools = plugin.removeTools || [];
         plugin.removeTools.push(toolName);
       },
       unregisterTool: (toolName: string) => {
+        const allowed = perms.tools?.remove ?? [];
+        if (!allowed.includes(toolName)) {
+          console.error(`[Plugin: ${pname}] blocked unregisterTool("${toolName}"): not listed in permissions.tools.remove`);
+          return;
+        }
         plugin.removeTools = plugin.removeTools || [];
         plugin.removeTools.push(toolName);
       },
     },
     hooks: {
       onBeforeAction: (fn: any) => {
+        if (!perms.hooks?.onBeforeAction) {
+          console.error(`[Plugin: ${pname}] blocked onBeforeAction hook: permissions.hooks.onBeforeAction not declared`);
+          return;
+        }
         if (typeof fn === "function") hooks.beforeToolCall.push(fn);
       },
       onAfterAction: (fn: any) => {
+        if (!perms.hooks?.onAfterAction) {
+          console.error(`[Plugin: ${pname}] blocked onAfterAction hook: permissions.hooks.onAfterAction not declared`);
+          return;
+        }
         if (typeof fn === "function") {
           hooks.afterToolCall.push(async (toolName, args, result, session) => {
             return await fn(toolName, result, session, args);
@@ -237,15 +278,31 @@ export function buildPluginContext(
         }
       },
       onDOMMutation: (fn: any) => {
+        if (!perms.hooks?.onDOMMutation) {
+          console.error(`[Plugin: ${pname}] blocked onDOMMutation hook: permissions.hooks.onDOMMutation not declared`);
+          return;
+        }
         if (typeof fn === "function") (hooks as any).onDOMMutation?.push(fn);
       },
       beforeToolCall: (fn) => {
+        if (!perms.hooks?.onBeforeAction) {
+          console.error(`[Plugin: ${pname}] blocked beforeToolCall hook: permissions.hooks.onBeforeAction not declared`);
+          return;
+        }
         if (typeof fn === "function") hooks.beforeToolCall.push(fn);
       },
       afterToolCall: (fn) => {
+        if (!perms.hooks?.onAfterAction) {
+          console.error(`[Plugin: ${pname}] blocked afterToolCall hook: permissions.hooks.onAfterAction not declared`);
+          return;
+        }
         if (typeof fn === "function") hooks.afterToolCall.push(fn);
       },
       onPageNavigate: (fn) => {
+        if (!perms.hooks?.onPageNavigate) {
+          console.error(`[Plugin: ${pname}] blocked onPageNavigate hook: permissions.hooks.onPageNavigate not declared`);
+          return;
+        }
         if (typeof fn === "function") hooks.onPageNavigate.push(fn);
       },
     },
@@ -257,10 +314,10 @@ export function buildPluginContext(
       recordQuirk: (origin: string, quirkKey: string, quirkData: any) => recordQuirk(origin, quirkKey, quirkData),
     },
     logger: {
-      info: (...args: any[]) => console.error(`[Plugin: ${plugin.name}] [INFO]`, ...args),
-      warn: (...args: any[]) => console.error(`[Plugin: ${plugin.name}] [WARN]`, ...args),
-      error: (...args: any[]) => console.error(`[Plugin: ${plugin.name}] [ERROR]`, ...args),
-      debug: (...args: any[]) => console.error(`[Plugin: ${plugin.name}] [DEBUG]`, ...args),
+      info: (...args: any[]) => console.error(`[Plugin: ${pname}] [INFO]`, ...args),
+      warn: (...args: any[]) => console.error(`[Plugin: ${pname}] [WARN]`, ...args),
+      error: (...args: any[]) => console.error(`[Plugin: ${pname}] [ERROR]`, ...args),
+      debug: (...args: any[]) => console.error(`[Plugin: ${pname}] [DEBUG]`, ...args),
     },
   };
 }
@@ -313,7 +370,10 @@ function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
     const pluginModule = require(resolvedEntry);
     const plugin = pluginModule.default || pluginModule.plugin || pluginModule;
 
-    const normalizedPerms = normalizePermissions(manifest.permissions);
+    const rawPerms = Array.isArray(manifest.permissions)
+      ? manifest.permissions
+      : { ...(plugin?.permissions || {}), ...(manifest?.permissions || {}) };
+    const normalizedPerms = normalizePermissions(rawPerms);
 
     if (
       plugin &&
@@ -330,10 +390,10 @@ function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
       plugin.version = plugin.version || manifest.version || pkg.version || "1.0.0";
       plugin.description = plugin.description || manifest.description || pkg.description || "";
       plugin.manifest = manifest;
+      plugin.permissions = normalizedPerms;
+      plugin.manifest.permissions = normalizedPerms;
       plugin.tools = Array.isArray(plugin.tools) ? plugin.tools : [];
       plugin.overrides = Array.isArray(plugin.overrides) ? plugin.overrides : [];
-      
-      plugin.manifest.permissions = normalizedPerms;
 
       plugin.removeTools = Array.isArray(plugin.removeTools)
         ? plugin.removeTools

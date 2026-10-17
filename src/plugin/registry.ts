@@ -46,8 +46,10 @@ export interface PluginCandidate {
 
 export const OFFICIAL_PLUGIN_PREFIX = "@weavetab/plugin-";
 
-// The production remote URL — points to weavetab/registry on GitHub.
-export const REGISTRY_URL =
+// The production remote URLs — weavetab.dev (D1-backed) primary, GitHub raw fallback.
+export const REGISTRY_URL = "https://weavetab.dev/api/registry/verified.json";
+
+export const REGISTRY_FALLBACK_URL =
   "https://raw.githubusercontent.com/weavetab/registry/main/verified.json";
 
 // Local override: when this file exists at the root of the repo, we use it instead
@@ -87,14 +89,21 @@ function loadLocalRegistry(): Set<string> | null {
 }
 
 async function fetchRemoteRegistry(): Promise<Set<string>> {
-  const res = await fetch(REGISTRY_URL, {
-    signal: AbortSignal.timeout(5000),
-    headers: { "User-Agent": "Weavetab-Registry-Check/1.0" },
-  });
-  if (!res.ok) throw new Error(`registry fetch failed: ${res.status}`);
-  const data = await res.json();
-  if (!Array.isArray(data.verified)) throw new Error("invalid registry format");
-  return extractPackageNames(data.verified);
+  for (const url of [REGISTRY_URL, REGISTRY_FALLBACK_URL]) {
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(5000),
+        headers: { "User-Agent": "Weavetab-Registry-Check/1.0" },
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!Array.isArray(data.verified)) continue;
+      return extractPackageNames(data.verified);
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("registry fetch failed: all sources unreachable");
 }
 
 /**

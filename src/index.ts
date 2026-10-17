@@ -96,6 +96,33 @@ async function main(): Promise<void> {
 
   const args = process.argv.slice(2);
 
+  // Global flags: --version always works; --ws starts the WebSocket daemon.
+  if (args.includes("--version") || args.includes("-v")) {
+    const _v = createRequire(import.meta.url);
+    const ver = _v("../package.json").version || WEAVETAB_VERSION;
+    console.log(`@weavetab/mcp v${ver}`);
+    process.exit(0);
+  }
+  if (args.includes("--ws")) {
+    let wsPort = 3000;
+    const pi = args.findIndex((a) => a === "--port");
+    const eq = args.find((a) => a.startsWith("--port="));
+    const rawPort = pi >= 0 ? args[pi + 1] : eq ? eq.slice("--port=".length) : undefined;
+    if (rawPort !== undefined) {
+      const parsed = parseInt(rawPort, 10);
+      if (isNaN(parsed) || parsed < 1 || parsed > 65535) {
+        console.error(`[Weavetab] Invalid --port value: "${rawPort}" (1-65535).`);
+        process.exit(1);
+      }
+      wsPort = parsed;
+    }
+    const config = await loadConfig();
+    (global as any).__wt_is_server = true;
+    await printBootBanner(wsPort);
+    await startServer(config, "ws", wsPort);
+    return;
+  }
+
   // If NOT in a TTY environment (e.g. spawned by Claude Code as MCP server)
   if (!isInteractive && args.length === 0) {
     // Singleton guard — exit immediately if another MCP server is alive.
@@ -384,6 +411,7 @@ async function main(): Promise<void> {
       S.sl("Role *", {
         initialValue: "admin", options: [
           { value: "admin", label: "Admin", hint: "Full access to all tools" },
+          { value: "operator", label: "Operator", hint: "Full access, standard agent role" },
           { value: "viewer", label: "Viewer", hint: "Read-only access (map, find, scrape, console)" },
           { value: "automation", label: "Automation", hint: "CI/CD mode (burst, plan, wait, map)" },
         ]
@@ -732,7 +760,7 @@ async function main(): Promise<void> {
       p.note(summary.join("\n"), "SUMMARY");
 
       if (!mcpConfigured) {
-        console.log(pc.dim("\nTo configure MCP manually, run: weavetab config-mcp"));
+        console.log(pc.dim("\nTo configure MCP manually, run: weavetab config"));
       }
 
       p.outro(`${pc.green("Weavetab is ready!")}  ${pc.dim("Run")} ${pc.cyan("weavetab help")} ${pc.dim("to see available commands.")}`);
@@ -1231,8 +1259,10 @@ async function main(): Promise<void> {
     console.log(`  ${pc.cyan("skills")}        Install or update AI agent skills (@weavetab/skills)`);
     console.log(`  ${pc.cyan("view")}          Display the current active configuration`);
     console.log(`  ${pc.cyan("reset")}         Purge browser profiles, lockfiles, and orphan processes`);
-    console.log(`  ${pc.cyan("secrets")}       Manage blind-injected credentials (set, list, rm)`);
+    console.log(`  ${pc.cyan("secrets")}       Manage blind-injected credentials (set, list, rm, init)`);
     console.log(`  ${pc.cyan("reload-ext")}    Send a reload signal to the browser extension`);
+    console.log(`  ${pc.cyan("--ws")}          Start the WebSocket daemon (default port 3000, override with --port)`);
+    console.log(`  ${pc.cyan("--version")}     Print version and exit`);
     console.log(`  ${pc.cyan("help")}          Show this help message`);
     console.log();
 
@@ -1242,7 +1272,7 @@ async function main(): Promise<void> {
     console.log();
 
     console.log(pc.bold("PLUGIN COMMANDS (User)"));
-    console.log(`  ${pc.cyan("weavetab plugin add <pkg>")}         Install a plugin (resolves official @weavetab/plugin- & community)`);
+    console.log(`  ${pc.cyan("weavetab plugin add <pkg>")}         Install a plugin from npm (or a local path: ./my-plugin)`);
     console.log(`  ${pc.cyan("weavetab plugin browse")}            Interactive terminal explorer to browse & 1-click install`);
     console.log(`  ${pc.cyan("weavetab plugin search <query>")}    Search plugins across registry & npm`);
     console.log(`  ${pc.cyan("weavetab plugin list")}              List all installed Weavetab plugins and tools`);
@@ -1270,7 +1300,7 @@ async function main(): Promise<void> {
     console.log(pc.bold("LINKS"));
     console.log(`  ${pc.cyan("GitHub:")}  ${pc.dim("https://github.com/weavetab")}`);
     console.log(`  ${pc.cyan("npm:")}     ${pc.dim("https://www.npmjs.com/package/@weavetab/mcp")}`);
-    console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://github.com/weavetab/mcp")}`);
+    console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://weavetab.dev")}`);
     console.log();
   }
 }
@@ -1313,11 +1343,19 @@ main().catch((err: unknown) => {
     const p = await import("@clack/prompts");
 
     if (args.length === 0) {
-      console.log(pc.red("[ERROR] Usage: weavetab secrets <set|list|rm> [key]"));
+      console.log(pc.red("[ERROR] Usage: weavetab secrets <set|list|rm|init> [key]"));
       process.exit(1);
     }
 
     const subcmd = args[0].toLowerCase();
+
+    if (subcmd === "init") {
+      const { initProjectSecrets } = await import("./security/secrets.js");
+      const filePath = initProjectSecrets();
+      console.log(pc.green(`[OK] Project secrets initialized: ${filePath}`));
+      console.log(pc.dim("Keys in this file take precedence over ~/.weavetab/secrets.json when Weavetab runs from this directory."));
+      return;
+    }
 
     if (subcmd === "list") {
       const list = await secretStore.listSecrets();
@@ -1399,6 +1437,6 @@ main().catch((err: unknown) => {
     }
 
     console.log(pc.red(`[ERROR] Unknown secrets command: ${subcmd}`));
-    console.log(pc.red("Usage: weavetab secrets <set|list|rm> [key]"));
+    console.log(pc.red("Usage: weavetab secrets <set|list|rm|init> [key]"));
     process.exit(1);
   }

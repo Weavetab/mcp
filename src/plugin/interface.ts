@@ -66,6 +66,7 @@ export interface WeavetabPermissions {
     reason?: string;
     [key: string]: any;
   };
+  /** @deprecated use `filesystem` */
   fs?: {
     read?: string[];
     write?: string[];
@@ -77,11 +78,19 @@ export interface WeavetabPermissions {
     reason?: string;
   };
   tools?: {
-    /** List of built-in tool names this plugin is permitted to override */
+    /** Must be true for the plugin to register any new MCP tools */
+    add?: boolean;
+    /** Explicit list of built-in tool names this plugin may override */
     override?: string[];
-    /** List of built-in tool names this plugin is permitted to remove */
+    /** Explicit list of built-in tool names this plugin may remove */
     remove?: string[];
-    hooks?: boolean;
+    reason?: string;
+  };
+  hooks?: {
+    onBeforeAction?: boolean;
+    onAfterAction?: boolean;
+    onDOMMutation?: boolean;
+    onPageNavigate?: boolean;
     reason?: string;
   };
   [key: string]: any;
@@ -134,8 +143,6 @@ export interface WeavetabManifest {
   engines?: Record<string, string>;
   /** Supported environments */
   environments?: string[];
-  /** Whether the plugin should be lazy-loaded on demand */
-  lazy?: boolean;
   /** Tools exposed by this plugin to the MCP server */
   tools?: WeavetabManifestTool[];
   /** Default configuration template */
@@ -257,6 +264,7 @@ export interface WeavetabPluginDefinition {
   overrides?: WeavetabToolOverride[];
   removeTools?: string[];
   defaultConfig?: Record<string, any>;
+  permissions?: WeavetabPermissions;
   onBeforeAction?: BeforeActionHook;
   onAfterAction?: AfterActionHook;
   onDOMMutation?: DOMMutationHook;
@@ -268,6 +276,7 @@ export interface WeavetabPlugin {
   name: string;
   version: string;
   description?: string;
+  permissions?: WeavetabPermissions;
   /** Add new tools */
   tools?: WeavetabToolDefinition[] | WeavetabPluginTool[];
   /** Override or wrap existing tools */

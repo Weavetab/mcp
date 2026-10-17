@@ -2,6 +2,7 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import boxen from "boxen";
 import ora from "ora";
+import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -35,7 +36,7 @@ function runCommand(cmd: string, cmdArgs: string[], cwd: string = process.cwd())
     const executable = isWin && !cmd.endsWith(".cmd") && !cmd.endsWith(".exe") ? `${cmd}.cmd` : cmd;
     const child = spawn(executable, cmdArgs, {
       cwd,
-      shell: false,
+      shell: isWin,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -65,8 +66,23 @@ function runNpmCommand(cmdArgs: string[], cwd: string = process.cwd()): Promise<
 
 export async function runPluginAdd(inputName: string, args: string[] = []): Promise<void> {
   if (!inputName || inputName.startsWith("-")) {
-    console.log(pc.red("[ERROR] Please provide a package name to install."));
-    console.log(pc.dim("Usage: weavetab plugin add <packageName> [--official | --community] [--yes]"));
+    console.log(pc.red("[ERROR] Please provide a package name or local path to install."));
+    console.log(pc.dim("Usage: weavetab plugin add <packageName|./local-path> [--official | --community] [--yes]"));
+    return;
+  }
+
+  // Local path install: `weavetab plugin add ./my-plugin` (npm installs the directory).
+  if (
+    inputName === "." ||
+    inputName.startsWith("./") ||
+    inputName.startsWith("../") ||
+    inputName.startsWith("file:") ||
+    inputName.startsWith("/") ||
+    inputName.startsWith("\\") ||
+    /^[a-zA-Z]:[\\/]/.test(inputName) ||
+    inputName.startsWith("~/")
+  ) {
+    await runPluginAddLocal(inputName);
     return;
   }
 
@@ -267,6 +283,54 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
     );
     console.log();
   }
+}
+
+// ---------------------------------------------------------------------------
+// 1b. ADD FROM LOCAL PATH (`weavetab plugin add ./my-plugin`)
+// ---------------------------------------------------------------------------
+
+export async function runPluginAddLocal(inputPath: string): Promise<void> {
+  let dir = inputPath;
+  if (dir.startsWith("file:")) dir = dir.slice("file:".length);
+  if (dir.startsWith("~/")) dir = path.join(process.env.HOME || process.env.USERPROFILE || "", dir.slice(2));
+  const absDir = path.resolve(process.cwd(), dir);
+
+  if (!fs.existsSync(absDir) || !fs.statSync(absDir).isDirectory()) {
+    console.log(pc.red(`[ERROR] Local path not found: ${inputPath}`));
+    return;
+  }
+  const local = inspectInstalledPackage(absDir);
+  if (!local) {
+    console.log(pc.red(`[ERROR] No valid weavetab.json manifest in ${absDir}`));
+    console.log(pc.dim("Scaffold one with: npx @weavetab/sdk init <name>"));
+    return;
+  }
+
+  const spinner = ora(`Installing local plugin ${pc.cyan(local.packageName)} from ${pc.dim(absDir)} via npm...`).start();
+  const installResult = await runNpmCommand(["install", absDir]);
+  if (installResult.code !== 0) {
+    spinner.fail(pc.red(`Failed to install ${local.packageName}`));
+    if (installResult.stderr) console.error(pc.dim(installResult.stderr));
+    return;
+  }
+  spinner.succeed(pc.green(`installed ${pc.bold(local.packageName)} (local path)`));
+
+  const targetDir = path.join(process.cwd(), "node_modules", local.packageName);
+  const installedInfo = fs.existsSync(targetDir) ? inspectInstalledPackage(targetDir) : local;
+  const manifest = (installedInfo?.manifest || local.manifest) as any;
+  const tools = manifest.tools || [];
+  console.log();
+  console.log(boxen(
+    `${pc.bold("Plugin Details:")}\n` +
+    `  ${pc.dim("Name:")}        ${manifest.name || local.packageName}\n` +
+    `  ${pc.dim("Version:")}     ${manifest.version || "1.0.0"}\n` +
+    `  ${pc.dim("Source:")}      ${absDir} (local path)\n` +
+    `  ${pc.dim("Description:")} ${manifest.description || "No description provided"}` +
+    (tools.length > 0 ? `\n\n${pc.bold(`Exposed Tools (${tools.length}):`)}` + tools.map((t: any) => `\n  • ${pc.cyan(t.name)}: ${pc.dim(t.description || "")}`).join("") : ""),
+    { padding: 1, borderStyle: "round", borderColor: "green" }
+  ));
+  console.log();
+  console.log(pc.green("✔ Plugin is ready to use! Restart Weavetab MCP server to activate changes.\n"));
 }
 
 // ---------------------------------------------------------------------------
@@ -524,7 +588,7 @@ export async function runPluginCli(args: string[]): Promise<void> {
     console.log(`  weavetab plugin <command> [options]`);
     console.log();
     console.log(pc.bold("COMMANDS"));
-    console.log(`  ${pc.cyan("add <pkg>")}          Install any plugin by npm package name (e.g. @fy2ne/wt-youtube, my-plugin)`);
+    console.log(`  ${pc.cyan("add <pkg|path>")}     Install a plugin by npm name or local path (e.g. @fy2ne/wt-youtube, ./my-plugin)`);
     console.log(`  ${pc.cyan("browse")}             Interactive terminal explorer to browse & 1-click install`);
     console.log(`  ${pc.cyan("search [query]")}     Search plugins across official registry & npm`);
     console.log(`  ${pc.cyan("list")}               List all installed plugins and their registered tools`);

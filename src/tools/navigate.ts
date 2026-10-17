@@ -1,5 +1,5 @@
 /**
- * Weavetab — tools/navigate.ts
+ * Weavetab â€” tools/navigate.ts
  * URL navigation with domain blocklist enforcement and post-navigation DOM stability wait.
  * Weavetab by fy2ne
  */
@@ -94,10 +94,10 @@ export async function weaveNavigate(
 
 
   // Extension pages: open in new tab instead of navigating current tab
-  // (chrome-extension:// pages use a different process context — Page.navigate
+  // (chrome-extension:// pages use a different process context â€” Page.navigate
   //  can break the CDP session or not fire loadEventFired properly)
   if (parsed.protocol === 'chrome-extension:') {
-    logDebug(`[weaveNavigate] Extension URL detected — opening in new tab: ${parsed.href}`);
+    logDebug(`[weaveNavigate] Extension URL detected â€” opening in new tab: ${parsed.href}`);
     const { sendToExtension } = await import("../cdp/helpers.js");
     await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `opening extension page...` } });
     const { WeavetabOpen } = await import("./tabs.js");
@@ -119,7 +119,7 @@ export async function weaveNavigate(
         }
       }
     } catch { /* overlay install is best-effort */ }
-    logAction("browser_go", url, `opened extension tab ${openRes.tabId}`);
+    logAction("browser_navigate", url, `opened extension tab ${openRes.tabId}`);
     return {
       success: true,
       url: openRes.url,
@@ -225,7 +225,7 @@ export async function weaveNavigate(
 
   sendToExtension(session, { type: 'Weavetab_STATE', cursor: { x: 10, y: 10 }, state: 'idle', hud: { action: '' } }).catch(() => {});
 
-  logAction("browser_go", url, `arrived at ${title}`);
+  logAction("browser_navigate", url, `arrived at ${title}`);
 
   // Bump the visit counter for this domain exactly once per navigation
   bumpVisitCount(parsed.hostname).catch(() => {});

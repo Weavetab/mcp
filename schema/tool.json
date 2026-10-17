@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/weavetab/sdk/main/schema/tool.json",
+  "$id": "https://weavetab.dev/schema/tool.json",
   "title": "WeavetabToolSchema",
   "description": "Schema definition for an individual MCP tool registered by a Weavetab plugin",
   "type": "object",

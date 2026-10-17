@@ -674,7 +674,7 @@ export async function getTabList(agentId?: string, targetApp?: string): Promise<
       }
     }
   }
-  if (!port) throw new Error(`[!] No active ${targetApp ? targetApp : "browser"} session. Run browser_go or launch app first.`);
+  if (!port) throw new Error(`[!] No active ${targetApp ? targetApp : "browser"} session. Run browser_navigate or launch app first.`);
 
   try {
     const metaSession = await withCDPTimeout(CDP({ host: "127.0.0.1", port }), 5000, "getTabList CDP");
@@ -730,7 +730,7 @@ export async function connectToTab(targetId: string, port?: number, agentId?: st
 
   const lock = readLock(appName);
   const p = port || (appName ? lock?.port : (actualPort || lock?.port));
-  if (!p) throw new Error(`[!] No active ${appName || "browser"} session. Run browser_go first.`);
+  if (!p) throw new Error(`[!] No active ${appName || "browser"} session. Run browser_navigate first.`);
 
   let t: any = null;
   try {

@@ -13,7 +13,7 @@ import * as crypto from "node:crypto";
 export type DevModeConfig = boolean;
 
 export type PolicyMode = "allow" | "deny" | "audit-only" | "read-only";
-export type Role = "admin" | "viewer" | "automation" | "system";
+export type Role = "admin" | "operator" | "viewer" | "automation" | "system";
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 
 export interface PolicyEntry {
@@ -258,7 +258,7 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
   const d = DEFAULT_CONFIG;
   const VALID_MODES    = ["session", "attach"] as const;
   const VALID_ENGINES  = ["chromium", "firefox", "webkit"] as const;
-  const VALID_ROLES    = ["admin", "viewer", "automation", "system"] as const;
+  const VALID_ROLES    = ["admin", "operator", "viewer", "automation", "system"] as const;
   const mode = validateField("mode", raw.mode, isStr, d.mode, v => (VALID_MODES as readonly string[]).includes(v)) as Config["mode"];
 
   // Path validation helpers

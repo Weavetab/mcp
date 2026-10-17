@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.weavetab/mcp",
+  "name": "io.github.Weavetab/mcp",
   "title": "Weavetab MCP",
   "description": "Give AI agents full control over live browsers and apps to navigate, click, extract, and automate.",
   "repository": {
-    "url": "https://github.com/weavetab/mcp",
+    "url": "https://github.com/Weavetab/mcp",
     "source": "github"
   },
-  "version": "2.5.0-beta.4",
+  "version": "2.5.0-beta.5",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@weavetab/mcp",
-      "version": "2.5.0-beta.4",
+      "version": "2.5.0-beta.5",
       "transport": {
         "type": "stdio"
       },

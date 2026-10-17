@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
-  "mcpName": "io.github.weavetab/mcp",
-  "version": "2.5.0-beta.4",
+  "mcpName": "io.github.Weavetab/mcp",
+  "version": "2.5.0-beta.5",
   "description": "Weavetab MCP — Direct Layer 0 interface for AI agents across web and desktop applications. Direct socket transport, zero wrapper overhead, deterministic state execution.",
   "icon": "icon.png",
   "author": "fy2ne",
@@ -452,24 +452,6 @@
           "Network throttling (Offline, Slow 3G, Fast 3G, 4G)",
           "CPU throttling multipliers",
           "Geolocation and timezone overrides"
-        ]
-      },
-      "list_plugins": {
-        "category": "plugins",
-        "description": "Inspect installed Weavetab SDK plugins, available unloadable plugins, tool overrides, custom schemas, and capability manifests.",
-        "features": [
-          "Installed plugin discovery",
-          "Manifest and schema introspection",
-          "Ecosystem capability listing"
-        ]
-      },
-      "load_plugin": {
-        "category": "plugins",
-        "description": "Dynamically load any published Weavetab plugin by npm package name into the active runtime with isolated sandboxing and hot tool registration.",
-        "features": [
-          "Dynamic npm package loading",
-          "Hot tool registration with client notification",
-          "Isolated plugin execution context"
         ]
       }
     },
