@@ -2,7 +2,7 @@
   "name": "@weavetab/mcp",
   "mcpName": "io.github.Weavetab/mcp",
   "version": "2.5.0-beta.5",
-  "description": "Weavetab MCP — Direct Layer 0 interface for AI agents across web and desktop applications. Direct socket transport, zero wrapper overhead, deterministic state execution.",
+  "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "icon": "icon.png",
   "author": "fy2ne",
   "license": "AGPL-3.0-only",

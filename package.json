@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
   "version": "2.5.0-beta.5",
-  "description": "Direct Layer 0 interface for AI agents across web and desktop applications. No WebDriver. No cloud. Pure control.",
+  "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "author": {
     "name": "fy2ne",
     "email": "hello@fy2ne.me",

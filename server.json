@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Weavetab/mcp",
-  "title": "Weavetab MCP",
-  "description": "Give AI agents full control over live browsers and apps to navigate, click, extract, and automate.",
+  "title": "Weavetab",
+  "description": "Open automation engine for AI agents. Control live browsers and desktop apps locally.",
   "repository": {
     "url": "https://github.com/Weavetab/mcp",
     "source": "github"
