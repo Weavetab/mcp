@@ -8,13 +8,13 @@
     "url": "https://fy2ne.me"
   },
   "license": "AGPL-3.0-only",
-  "homepage": "https://github.com/weavetab/mcp",
+  "homepage": "https://github.com/Weavetab/mcp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/weavetab/mcp.git"
+    "url": "https://github.com/Weavetab/mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/weavetab/mcp/issues"
+    "url": "https://github.com/Weavetab/mcp/issues"
   },
   "keywords": [
     "mcp server",

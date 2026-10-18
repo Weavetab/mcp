@@ -46,9 +46,9 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: npm ci
+      - run: npm run build
       - run: npm run verify
       - run: npm test
-      - run: npm run build
       - name: Guard - release tag matches package.json version
         if: github.event_name == 'release'
         shell: bash

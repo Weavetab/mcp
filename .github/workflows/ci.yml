@@ -31,6 +31,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm run verify
       - run: npm test
       # Tokenless packaging check: fails early if `files` globs or the
       # tarball are broken, long before a release is cut.
