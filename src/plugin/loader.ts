@@ -28,7 +28,6 @@ function getNodeModulesDirs(customDir?: string): string[] {
     join(cwd, "MCP", "node_modules"),
     join(cwd, "..", "node_modules"),
     join(os.homedir(), ".weavetab", "plugins", "node_modules"),
-    join(os.homedir(), ".weavetab-system", "plugins", "node_modules"),
   ];
   return Array.from(new Set(dirs.filter((d) => existsSync(d))));
 }
@@ -167,7 +166,7 @@ export function listInstalledPlugins(pluginDir?: string): InstalledPluginInfo[] 
         if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
         if (entry.name.startsWith("@")) {
-          // Scoped packages (@weavetab/plugin-xyz, @scope/xyz, @fy2ne/wt-youtube)
+          // Scoped packages (@weavetab/plugin-xyz, @scope/xyz, @acme/weavetab-plugin)
           const scopeDir = join(modulesDir, entry.name);
           try {
             const scopeEntries = readdirSync(scopeDir, { withFileTypes: true });
@@ -455,7 +454,7 @@ export function discoverPlugins(pluginDir?: string): WeavetabPlugin[] {
         if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
         if (entry.name.startsWith("@")) {
-          // Scoped package directory (e.g. @weavetab, @fy2ne, @mycompany)
+          // Scoped package directory (e.g. @weavetab, @acme, @mycompany)
           const scopeDir = join(modulesDir, entry.name);
           try {
             const scopeEntries = readdirSync(scopeDir, { withFileTypes: true });
@@ -469,7 +468,7 @@ export function discoverPlugins(pluginDir?: string): WeavetabPlugin[] {
             }
           } catch { /* scope dir unreadable */ }
         } else {
-          // Top-level package — any name works: wt-youtube, my-plugin, etc.
+          // Top-level package — any name works: my-plugin, wt-github, custom-plugin, etc.
           const plugin = tryLoadPlugin(join(modulesDir, entry.name));
           if (plugin && !seenPluginNames.has(plugin.name)) {
             seenPluginNames.add(plugin.name);

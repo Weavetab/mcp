@@ -84,6 +84,24 @@ function inferExtension(url: string, mimeType: string): string {
   return ".bin";
 }
 
+const SUPPORTED_EXTENSIONS = [".csv", ".pdf", ".docx", ".xlsx", ".xls"];
+
+/** Detect the real container type from magic bytes. Returns null when unknown.
+ * ".html" is a sentinel meaning "got an HTML page instead of a document". */
+function sniffExtension(buffer: Buffer, mimeType: string): string | null {
+  if (buffer.length < 4) return null;
+  if (buffer.subarray(0, 4).toString("latin1") === "%PDF") return ".pdf";
+  if (buffer.readUInt32LE(0) === 0x04034b50) {
+    if (mimeType.includes("wordprocessingml") || mimeType.includes("msword")) return ".docx";
+    return ".xlsx";
+  }
+  if (buffer[0] === 0x3c) {
+    const head = buffer.subarray(0, 500).toString("utf-8").toLowerCase();
+    if (head.includes("<html") || head.includes("<!doctype html")) return ".html";
+  }
+  return null;
+}
+
 async function parseBuffer(
   buffer: Buffer,
   ext: string,
@@ -179,8 +197,17 @@ export async function browserOfficeParse(
     }
 
     const { base64, mimeType } = fetchResult;
-    const ext = inferExtension(url, mimeType);
     const buffer = Buffer.from(base64, "base64");
+    const sniffed = sniffExtension(buffer, mimeType);
+    if (sniffed === ".html") {
+      return {
+        success: false,
+        source: url,
+        type: "html",
+        error: "URL returned an HTML page, not a document — the link may be behind a login or not a direct download",
+      };
+    }
+    const ext = sniffed ?? inferExtension(url, mimeType);
 
     logDebug(`[Office] URL fetch: ${url} → ${ext} (${buffer.length} bytes, mime=${mimeType})`);
     logAction("browser_office_parse", ext, `Parsing ${url} (${buffer.length} bytes)`);
@@ -207,11 +234,25 @@ export async function browserOfficeParse(
       return { success: false, source: filename, type: "unknown", error: `File not found: ${filename}` };
     }
 
-    const ext = path.extname(filename).toLowerCase();
-    logAction("browser_office_parse", ext, `Parsing local file ${filename}`);
-
     const buffer = fs.readFileSync(filePath);
-    return parseBuffer(buffer, ext, filename, max_rows, max_chars);
+    const ext = path.extname(filename).toLowerCase();
+    let resolvedExt = ext;
+    if (!SUPPORTED_EXTENSIONS.includes(ext)) {
+      const sniffed = sniffExtension(buffer, "");
+      if (sniffed === ".html") {
+        return {
+          success: false,
+          source: filename,
+          type: "html",
+          error: "File contains an HTML page, not a document — the download may be a login or error page",
+        };
+      }
+      if (sniffed) {
+        resolvedExt = sniffed;
+      }
+    }
+    logAction("browser_office_parse", resolvedExt, `Parsing local file ${filename}`);
+    return parseBuffer(buffer, resolvedExt, filename, max_rows, max_chars);
   }
 
   return { success: false, source: "", type: "unknown", error: "Unreachable" };

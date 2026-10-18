@@ -73,9 +73,6 @@ const toolThoughts: Record<string, string[]> = {
   'browser_automation': ['Running automation...', 'Executing workflow...', 'Processing sequence...'],
   'browser_performance': ['Profiling performance...', 'Measuring layout shifts...', 'Analyzing render time...'],
   
-  // GitHub Integration
-  'browser_github': ['Inspecting GitHub...', 'Fetching git metadata...', 'Analyzing repository...'],
-  
   // System
   'browser_upload': ['Uploading file...', 'Transferring data...', 'Sending payload...'],
   // browser_feedback merged into browser_thought

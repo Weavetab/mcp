@@ -1,6 +1,6 @@
 /**
  * Weavetab — server.ts
- * MCP server: 42 browser automation tools with security, rate limiting, and visual overlay.
+ * MCP server: 41 browser automation tools with security, rate limiting, and visual overlay.
  * Weavetab by fy2ne
  */
 
@@ -63,14 +63,12 @@ import { getSiteProfile, learnPattern, recordPatternExecution, recordQuirk, getP
 import { discoverPlugins } from "./plugin/loader.js";
 import type { WeavetabPlugin } from "./plugin/interface.js";
 import { hookPipeline } from "./plugin/pipeline.js";
+import { toPluginInputShape } from "./plugin/schema.js";
 import { agentAction } from "./sensors/pacing.js";
 import { getCachedConfig, getElectronApps } from "./config/loader.js";
 import { agentState } from "./state/agent.js";
 import { SessionSecretTracker } from "./security/secrets.js";
 import { sessionRegistry } from "./state/session.js";
-
-// GitHub tools
-import { browserGithub } from "./tools/github/index.js";
 
 // Office document tools
 import { browserOfficeParse, browserOfficeList } from "./tools/office/index.js";
@@ -82,7 +80,7 @@ type ToolHandler<T> = (session: any, config: Config) => Promise<T>;
 const ROLE_TOOL_ALLOW: Record<string, Set<string>> = {
   admin: new Set(["*"]),
   operator: new Set(["*"]),
-  viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait", "browser_pattern_learn", "browser_github"]),
+  viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait", "browser_pattern_learn"]),
   automation: new Set(["*"]), // Allowed all except interactive tools (enforced in isToolAllowedForRole)
   system: new Set(["browser_thoughts", "browser_detect", "browser_performance", "browser_checkpoint", "browser_pattern_learn"]),
 };
@@ -95,7 +93,7 @@ function isToolAllowedForRole(role: Role, toolName: string): { allowed: boolean;
   if (!allowed) return { allowed: true };
   if (allowed.has("*")) return { allowed: true };
   if (allowed.has(toolName)) return { allowed: true };
-  return { allowed: false, reason: `Role '${role}' does not have permission to use '${toolName}'. ${role === "viewer" ? "Viewer role only permits read-only tools (map/find/scrape/console/eval/inspect/snapshot/pdf/cookies/browser_github)." : ""}` };
+  return { allowed: false, reason: `Role '${role}' does not have permission to use '${toolName}'. ${role === "viewer" ? "Viewer role only permits read-only tools (map/find/scrape/console/eval/inspect/snapshot/pdf/cookies)." : ""}` };
 }
 
 /** Push a rich log card to every active browser session's overlay. Only shown when devMode is on. */
@@ -206,7 +204,8 @@ async function withSecurity<T>(
   toolName: string,
   handler: ToolHandler<T>,
   isOfficial = false,
-  targetApp?: string
+  targetApp?: string,
+  requiresSession = true
 ): Promise<{ content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> }> {
   const liveConfig = getCachedConfig();
 
@@ -223,81 +222,86 @@ async function withSecurity<T>(
     }
   }
 
-  const resolvedTargetApp = inferTargetApp(targetApp);
+  const resolvedTargetApp = requiresSession ? inferTargetApp(targetApp) : undefined;
 
-  const { session } = await withTimeoutGuard(() => getOrConnect(liveConfig, resolvedTargetApp), 15000, `CDP Connection (${toolName}${resolvedTargetApp ? `:${resolvedTargetApp}` : ''})`);
-  agentState.setSession(session);
+  let session: any;
+  if (requiresSession) {
+    ({ session } = await withTimeoutGuard(() => getOrConnect(liveConfig, resolvedTargetApp), 15000, `CDP Connection (${toolName}${resolvedTargetApp ? `:${resolvedTargetApp}` : ''})`));
+    agentState.setSession(session);
+  }
   (global as any).__wt_live_config = liveConfig;
 
-  try {
-    const stopCheck = await session.Runtime.evaluate({
-      expression: 'window.__wt_stop_requested===true',
-      returnByValue: true,
-    });
-    if (stopCheck?.result?.value === true) {
-      await session.Runtime.evaluate({ expression: 'window.__wt_stop_requested=false;' }).catch(()=>{});
-      const { sendToExtension } = await import("./cdp/helpers.js");
-      await sendToExtension(session, { type: 'Weavetab_GROUP_STATE', state: 'idle' }).catch(()=>{});
-      await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } }).catch(()=>{});
-      await sendToExtension(session, { type: 'Weavetab_CLEAR_THOUGHT' }).catch(()=>{});
-      agentState.reportTransportClosed();
-      throw new Error('[!] mission stopped by user via HUD.');
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message.startsWith('[!]')) throw e;
-  }
-
-  if (!isOfficial) {
-    // Phase 7c: Domain policy check for read-only / deny / audit-only modes
-    const activeClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
-    if (activeClient?.url && !activeClient.isElectron) {
-      const domainCheck = checkDomain(activeClient.url, liveConfig);
-      if (!domainCheck.allowed) {
-        throw new Error(`[!] ${domainCheck.reason}`);
-      }
-      if (domainCheck.mode === "deny") {
-        throw new Error(`[!] Domain denied by policy`);
-      }
-      if (domainCheck.mode === "read-only") {
-        const toolCheck = isToolAllowedInMode(toolName, "read-only");
-        if (!toolCheck.allowed) {
-          throw new Error(`[!] ${toolCheck.reason}`);
-        }
-      }
-    }
-  }
-
   const { sendToExtension } = await import("./cdp/helpers.js");
-  // Push config to extension once per session (idempotent, ignored if already set)
-  sendToExtension(session, {
-    type: 'Weavetab_CONFIG',
-    groupTabs: (liveConfig as any).groupTabs,
-    devMode: liveConfig.devMode,
-  }).catch(() => {});
-  if (liveConfig.devMode) {
-    sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'Mission Running', detail: toolName } }).catch(() => {});
-  }
-
   const chatMessages: string[] = [];
-  try {
-    const { result: hasMsg } = await session.Runtime.evaluate({
-      expression: 'window.__wt_chat_queue&&window.__wt_chat_queue.length>0',
-      returnByValue: true,
-    });
-    if (hasMsg?.value === true) {
-      const { result: qResult } = await session.Runtime.evaluate({
-        expression: `(function(){ const q=window.__wt_chat_queue||[];window.__wt_chat_queue=[];return JSON.stringify(q); })()`,
+
+  if (requiresSession) {
+    try {
+      const stopCheck = await session.Runtime.evaluate({
+        expression: 'window.__wt_stop_requested===true',
         returnByValue: true,
       });
-      const raw = qResult?.value as string | undefined;
-      if (raw && raw !== '[]') {
-        chatMessages.push(...JSON.parse(raw));
-        for (const msg of chatMessages) {
-          logAction('chat_queue', toolName, msg);
+      if (stopCheck?.result?.value === true) {
+        await session.Runtime.evaluate({ expression: 'window.__wt_stop_requested=false;' }).catch(()=>{});
+        await sendToExtension(session, { type: 'Weavetab_GROUP_STATE', state: 'idle' }).catch(()=>{});
+        await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } }).catch(()=>{});
+        await sendToExtension(session, { type: 'Weavetab_CLEAR_THOUGHT' }).catch(()=>{});
+        agentState.reportTransportClosed();
+        throw new Error('[!] mission stopped by user via HUD.');
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('[!]')) throw e;
+    }
+
+    if (!isOfficial) {
+      // Phase 7c: Domain policy check for read-only / deny / audit-only modes
+      const activeClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
+      if (activeClient?.url && !activeClient.isElectron) {
+        const domainCheck = checkDomain(activeClient.url, liveConfig);
+        if (!domainCheck.allowed) {
+          throw new Error(`[!] ${domainCheck.reason}`);
+        }
+        if (domainCheck.mode === "deny") {
+          throw new Error(`[!] Domain denied by policy`);
+        }
+        if (domainCheck.mode === "read-only") {
+          const toolCheck = isToolAllowedInMode(toolName, "read-only");
+          if (!toolCheck.allowed) {
+            throw new Error(`[!] ${toolCheck.reason}`);
+          }
         }
       }
     }
-  } catch { /* non-fatal */ }
+
+    // Push config to extension once per session (idempotent, ignored if already set)
+    sendToExtension(session, {
+      type: 'Weavetab_CONFIG',
+      groupTabs: (liveConfig as any).groupTabs,
+      devMode: liveConfig.devMode,
+    }).catch(() => {});
+    if (liveConfig.devMode) {
+      sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'Mission Running', detail: toolName } }).catch(() => {});
+    }
+
+    try {
+      const { result: hasMsg } = await session.Runtime.evaluate({
+        expression: 'window.__wt_chat_queue&&window.__wt_chat_queue.length>0',
+        returnByValue: true,
+      });
+      if (hasMsg?.value === true) {
+        const { result: qResult } = await session.Runtime.evaluate({
+          expression: `(function(){ const q=window.__wt_chat_queue||[];window.__wt_chat_queue=[];return JSON.stringify(q); })()`,
+          returnByValue: true,
+        });
+        const raw = qResult?.value as string | undefined;
+        if (raw && raw !== '[]') {
+          chatMessages.push(...JSON.parse(raw));
+          for (const msg of chatMessages) {
+            logAction('chat_queue', toolName, msg);
+          }
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
 
   // Emit a "started" info log so the user sees the tool immediately
   const argsPreview = '(executing…)';
@@ -361,7 +365,9 @@ async function withSecurity<T>(
         true
       );
 
-      await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `[OK] ${toolName} (${ms}ms${tokenStr})` } });
+      if (session) {
+        await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `[OK] ${toolName} (${ms}ms${tokenStr})` } });
+      }
     }
 
     // ── Image block output: return proper MCP image block for screenshot results ──
@@ -380,14 +386,15 @@ async function withSecurity<T>(
     if (resultAny && typeof resultAny === 'object' && typeof resultAny.dataUrl === 'string' && resultAny.dataUrl.startsWith('data:')) {
       const dataUrl = resultAny.dataUrl as string;
       const mimeMatch = dataUrl.match(/^data:([^;]+);base64,/);
-      const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
-      const base64Data = dataUrl.replace(/^data:[^;]+;base64,/, '');
-      // Return metadata (without the giant dataUrl) + native image block
+      const base64Data = mimeMatch ? dataUrl.slice(mimeMatch[0].length) : '';
+      const isB64 = base64Data.length > 0 && base64Data.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(base64Data);
       const { dataUrl: _omit, ...metaOnly } = resultAny;
       content = [
         { type: "text" as const, text: JSON.stringify(metaOnly) },
-        { type: "image" as const, data: base64Data, mimeType },
       ];
+      if (mimeMatch && isB64) {
+        content.push({ type: "image" as const, data: base64Data, mimeType: mimeMatch[1] });
+      }
     } else if (resultAny && typeof resultAny === 'object' && Array.isArray(resultAny.content)) {
       // Passthrough if already conforming McpToolResult (prevents double JSON wrapping)
       content = resultAny.content;
@@ -476,7 +483,9 @@ async function withSecurity<T>(
         true
       );
 
-      await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `[ERR] ${toolName} Error` } });
+      if (session) {
+        await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `[ERR] ${toolName} Error` } });
+      }
     }
     throw err;
   }
@@ -540,7 +549,9 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
     "Snapshot interactive DOM with volatile ref IDs that invalidate after DOM mutations. For complex SPAs (e.g. GitHub dashboards), use `scope` or `query` to reduce tokens. For forms/pagination/sequential loops, ALWAYS use `delta: true` to save 97% tokens. For canvas/WebGL/Figma pages where the DOM has < 5 interactive elements, use `visual: \"auto\"` to get a numbered screenshot — then use browser_click({ mark: N }) to interact.",
     {
       full: z.boolean().optional().describe("Set to true to return a full markdown table (heavier context) instead of the lite list."),
-      scope: z.enum(["navigation", "main_content", "sidebar", "form", "modal", "utility"]).optional().describe("Restrict parsing to a semantic page area to save tokens. Useful on dense dashboards."),
+      lite: z.boolean().optional().describe("Return a compact, token-optimized interactive element list."),
+      limit: z.number().optional().describe("Maximum number of elements to return."),
+      scope: z.enum(["navigation", "main_content", "main", "sidebar", "form", "modal", "utility"]).optional().describe("Restrict parsing to a semantic page area to save tokens. Useful on dense dashboards. 'main' is an alias for 'main_content'."),
       query: z.string().optional().describe("Filter returned elements by label or role substring. Useful on dense dashboards."),
       delta: z.boolean().optional().describe("Diff mode: return ONLY elements that changed since the last browser_map call (added, removed, or modified). Diffs across time — distinct from prune. Cuts prompt tokens by up to 97% on consecutive calls."),
       ax_tree: z.boolean().optional().describe("Bypass the extension entirely and read raw Chrome Accessibility Tree. Use this if Shadow DOMs hide elements."),
@@ -638,7 +649,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
             targetId = args.tab_id;
           }
           if (args.url) {
-            const navResult = await agentAction(targetSession, 'navigating', () => weaveNavigate(targetSession, args.url!, liveConfig, targetId, args.force), 'browser_navigate');
+            const navResult = await agentAction(targetSession, 'navigating', () => weaveNavigate(targetSession, args.url!, liveConfig, targetId, args.force, false, resolvedApp), 'browser_navigate');
             await hookPipeline.dispatchPageNavigate(args.url, targetSession);
             return navResult;
           }
@@ -658,7 +669,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       selector: z.string().optional().describe("CSS selector of the element to click."),
       target: z.string().optional().describe("CSS selector or query string. Alias for selector."),
       label: z.string().optional().describe("Visible text or aria-label to click."),
-      intent: z.string().optional().describe("Semantic description of the action (e.g. 'submit login form'). WeaveTab checks learned memory first — if a high-confidence selector is found it clicks immediately without DOM resolution. Falls through to normal resolution on a miss; does not error."),
+      intent: z.string().optional().describe("Semantic description of the action (e.g. 'submit login form'). Weavetab checks learned memory first — if a high-confidence selector is found it clicks immediately without DOM resolution. Falls through to normal resolution on a miss; does not error."),
       mark: z.number().int().positive().optional().describe("Mark number from browser_map({ visual: true/\"auto\" }). Clicks the center of the numbered badge seen in the annotated screenshot. Zero DOM walk — instant coordinate dispatch. Use when the page is canvas/WebGL and DOM refs are unavailable."),
       backendNodeId: z.number().optional().describe("Raw CDP backendNodeId for direct hardware targeting."),
       x: z.number().optional().describe("Raw X coordinate. Use for precise positional clicks when element ID is not available."),
@@ -788,6 +799,9 @@ server.tool(
       label: z.string().optional().describe("Element label to scroll into view."),
       direction: z.enum(["up", "down", "left", "right"]).describe("Scroll direction."),
       distance: z.number().optional().describe("Pixels to scroll (default 400)."),
+      pixels: z.number().optional().describe("Alias for distance."),
+      amount: z.number().optional().describe("Alias for distance."),
+      speed: z.enum(["human", "read", "fast"]).optional().describe("Scroll animation speed profile."),
       tab_id: z.string().optional().describe("Execute in a specific tab instead of active. DO NOT SPAM. If action fails or loops, STOP calling this tool and use browser_map to re-evaluate the page state."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -804,6 +818,7 @@ server.tool(
           if (args.ref && !normalizedArgs.id) normalizedArgs.id = args.ref;
           if (args.selector && !normalizedArgs.id) normalizedArgs.id = args.selector;
           if (args.target && !normalizedArgs.id) normalizedArgs.id = args.target;
+          normalizedArgs.distance = args.distance ?? args.pixels ?? args.amount ?? 400;
           return await browserScroll(targetSession, normalizedArgs, liveConfig);
         }, false, args.app);
       } catch (e) { return wrapError(e); }
@@ -879,23 +894,23 @@ server.tool(
         return await withSecurity(config, "browser_tabs", async (_, liveConfig) => {
           if (action === "list") return await WeavetabList(liveConfig, resolvedApp);
           if (action === "open") {
-            if (!url) throw new Error("url is required for action: open");
+            if (!url) return { success: false, error_code: "MISSING_PARAM", message: "url is required for action: open" };
             return await WeavetabOpen(url, liveConfig, reuse !== false, resolvedApp);
           }
           if (action === "switch") {
-            if (!tabId) throw new Error("tabId is required for action: switch");
+            if (!tabId) return { success: false, error_code: "MISSING_PARAM", message: "tabId is required for action: switch" };
             return await WeavetabSwitch(tabId, liveConfig, resolvedApp);
           }
           if (action === "close") {
             if (tabIds && tabIds.length > 0) return await WeavetabCloseBatch(tabIds, liveConfig, force, resolvedApp);
-            if (!tabId) throw new Error("tabId or tabIds is required for action: close");
+            if (!tabId) return { success: false, error_code: "MISSING_PARAM", message: "tabId or tabIds is required for action: close" };
             return await WeavetabClose(tabId, liveConfig, force, resolvedApp);
           }
           if (action === "list_windows") {
             return await weaveWindowList(liveConfig, resolvedApp);
           }
           if (action === "focus_window") {
-            if (windowId === undefined) throw new Error("windowId is required for action: focus_window");
+            if (windowId === undefined) return { success: false, error_code: "MISSING_PARAM", message: "windowId is required for action: focus_window" };
             return await weaveFocusWindow(windowId, liveConfig, resolvedApp);
           }
           if (action === "consolidate") {
@@ -904,7 +919,7 @@ server.tool(
           if (action === "heal") {
             return await WeavetabHeal(liveConfig, resolvedApp);
           }
-          throw new Error("Invalid action");
+          return { success: false, error_code: "INVALID_ACTION", message: `Invalid action: ${action}` };
         }, false, resolvedApp);
       } catch (e) { return wrapError(e); }
     }
@@ -1059,8 +1074,11 @@ server.tool(
   // ── 14. browser_select ───────────────────────────────────────────────────────
   server.tool(
     "browser_select",
-    "Select an option from a native dropdown.",
+    "Select an option from a native dropdown or custom UI dropdown.",
     {
+      id: z.string().optional().describe("Element ref ID (e.g. 'w:42') or selector."),
+      ref: z.string().optional().describe("Alias for id."),
+      target: z.string().optional().describe("Alternative selector or ref ID."),
       nodeId: z.number().optional().describe("CDP backendNodeId."),
       selector: z.string().optional().describe("CSS Selector."),
       value: z.string().describe("The exact text value to select."),
@@ -1069,7 +1087,10 @@ server.tool(
     async (args) => {
       try {
         return await withSecurity(config, "browser_select", async (session, liveConfig) => {
-          return await browserSelect(session, args, liveConfig);
+          const normalized = { ...args };
+          if (args.ref && !normalized.id) normalized.id = args.ref;
+          if (args.target && !normalized.id) normalized.id = args.target;
+          return await browserSelect(session, normalized, liveConfig);
         }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
@@ -1188,8 +1209,8 @@ server.tool(
     "Manage localStorage and sessionStorage.",
     {
       scope: z.enum(["local", "session"]).describe("Storage scope to manipulate."),
-      action: z.enum(["get", "set", "clear"]).describe("Action to perform on the storage."),
-      key: z.string().optional().describe("Key name (required for 'get' and 'set' actions)."),
+      action: z.enum(["get", "set", "remove", "list", "clear"]).describe("'get'/'set' a key, 'remove' a single key, 'list' all keys with values, or 'clear' the scope."),
+      key: z.string().optional().describe("Key name (required for 'get', 'set', and 'remove' actions)."),
       value: z.string().optional().describe("String value (required for 'set' action)."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -1205,7 +1226,7 @@ server.tool(
   // ── 24. browser_network_intercept ───────────────────────────────────────────
   server.tool(
     "browser_network_intercept",
-    `Intercept/stub network responses (e.g. mock APIs, block tracking) OR retrieve detailed raw protocol network telemetry (TLS/SSL certificate info, microsecond timing breakdown, and OS-level failure reasons).`,
+    `Intercept/stub network responses (e.g. mock APIs) OR retrieve captured network telemetry: per-request TLS/SSL certificate details (when the connection exposes them), millisecond timing phases, and failure reasons.`,
     {
       action: z.enum(["enable", "disable", "get_telemetry", "clear_telemetry"]).describe("Action to perform: 'enable'/'disable' network response interception, 'get_telemetry' to read captured requests with TLS/SSL certs & timing breakdown, or 'clear_telemetry' to reset buffer."),
       pattern: z.string().optional().describe("URL glob pattern to intercept or filter telemetry (e.g. '*api/login*')."),
@@ -1252,6 +1273,15 @@ server.tool(
       landscape: z.boolean().optional().describe("Print in landscape orientation (default false)."),
       scale: z.number().optional().describe("Scale factor (default 1.0)."),
       pageRanges: z.string().optional().describe("Page ranges to print (e.g. '1-5'). Leave empty for all pages."),
+      margin: z.union([
+        z.number(),
+        z.object({
+          top: z.number().optional(),
+          bottom: z.number().optional(),
+          left: z.number().optional(),
+          right: z.number().optional()
+        })
+      ]).optional().describe("Page margin in inches (default 0.4). Pass a single number (all sides) or an object {top,bottom,left,right}."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1293,6 +1323,10 @@ server.tool(
       value: z.string().optional().describe("Cookie value (required for 'set')."),
       domain: z.string().optional().describe("Domain for the cookie."),
       path: z.string().optional().describe("Path for the cookie."),
+      expires: z.number().optional().describe("Expiry as a Unix timestamp in seconds (omit for a session cookie)."),
+      httpOnly: z.boolean().optional().describe("Set the HttpOnly flag (default false)."),
+      secure: z.boolean().optional().describe("Set the Secure flag (auto-true for https pages)."),
+      sameSite: z.enum(["Strict", "Lax", "None"]).optional().describe("SameSite attribute."),
       url: z.string().optional().describe("URL scope for 'get' action (defaults to current page)."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -1355,6 +1389,7 @@ server.tool(
     {
       action: z.enum(["capture", "restore"]).describe("Action to perform."),
       filePath: z.string().describe("Absolute file path to save/load the .mhtml snapshot."),
+      hideOverlay: z.boolean().optional().describe("If false, keeps the Weavetab HUD and overlay visible in snapshot. Default true."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1380,6 +1415,7 @@ server.tool(
         width: z.number().describe("Width of clip region."),
         height: z.number().describe("Height of clip region.")
       }).optional().describe("Clip region. Use to capture only part of the page (e.g. just a chart area) to reduce token cost."),
+      selector: z.string().optional().describe("CSS selector of an element to crop the capture to (its bounding rect)."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1394,13 +1430,21 @@ server.tool(
   // ── 33. browser_viewport ────────────────────────────────────────────────────
   server.tool(
     "browser_viewport",
-    "Set viewport dimensions and device emulation.",
+    "Set viewport dimensions and device emulation (device presets, geolocation, locale, timezone, color scheme, touch, orientation).",
     {
-      action: z.enum(["set", "clear"]).describe("Action to perform."),
+      action: z.enum(["set", "clear", "list", "preset"]).describe("'set' viewport/emulation, 'clear' all overrides, 'list' available device presets, 'preset' apply a named device."),
       width: z.number().optional().describe("Viewport width in pixels."),
       height: z.number().optional().describe("Viewport height in pixels."),
       deviceScaleFactor: z.number().optional().describe("Device Pixel Ratio (default 1)."),
       mobile: z.boolean().optional().describe("Whether to emulate a mobile device (default false)."),
+      devicePreset: z.string().optional().describe("Device preset name for action='preset' (see action='list')."),
+      userAgent: z.string().optional().describe("Override the User Agent string."),
+      geolocation: z.object({ latitude: z.number(), longitude: z.number(), accuracy: z.number().optional() }).optional().describe("Override geolocation coordinates."),
+      locale: z.string().optional().describe("Override locale (e.g. 'en-US')."),
+      timezoneId: z.string().optional().describe("Override timezone (e.g. 'America/New_York')."),
+      colorScheme: z.enum(["light", "dark", "no-preference"]).optional().describe("Emulate prefers-color-scheme."),
+      hasTouch: z.boolean().optional().describe("Whether to emulate touch support (defaults to the 'mobile' flag)."),
+      screenOrientation: z.enum(["portrait", "landscape", "none"]).optional().describe("Emulated screen orientation."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1535,14 +1579,15 @@ server.tool(
   // ── browser_performance ───────────────────────────────────────────────────
   server.tool(
     "browser_performance",
-    "Retrieve page performance metrics.",
+    "Retrieve page performance metrics: Core Web Vitals (FCP, LCP, CLS, INP, TTFB), JS heap memory, navigation timing, slowest resources, and raw CDP counters.",
     {
+      metrics: z.array(z.enum(["vitals", "memory", "navigation", "resources", "raw"])).optional().describe("Sections to return. Defaults to all sections."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_performance", async (session, liveConfig) => {
-          const result = await browserPerformance(session, liveConfig);
+          const result = await browserPerformance(session, liveConfig, args as any);
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }, false, args.app);
       } catch (e) { return wrapError(e); }
@@ -1635,6 +1680,9 @@ server.tool(
           if (!args.name) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "name is required for action='record_execution'" }) }] };
           if (args.success === undefined) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "success (boolean) is required for action='record_execution'" }) }] };
           const updated = await recordPatternExecution(args.origin, args.name, args.success, args.duration_ms);
+          if (!updated) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, error_code: "PATTERN_NOT_FOUND", message: `No pattern named '${args.name}' exists for origin '${args.origin}'. Learn it first with action='learn'.` }) }] };
+          }
           return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, pattern: updated }) }] };
         }
 
@@ -1655,30 +1703,6 @@ server.tool(
 
 
 
-
-  // ── GitHub Tool (v2.5.0 Consolidated) ──────────────────────────────────
-  server.tool(
-    "browser_github",
-    "Interact with GitHub repositories without burning browser turns. Analyze repo trees, read raw source files, search/inspect issues, and examine PR diffs and review comments.",
-    {
-      action: z.enum(["analyze", "read", "issues", "pr"]).describe("GitHub operation: 'analyze' (repo structure & README), 'read' (raw file contents), 'issues' (list/search/inspect issues), 'pr' (PR details, diff files & comments)."),
-      repo: z.string().optional().describe("Optional 'owner/repo' slug or GitHub URL. If omitted, uses active tab's repository."),
-      paths: z.array(z.string()).optional().describe("For action: 'read'. File paths relative to repo root."),
-      line_range: z.array(z.number()).length(2).optional().describe("For action: 'read'. Optional [start, end] line range (1-indexed)."),
-      number: z.number().optional().describe("For action: 'issues' or 'pr'. Issue or PR number to fetch details and comments."),
-      search: z.string().optional().describe("For action: 'issues'. Search query to find issues."),
-      labels: z.array(z.string()).optional().describe("For action: 'issues'. Filter issues by labels."),
-      state: z.enum(["open", "closed", "all"]).optional().describe("For action: 'issues'. Filter issues by state."),
-      limit: z.number().optional().describe("For action: 'issues'. Max number of issues to list (default 5).")
-    },
-    async (args) => {
-      try {
-        return await withSecurity(config, "browser_github", async (session, liveConfig) => {
-          return await browserGithub(session, args as any, liveConfig);
-        });
-      } catch (e) { return wrapError(e); }
-    }
-  );
 
   // ── 43. browser_office ──────────────────────────────────────────────────────
   server.tool(
@@ -1754,6 +1778,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
         accuracy: z.number().optional(),
       }).optional().describe("Override geolocation coordinates"),
       timezoneId: z.string().optional().describe("Override browser timezone (e.g. 'America/New_York')"),
+      colorScheme: z.enum(["light", "dark", "no-preference"]).optional().describe("Emulate prefers-color-scheme (dark/light mode)."),
       userAgent: z.string().optional().describe("Override User Agent string"),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -1799,7 +1824,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
         return {
           messages: [{
             role: "user",
-            content: { type: "text", text: "No active WeaveTab session found. Open a browser tab and navigate to a page first." }
+            content: { type: "text", text: "No active Weavetab session found. Open a browser tab and navigate to a page first." }
           }]
         };
       }
@@ -1872,7 +1897,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
 
       // 4. Assemble the prompt text
       const promptText = [
-        `# 🌐 WeaveTab Context: ${title ?? "(unknown)"}`,
+        `# 🌐 Weavetab Context: ${title ?? "(unknown)"}`,
         `**URL:** \`${url ?? "(unknown)"}\``,
         pageContextStr,
         frameworkHint,
@@ -1967,7 +1992,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
 
       const existingTool = (server as any)._registeredTools?.[ov.name];
       const existingDesc = existingTool?.description || "";
-      const existingSchema = existingTool?.parameters?.shape || {};
+      const existingSchema = existingTool?.inputSchema?.shape || existingTool?.parameters?.shape || {};
 
       if (existingTool) {
         delete (server as any)._registeredTools[ov.name];
@@ -1976,7 +2001,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       server.tool(
         ov.name,
         ov.description || existingDesc || `Tool overridden by ${plugin.name}`,
-        ov.schema || existingSchema,
+        ov.schema ? toPluginInputShape(ov.schema) : existingSchema,
         async (args: any) => {
           try {
             return await withSecurity(
@@ -2021,7 +2046,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       server.tool(
         td.name,
         td.description,
-        (td.schema as any) || (td as any).parameters || {},
+        toPluginInputShape((td as any).schema || (td as any).parameters),
         async (args: any) => {
           try {
             return await withSecurity(
@@ -2031,7 +2056,9 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
                 const result = await td.handler(args, session, liveConfig);
                 return result;
               },
-              isOfficial
+              isOfficial,
+              undefined,
+              (td as any).requiresSession !== false
             );
           } catch (e) {
             return wrapError(e);
@@ -2053,7 +2080,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
           process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic tool "${tool.name}" replaced an existing tool.\x1b[0m\n`);
           delete (server as any)._registeredTools[tool.name];
         }
-        server.tool(tool.name, tool.description || "", tool.schema || tool.parameters || {}, async (args: any) => {
+        server.tool(tool.name, tool.description || "", toPluginInputShape(tool.schema || tool.parameters), async (args: any) => {
           return await withSecurity(
             config,
             tool.name,
@@ -2061,7 +2088,9 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
               const result = await tool.handler(args, session, liveConfig);
               return result;
             },
-            isOfficial
+            isOfficial,
+            undefined,
+            tool.requiresSession !== false
           );
         });
       };

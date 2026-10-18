@@ -8,6 +8,8 @@ import {
 import { inspectInstalledPackage } from "../../src/plugin/loader.js";
 import { PluginStorageManager } from "../../src/plugin/storage.js";
 import { PluginExtensionBridge } from "../../src/plugin/extension_bridge.js";
+import { toPluginInputShape } from "../../src/plugin/schema.js";
+import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -184,5 +186,45 @@ describe("Plugin Extension Bridge", () => {
       async () => bridge.injectStyles({} as any, "body { color: red; }"),
       /Permission Denied/i,
     );
+  });
+});
+
+// ─── Tool Schema Normalizer ───────────────────────────────────────────────────
+
+describe("toPluginInputShape", () => {
+  it("passes a Zod raw shape through unchanged", () => {
+    const shape = { name: z.string(), count: z.number() };
+    const result = toPluginInputShape(shape);
+    assert.strictEqual(result, shape);
+  });
+
+  it("extracts the shape from a Zod object schema", () => {
+    const result = toPluginInputShape(z.object({ name: z.string() }));
+    assert.ok(result.name);
+    assert.strictEqual(typeof (result.name as any).parse, "function");
+    assert.strictEqual(Object.keys(result).length, 1);
+  });
+
+  it("converts a plain JSON Schema object into a Zod raw shape", () => {
+    const result = toPluginInputShape({
+      type: "object",
+      properties: {
+        selector: { type: "string", description: "CSS selector" },
+        limit: { type: "number" },
+        dryRun: { type: "boolean" },
+      },
+      required: ["selector"],
+    });
+    assert.strictEqual(Object.keys(result).length, 3);
+    assert.strictEqual(result.selector.safeParse("a").success, true);
+    assert.strictEqual(result.limit.safeParse(5).success, true);
+    assert.strictEqual(result.dryRun.safeParse(true).success, true);
+    assert.strictEqual(result.selector.description, "CSS selector");
+  });
+
+  it("returns an empty shape for null/empty/unknown input", () => {
+    assert.deepStrictEqual(toPluginInputShape(undefined), {});
+    assert.deepStrictEqual(toPluginInputShape({}), {});
+    assert.deepStrictEqual(toPluginInputShape({ foo: "bar" }), {});
   });
 });

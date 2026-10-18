@@ -1,6 +1,6 @@
 ---
 title: "Folder Hierarchy"
-description: ".weavetab, .weavetab-system, and ~/.weavetab directory structure."
+description: ".weavetab and .weavetab-system directory structure."
 product: mcp
 section: configuration
 icon: FolderOpen
@@ -9,47 +9,54 @@ slug: folders
 
 # Workspace & System Directories
 
-Weavetab strictly partitions project-scoped output, global configurations, and system-level intelligence data into dedicated directory structures.
+Weavetab strictly partitions project-scoped credentials, global user configuration, and machine-managed system intelligence into dedicated directory structures.
 
 ## 1. Project-Scoped Directory: `./.weavetab/`
 
-Created in your current working directory to store project-scoped settings and mission output:
+Optional, created in your current working directory to carry project-scoped credentials alongside a checkout:
 
 ```
 ./.weavetab/
-├── config.json          # Project-specific config overrides
-├── secrets.json         # Project-scoped credentials for Blind Injection
-├── pdfs/                # Exported PDF documents
-├── screenshots/         # Full-page and clipped PNG/JPEG screenshots
-├── downloads/           # Downloaded files during automated sessions
-├── designs/             # Extracted design tokens and Tailwind themes
-└── logs/                # Human-readable logs and JSONL audit trails
+└── secrets.json         # Project-scoped credentials for Blind Injection (override the global file)
 ```
 
-## 2. System Intelligence Directory: `~/.weavetab-system/`
+Keys in a project `secrets.json` take precedence over `~/.weavetab/secrets.json` when Weavetab runs from that directory. All other configuration and output paths are global (see below) unless overridden via config fields.
 
-Global system directory holding cross-session learning and process locks:
+## 2. Global User Directory: `~/.weavetab/`
 
-```
-~/.weavetab-system/
-├── memory/                    # Per-domain frontend framework & strategy profiles (selector cache)
-│   └── sites/                 # Persistent site profiles: workflows, quirks & reliability scores
-├── sessions/
-│   └── context.json           # Rolling 50-action trail for loop detection
-├── apps/                      # Dedicated user profiles for Electron apps
-├── locks/                     # Process lockfiles (PID + TCP port validation)
-└── knowledge/                 # Domain-specific markdown knowledge hints
-```
-
-## 3. Global User Directory: `~/.weavetab/`
-
-Global user directory storing default configurations and global secrets:
+Global, user-authored configuration and default output directories:
 
 ```
 ~/.weavetab/
-├── config.json          # Global default configuration
+├── config.json          # Global configuration (domain policies, roles, output paths)
 ├── secrets.json         # Global secrets for Blind Injection
-├── policy.json          # Domain whitelist / blacklist rules
+├── knowledge/           # Domain-specific markdown knowledge hints
 ├── plugins/             # Isolated storage directories for installed plugins
-└── profile/             # Dedicated default Chromium browser profile
+├── downloads/           # Downloaded files (default output dir)
+├── pdfs/                # Exported PDF documents
+├── snapshots/           # Screenshots and MHTML snapshots
+├── recordings/          # Screen recordings (webp / gif / webm / mp4)
+└── designs/             # Extracted design tokens and Tailwind themes
+```
+
+Each output directory (`downloads`, `pdfs`, `snapshots`, `recordings`, `designs`) is overridable via its matching config path field.
+
+## 3. System Intelligence Directory: `~/.weavetab-system/`
+
+Machine-managed, cross-session state. Strictly separate from user configuration:
+
+```
+~/.weavetab-system/
+├── memory/                    # Per-domain selector confidence cache
+│   └── sites/                 # Persistent site profiles: workflows, quirks & reliability scores
+├── sessions/
+│   └── context.json           # Rolling action trail for loop detection
+├── checkpoints/               # Named browser-state checkpoints
+├── missions/                  # Mission state files
+├── apps/                      # Dedicated isolated profiles for Electron apps
+├── extension/                 # Installed browser extension build
+├── logs/                      # Mission logs: mission_<timestamp>.log / .jsonl (devMode only)
+├── locks/                     # Process lockfiles (PID + TCP port validation)
+├── secrets-key                # Local key used to encrypt stored secrets
+└── session-profile*/          # Isolated Chromium browser profiles (never your real profile)
 ```

@@ -29,7 +29,7 @@ export interface ScrollResult {
   scrolled: string;
   direction: string;
   distance: number;
-  new_visible_count: number;
+  new_visible_count?: number;
   dom_changed: boolean;
 }
 
@@ -56,11 +56,14 @@ export async function browserScroll(
     label?: string;
     direction: "up" | "down" | "left" | "right";
     distance?: number;
+    pixels?: number;
+    amount?: number;
     speed?: "human" | "read" | "fast";
   },
   config: Config
 ): Promise<ScrollResult | WeaveError> {
-  let { id, label, direction, distance = 400, speed = "human" } = args;
+  let { id, label, direction, speed = "human" } = args;
+  let distance = args.distance ?? args.pixels ?? args.amount ?? 400;
 
   if (distance < 0) {
     distance = Math.abs(distance);
@@ -190,12 +193,10 @@ export async function browserScroll(
     const totalPx = direction === 'down' ? distance : direction === 'up' ? -distance : 0;
     const totalPxX = direction === 'right' ? distance : direction === 'left' ? -distance : 0;
 
-    let map = getCachedActionMap(targetId, url);
-    if (!map) {
-      map = await buildActionMap(session, { lite: true }, targetId);
-      cacheActionMap(targetId, map);
+    const map = getCachedActionMap(targetId, url);
+    if (map) {
+      storeSnapshot(targetId, map.url, map.elements);
     }
-    storeSnapshot(targetId, map.url, map.elements);
 
     const viewportRes = await session.Runtime.evaluate({
       expression: `JSON.stringify({ x: window.innerWidth / 2, y: window.innerHeight / 2 })`,
@@ -231,7 +232,6 @@ export async function browserScroll(
     scrolled: id ?? label ?? "window",
     direction,
     distance,
-    new_visible_count: 0,
     dom_changed: true,
   };
 }

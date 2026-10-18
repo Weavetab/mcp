@@ -118,22 +118,17 @@ export class TelemetryCapture {
         // 2. Capture Network Timing Breakdown (DNS, TCP, SSL, Send, Wait)
         if (params.response.timing) {
           const t = params.response.timing;
-          const dnsMs = (t.dnsEnd > 0 && t.dnsStart >= 0) ? Math.max(0, t.dnsEnd - t.dnsStart) : 0;
-          const connectMs = (t.connectEnd > 0 && t.connectStart >= 0) ? Math.max(0, t.connectEnd - t.connectStart) : 0;
-          const sslMs = (t.sslEnd > 0 && t.sslStart >= 0) ? Math.max(0, t.sslEnd - t.sslStart) : 0;
-          const sendMs = (t.sendEnd > 0 && t.sendStart >= 0) ? Math.max(0, t.sendEnd - t.sendStart) : 0;
-          const waitMs = (t.receiveHeadersStart > 0 && t.sendEnd >= 0) ? Math.max(0, t.receiveHeadersStart - t.sendEnd) : 0;
+          const phases: NetworkTimingBreakdown = {};
+          if (t.dnsEnd > 0 && t.dnsStart >= 0) phases.dnsMs = Number((t.dnsEnd - t.dnsStart).toFixed(3));
+          if (t.connectEnd > 0 && t.connectStart >= 0) phases.connectMs = Number((t.connectEnd - t.connectStart).toFixed(3));
+          if (t.sslEnd > 0 && t.sslStart >= 0) phases.sslMs = Number((t.sslEnd - t.sslStart).toFixed(3));
+          if (t.sendEnd > 0 && t.sendStart >= 0) phases.sendMs = Number((t.sendEnd - t.sendStart).toFixed(3));
+          if (t.receiveHeadersStart > 0 && t.sendEnd > 0) phases.waitMs = Number((t.receiveHeadersStart - t.sendEnd).toFixed(3));
+          req.timing = phases;
 
-          req.timing = {
-            dnsMs: Number(dnsMs.toFixed(3)),
-            connectMs: Number(connectMs.toFixed(3)),
-            sslMs: Number(sslMs.toFixed(3)),
-            sendMs: Number(sendMs.toFixed(3)),
-            waitMs: Number(waitMs.toFixed(3)),
-          };
-
-          if (t.requestTime && t.receiveHeadersStart > 0) {
-            req._responseHeadersMonotonic = t.requestTime + (t.receiveHeadersStart / 1000);
+          const headersEnd = t.receiveHeadersEnd > 0 ? t.receiveHeadersEnd : t.receiveHeadersStart;
+          if (t.requestTime && headersEnd > 0) {
+            req._responseHeadersMonotonic = t.requestTime + (headersEnd / 1000);
           }
         }
       }
@@ -153,8 +148,6 @@ export class TelemetryCapture {
           if (req._responseHeadersMonotonic) {
             const downloadMs = (finishTimeMonotonic - req._responseHeadersMonotonic) * 1000;
             req.timing.downloadMs = Number(Math.max(0, downloadMs).toFixed(3));
-          } else {
-            req.timing.downloadMs = 0;
           }
         }
       }

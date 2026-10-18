@@ -1,6 +1,6 @@
 # Contributing to Weavetab MCP
 
-> **Version:** 2.5.0 (Beta) | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.5.1 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 Thank you for your interest in contributing to Weavetab, the production-grade MCP server for AI-driven browser automation.
 
@@ -51,7 +51,7 @@ If applicable, add screenshots to help explain your problem.
 **Environment:**
  - OS: [e.g. Windows 11, macOS 14, Ubuntu 22.04]
  - Node Version: [e.g. 18.17.0]
- - Weavetab Version: [e.g. 2.5.0]
+ - Weavetab Version: [e.g. 2.5.1]
  - Browser: [e.g. Chrome 126, Edge 126]
 
 **Additional Context**
@@ -217,8 +217,7 @@ src/
 │   ├── agent.ts          # Agent state machine (idle/weaving/stuck)
 │   ├── session.ts        # SessionRegistry & tab lifecycle
 │   └── cache.ts          # Mutation observer cache
-├── tools/          # Individual tool implementations (44+ tools)
-│   ├── github/           # GitHub API tools (analyze, read, issues, pr)
+├── tools/          # Individual tool implementations (41 tools)
 │   ├── read.ts           # browser_map
 │   ├── navigate.ts       # browser_navigate
 │   ├── click.ts          # browser_click
@@ -252,17 +251,15 @@ src/
 │   ├── network_intercept.ts  # browser_network_intercept
 │   ├── scrape.ts         # browser_scrape
 │   ├── recording.ts      # browser_recording
-│   ├── click_and_wait.ts # browser_click_and_wait
 │   ├── browser_detect.ts # browser_detect
 │   ├── performance.ts    # browser_performance
-│   ├── accessibility.ts  # browser_accessibility
 │   └── integration.test.ts
 ├── overlay/        # Shadow DOM UI injector
 │   ├── injector.ts       # Overlay installation & re-injection
 │   ├── ghost.ts          # Ghost cursor animation
 │   └── bubble.ts         # Thought bubble HUD
 ├── audit/          # Structured logging & telemetry
-│   ├── logger.ts         # Mission log files (audit.log, audit.jsonl)
+│   ├── logger.ts         # Mission log files (mission_<timestamp>.log, .jsonl)
 │   └── telemetry.ts      # Event broadcasting
 ├── plugin/         # Plugin interface and loader
 │   ├── interface.ts      # WeavetabPlugin type definition
@@ -278,7 +275,7 @@ src/
 │   ├── detector.ts       # CAPTCHA detection logic
 │   ├── solver.ts         # CAPTCHA solving strategies
 │   └── integration.ts    # CAPTCHA integration
-├── server.ts       # MCP server entry point (44+ tool registrations)
+├── server.ts       # MCP server entry point (41 tool registrations)
 └── index.ts        # CLI entry point (config wizard, reset, main UI)
 ```
 
@@ -292,7 +289,7 @@ If you are contributing a new MCP tool, ensure it meets the following requiremen
 2. **Emit audit logs**: Use `logAction()` and `logActionStructured()` for every invocation
 3. **Respect security policies**: Call `checkDomain()` and `isToolAllowedInMode()` for domain/RBAC enforcement
 4. **Optimize for latency**: Target sub-10ms CDP execution without unnecessary DOM roundtrips
-5. **Support multi-tab**: Accept an optional `tab_id` parameter for cross-tab execution where applicable
+5. **Support multi-tab**: Accept an optional `tab_id` parameter for cross-tab execution where applicable (the server maps the public `tabId` argument onto it)
 6. **Define a Zod schema**: Every parameter must be typed with Zod for MCP schema generation
 7. **Register in server.ts**: Import the handler and add a `server.tool()` registration call
 8. **Update docs**: Add the tool to `docs/TOOLS.md` and `README.md` tool category table
@@ -496,8 +493,8 @@ WHAT: <description> | WHEN: <usage guidance> | CANNOT: <limitations> | EXAMPLE: 
 
 1. Update version in `package.json`
 2. Update CHANGELOG.md
-3. Create git tag: `git tag v2.5.0`
-4. Push tag: `git push origin v2.5.0`
+3. Create git tag: `git tag v2.5.1`
+4. Push tag: `git push origin v2.5.1`
 5. Publish to NPM: `npm publish`
 6. Create GitHub release
 

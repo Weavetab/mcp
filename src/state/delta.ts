@@ -66,20 +66,20 @@ const INTERACTIVE_ROLES = new Set([
 ]);
 
 function serializeProps(el: ActionElement, targetId?: string): Record<string, string> {
-  const isSecret = (el.backendNodeId !== undefined && targetId &&
+  const isSecretField = (el.backendNodeId !== undefined && targetId &&
     SessionSecretTracker.isNodeSecret(targetId, el.backendNodeId)) ||
-    el.label === '[REDACTED]' ||
-    el.value === '[REDACTED]' ||
     el.role === 'password' ||
     el.type === 'password';
+  const isSecretValue = isSecretField || el.value === '[REDACTED]';
+
   return {
-    label: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.label ?? '') : (el.label ?? '')),
-    value: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.value ?? '') : (el.value ?? '')),
+    label: targetId ? SessionSecretTracker.redact(targetId, el.label ?? '') : (el.label ?? ''),
+    value: isSecretValue ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.value ?? '') : (el.value ?? '')),
     disabled: String(!!el.disabled),
     role: el.role,
     href: el.href ?? '',
-    placeholder: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.placeholder ?? '') : (el.placeholder ?? '')),
-    textContent: isSecret ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.textContent ?? '') : (el.textContent ?? '')),
+    placeholder: targetId ? SessionSecretTracker.redact(targetId, el.placeholder ?? '') : (el.placeholder ?? ''),
+    textContent: (isSecretField && el.textContent && !el.value) ? '[REDACTED]' : (targetId ? SessionSecretTracker.redact(targetId, el.textContent ?? '') : (el.textContent ?? '')),
     className: (el.className ?? '').split(' ').filter(Boolean).sort().join(' '),
   };
 }

@@ -1,6 +1,6 @@
 // src/tools/thought.ts
 // browser_thought — agent-to-user communication via green thought bubbles
-// Merged: browser_feedback (one-way) + browser_ask (two-way with input)
+// Merged: browser_feedback (one-way) + legacy browser_ask (two-way with input) into browser_thoughts
 
 import CDP from "chrome-remote-interface";
 import { logAction } from "../audit/logger.js";

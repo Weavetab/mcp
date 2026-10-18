@@ -10,11 +10,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { hideWeaveTabOverlay, restoreWeaveTabOverlay, maskSecretFieldsForCapture, restoreSecretFieldsAfterCapture } from "../cdp/helpers.js";
 
+export interface PdfMargins {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+}
+
 export interface PdfOptions {
   landscape?: boolean;
   scale?: number;
   pageRanges?: string;
   filename?: string;
+  /** Page margin in inches — a number (all sides) or per-side object.
+   * Default: 0.4 on every side. */
+  margin?: number | PdfMargins;
   /** If false, keeps the WeaveTab UI overlay visible in the PDF.
    * Default: true — overlay (cursor, thought bubble, HUD) is always hidden from PDFs. */
   hideOverlay?: boolean;
@@ -35,15 +45,19 @@ export async function browserPdf(
   await maskSecretFieldsForCapture(session);
 
   let data: string;
+  const margins: PdfMargins =
+    typeof options.margin === "number"
+      ? { top: options.margin, bottom: options.margin, left: options.margin, right: options.margin }
+      : (options.margin ?? {});
   try {
     const pdfRes = await session.Page.printToPDF({
       landscape: options.landscape ?? false,
       scale: options.scale ?? 1.0,
       pageRanges: options.pageRanges ?? "",
-      marginTop: 0.4,    // 1cm ish
-      marginBottom: 0.4,
-      marginLeft: 0.4,
-      marginRight: 0.4,
+      marginTop: margins.top ?? 0.4,    // 1cm ish
+      marginBottom: margins.bottom ?? 0.4,
+      marginLeft: margins.left ?? 0.4,
+      marginRight: margins.right ?? 0.4,
       printBackground: true
     });
     data = pdfRes.data;

@@ -17,7 +17,7 @@ This document is the universal specification for AI agents (Cursor, Antigravity,
 
 3. **Security Constraints**:
    * **Blind Injection**: Never leak credentials into LLM context. `browser_type_secret` must sanitize inputs to `[REDACTED]`.
-   * Enforce domain policy checks (`~/.weavetab/policy.json`) and RBAC permissions (`admin`, `system`, `viewer`, `automation`).
+   * Enforce domain policy checks (top-level `policies` array in `~/.weavetab/config.json`) and RBAC permissions (`admin`, `operator`, `viewer`, `automation`, `system`).
 
 ---
 

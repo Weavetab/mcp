@@ -43,12 +43,13 @@ export async function browserSnapshot(
     throw new Error("browser_snapshot requires a filename.");
   }
 
-  // Strip any absolute path provided by the caller — always save in the managed snapshot dir
-  filename = path.basename(filename);
-  if (!filename.endsWith(".mhtml")) filename += ".mhtml";
-
-  const snapshotDir = getOutputDir("snapshots", config);
-  const filePath = path.join(snapshotDir, filename);
+  // If caller provided an absolute path, respect it; otherwise store in snapshots directory
+  let filePath = filename;
+  if (!path.isAbsolute(filePath)) {
+    const snapshotDir = getOutputDir("snapshots", config);
+    filePath = path.join(snapshotDir, path.basename(filename));
+  }
+  if (!filePath.endsWith(".mhtml")) filePath += ".mhtml";
 
   if (action === "capture") {
     // Always hide overlay before capture (default true); set hideOverlay: false to skip.

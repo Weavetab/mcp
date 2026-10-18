@@ -1,6 +1,6 @@
 # Weavetab MCP Troubleshooting Guide
 
-> **Version:** 2.5.0 (Beta) | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.5.1 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 This guide covers common issues and their solutions when working with Weavetab's MCP tools.
 
@@ -28,7 +28,7 @@ This guide covers common issues and their solutions when working with Weavetab's
 **Solutions:**
 - Pass `force: true` to `browser_map` to force a rebuild
 - Navigate to a new page (which clears the URL-specific skip lock)
-- Clear the cache: `Weavetab reset` to clear all session state
+- Clear the cache: `weavetab reset` to clear all session state
 
 **Example:**
 ```typescript
@@ -41,9 +41,9 @@ browser_map({ force: true })
 
 **Symptom:** The tool fills the form perfectly, but the MCP tool response says the fields failed to apply.
 
-**Cause:** (Fixed in v2.5.0+) Previously, verification was backwards. If you see this in older versions, upgrade to the latest version.
+**Cause:** (Fixed in v2.5.1+) Previously, verification was backwards. If you see this in older versions, upgrade to the latest version.
 
-**Solution:** None needed on v2.5.0+. The verification logic correctly compares pre-mutation and post-mutation state.
+**Solution:** None needed on v2.5.1+. The verification logic correctly compares pre-mutation and post-mutation state.
 
 ---
 
@@ -53,7 +53,7 @@ browser_map({ force: true })
 
 **Cause:** The auto-clear logic relies on keyboard shortcuts (Ctrl+A, Delete) which can fail if the element loses focus during the split-second execution.
 
-**Solution:** (Fixed in v2.5.0+) Auto-clear now uses atomic JavaScript evaluation to clear fields securely before typing. For older versions, use `clearFirst: true` parameter.
+**Solution:** (Fixed in v2.5.1+) Auto-clear now uses atomic JavaScript evaluation to clear fields securely before typing. For older versions, use `clearFirst: true` parameter.
 
 **Example:**
 ```typescript
@@ -80,7 +80,7 @@ browser_type({ id: "w:1", text: "NEW VALUE", clearFirst: true })
 
 **Solutions:**
 - **Best Practice:** Always use `ref` IDs (`w:42`) from `browser_map` rather than text labels
-- **Fixed in v2.5.0+:** Label clicks now use an LRU cache, and post-navigation DOM mapping is deferred
+- **Fixed in v2.5.1+:** Label clicks now use an LRU cache, and post-navigation DOM mapping is deferred
 
 **Example:**
 ```typescript
@@ -120,6 +120,14 @@ browser_click({ id: "w:42" })
 
 **Solution:** Use headed mode (`headless: false` in config) or use the `--headless=new` Chrome flag which supports some extension features.
 
+### 9. `browser_tabs(action: "open")` fails with "Not supported" in an Electron app
+
+**Symptom:** Opening a URL returns a bare `Not supported` error while attached to a desktop app (Discord, Slack, VS Code, Antigravity, …).
+
+**Cause:** Electron does not implement the CDP `Target.createTarget` command, so a brand-new tab/window cannot be created inside a desktop app from the outside. Older builds surfaced the raw CDP message, and a plain `open` (without `app`) could also auto-route to a sticky Electron app instead of the browser.
+
+**Solution:** Use `browser_navigate({ app: "<name>", url: "..." })` to load the URL in the app's existing window. To target the web browser instead, run `browser_navigate` first (or pass `app: "browser"`); a plain `browser_tabs(action: "open")` now targets the browser whenever a browser session is active. See `docs/desktop-automation/electron-apps.md` §8.
+
 ---
 
 ## Configuration Issues
@@ -131,11 +139,11 @@ browser_click({ id: "w:42" })
 **Cause:** Domain blacklist configuration may not be loaded correctly.
 
 **Solution:**
-- Verify `~/.Weavetab/policy.json` exists and is valid JSON
+- Verify `~/.weavetab/config.json` exists and its top-level `policies` array is valid
 - Check that the domain pattern matches (wildcards use `*` not regex)
-- Restart Weavetab after modifying policy.json
+- Restart Weavetab after modifying `config.json`
 
-**Example policy.json:**
+**Example `policies` array in config.json:**
 ```json
 {
   "policies": [
@@ -156,7 +164,7 @@ browser_click({ id: "w:42" })
 **Cause:** Role configuration may not be set correctly.
 
 **Solution:**
-- Verify `role` is set in `~/.Weavetab/config.json`
+- Verify `role` is set in `~/.weavetab/config.json`
 - Check that the role is one of: `admin`, `system`, `viewer`, `automation`
 - Restart Weavetab after changing roles
 
@@ -169,10 +177,10 @@ browser_click({ id: "w:42" })
 **Cause:** Secrets file may not exist or key may be misconfigured.
 
 **Solution:**
-- Verify `~/.Weavetab/secrets.json` exists
+- Verify `~/.weavetab/secrets.json` exists
 - Check that the key matches exactly (case-sensitive)
-- For project-scoped secrets, verify `./.Weavetab/secrets.json` exists
-- Use `Weavetab secrets list` to verify keys are registered
+- For project-scoped secrets, verify `./.weavetab/secrets.json` exists
+- Use `weavetab secrets list` to verify keys are registered
 
 ---
 
@@ -228,7 +236,7 @@ browser_click({ id: "w:42" })
 **Cause:** Large DOM caches or memory leaks in long-running sessions.
 
 **Solution:**
-- Clear cache: `Weavetab reset`
+- Clear cache: `weavetab reset`
 - Reduce `maxActionsPerMinute` to slow down execution
 - Enable `prune: true` in `browser_map` to reduce cache size
 - Restart Weavetab periodically for long-running sessions
@@ -285,7 +293,7 @@ browser_click({ id: "w:42" })
 **Cause:** Policy not configured or pattern doesn't match.
 
 **Solution:**
-- Verify policy.json syntax and patterns
+- Verify the top-level `policies` array syntax and patterns in `config.json`
 - Use `*.domain.com` pattern for subdomain matching
 - Restart Weavetab after policy changes
 - Check audit logs to see if policy is being evaluated
@@ -296,7 +304,7 @@ browser_click({ id: "w:42" })
 
 ### Enable DevMode
 
-Set `devMode: true` in `~/.Weavetab/config.json` to see:
+Set `devMode: true` in `~/.weavetab/config.json` to see:
 
 - Real-time tool execution timing
 - Token usage estimates
@@ -305,7 +313,7 @@ Set `devMode: true` in `~/.Weavetab/config.json` to see:
 
 ### Check Audit Logs
 
-Review `~/.Weavetab/logs/audit.log` for:
+Review the latest `~/.weavetab-system/logs/mission_<timestamp>.log` for:
 
 - Tool invocation history
 - Error messages and stack traces
@@ -347,7 +355,7 @@ If a tool fails:
 
 If you continue to experience issues:
 
-1. **Check the logs** — Review `~/.Weavetab/logs/` for detailed error information
+1. **Check the logs** — Review `~/.weavetab-system/logs/` for detailed error information
 2. **Search GitHub Issues** — Check if your issue has already been reported
 3. **Create a minimal reproduction** — Provide steps to reproduce the issue
 4. **Include environment details** — OS, Node version, Chrome version, Weavetab version

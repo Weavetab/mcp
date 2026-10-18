@@ -331,13 +331,29 @@ export async function getOrConnect(config: Config, targetApp?: string): Promise<
         for (let retry = 0; retry < 10; retry++) {
           try {
             targets = await withCDPTimeout(CDP.List({ host: "127.0.0.1", port }), 2000, "CDP.List Electron retry");
-            if (targets.length > 0) break;
+            // Break early if we found a non-splash main window target
+            const hasMain = targets.some(t => {
+              const u = (t.url || "").toLowerCase();
+              const tit = (t.title || "").toLowerCase();
+              return !u.includes("splash") && !tit.includes("updater") && !u.startsWith("devtools://");
+            });
+            if (hasMain || (retry > 4 && targets.length > 0)) break;
           } catch { /* wait */ }
           await new Promise(r => setTimeout(r, 500));
         }
       }
 
-      let pageTarget = targets.find(t => t.type === "page" || t.type === "webview" || t.type === "app") ?? targets[0];
+      // Filter out splash screens, updater windows, and devtools targets
+      const isCandidate = (t: any) => {
+        const u = (t.url || "").toLowerCase();
+        const tit = (t.title || "").toLowerCase();
+        return !u.includes("splash") && !tit.includes("updater") && !u.startsWith("devtools://");
+      };
+
+      let pageTarget = targets.find(t => (t.type === "page" || t.type === "webview" || t.type === "app") && isCandidate(t))
+        ?? targets.find(isCandidate)
+        ?? targets.find(t => t.type === "page" || t.type === "webview" || t.type === "app")
+        ?? targets[0];
       if (!pageTarget) {
         throw new Error(`[Weavetab] ✗ No window or webview target found in Electron app "${targetApp}".`);
       }
@@ -685,7 +701,17 @@ export async function getTabList(agentId?: string, targetApp?: string): Promise<
     const bctxId = sessionRegistry.getBrowserContextIdForAgent(aid);
 
     return targetInfos
-      .filter(t => (t.type === "page" || t.type === "webview" || t.type === "app" || t.type === "other" || t.type === "iframe") && (!bctxId || t.browserContextId === bctxId))
+      .filter(t => {
+        const matchType = (t.type === "page" || t.type === "webview" || t.type === "app" || t.type === "other" || t.type === "iframe");
+        const matchCtx = (!bctxId || t.browserContextId === bctxId);
+        if (!matchType || !matchCtx) return false;
+        if (targetApp) {
+          const u = (t.url || "").toLowerCase();
+          const tit = (t.title || "").toLowerCase();
+          if (u.includes("splash") || tit.includes("updater") || u.startsWith("devtools://")) return false;
+        }
+        return true;
+      })
       .map(t => ({
         id: t.targetId,
         title: t.title || t.url || t.type,
@@ -738,21 +764,18 @@ export async function connectToTab(targetId: string, port?: number, agentId?: st
     t = targets.find((item: any) => (item.id || item.targetId) === targetId);
   } catch {}
   if (!t) {
-    try {
-      const metaSession = await withCDPTimeout(CDP({ host: "127.0.0.1", port: p }), 3000, "connectToTab meta CDP");
-      const { targetInfos } = await withCDPTimeout(metaSession.Target.getTargets(), 3000, "connectToTab meta getTargets");
-      await metaSession.close();
-      const ti = targetInfos.find(item => item.targetId === targetId);
-      if (ti) {
-        t = { id: ti.targetId, targetId: ti.targetId, url: ti.url, title: ti.title, type: ti.type };
-      }
-    } catch {}
-  }
-  if (!t) {
-    t = { id: targetId, targetId, url: "", title: appName || "Tab", type: "page" };
+    throw new Error(`Tab not found: "${targetId}". Check browser_tabs({ action: "list" }) for active IDs.`);
   }
 
-  const session = await withCDPTimeout(CDP({ host: "127.0.0.1", port: p, target: targetId }), 5000, "connectToTab CDP");
+  let session: CDP.Client;
+  try {
+    session = await withCDPTimeout(CDP({ host: "127.0.0.1", port: p, target: targetId }), 5000, "connectToTab CDP");
+  } catch (err: any) {
+    if (err?.message?.includes("webSocketDebuggerUrl") || err?.message?.includes("Cannot read propert")) {
+      throw new Error(`Tab not found or closed: "${targetId}".`);
+    }
+    throw err;
+  }
 
   (session as any).on("close", () => {
     logDebug(`[Weavetab CDP] connectToTab session closed (${appName || "browser"}) — unregistering.`);

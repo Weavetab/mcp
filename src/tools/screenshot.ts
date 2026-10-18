@@ -25,6 +25,8 @@ export interface ScreenshotOptions {
   fullPage?: boolean;
   /** Clip region {x, y, width, height, scale}. Overrides fullPage if set. */
   clip?: { x: number; y: number; width: number; height: number };
+  /** CSS selector of an element — capture is cropped to its bounding rect. */
+  selector?: string;
   /** If false, keeps the WeaveTab UI overlay visible during capture.
    * Default: true — overlay is always hidden from agent captures. */
   hideOverlay?: boolean;
@@ -54,9 +56,36 @@ export async function browserScreenshot(
   const vp = JSON.parse(vpResult.value as string) as { w: number; h: number; dpr: number };
 
   let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
+  let beyondViewport = !!options.fullPage;
 
   if (options.clip) {
     clip = { ...options.clip, scale: 1 };
+  } else if (options.selector) {
+    const { result: selResult } = await session.Runtime.evaluate({
+      expression: `(() => {
+        try {
+          const el = document.querySelector(${JSON.stringify(options.selector)});
+          if (!el) return JSON.stringify({ notFound: true });
+          const r = el.getBoundingClientRect();
+          return JSON.stringify({ x: r.x, y: r.y, width: r.width, height: r.height, docX: r.x + window.scrollX, docY: r.y + window.scrollY });
+        } catch (e) {
+          return JSON.stringify({ error: String(e && e.message || e) });
+        }
+      })()`,
+      returnByValue: true,
+    });
+    const sel = selResult?.value ? JSON.parse(selResult.value as string) : { notFound: true };
+    if (sel.error) {
+      throw new Error(`browser_screenshot selector failed: ${sel.error}`);
+    }
+    if (sel.notFound || !selResult?.value) {
+      throw new Error(`browser_screenshot: no element found for selector '${options.selector}'`);
+    }
+    if (sel.width === 0 || sel.height === 0) {
+      throw new Error(`browser_screenshot: element matched by '${options.selector}' has no size (display: none or not laid out)`);
+    }
+    clip = { x: sel.docX, y: sel.docY, width: sel.width, height: sel.height, scale: 1 };
+    beyondViewport = true;
   } else if (options.fullPage) {
     const { result: scrollResult } = await session.Runtime.evaluate({
       expression: `JSON.stringify({ 
@@ -72,7 +101,7 @@ export async function browserScreenshot(
   // ── Auto-compress: if viewport is wide, downscale to 1280px wide as JPEG 75% ──
   // This cuts token cost by 40-60% with no quality loss for text content.
   // Only applies when no explicit format/clip was requested.
-  const params: any = { format, captureBeyondViewport: !!options.fullPage };
+  const params: any = { format, captureBeyondViewport: beyondViewport };
   if (!options.clip && !options.format && vp.w > 1280) {
     const scale = 1280 / vp.w;
     params.format = 'jpeg';
@@ -109,6 +138,18 @@ export async function browserScreenshot(
       } else {
         throw e;
       }
+    }
+    const MAX_BASE64 = 2 * 1024 * 1024;
+    for (const q of [70, 40]) {
+      if (data.length <= MAX_BASE64) break;
+      if (params.format === "jpeg" && (params.quality ?? 90) <= q) break;
+      params.format = "jpeg";
+      params.quality = q;
+      const res = await session.Page.captureScreenshot(params);
+      data = res.data;
+    }
+    if (data.length > MAX_BASE64) {
+      throw new Error(`Screenshot payload exceeds the 2MB MCP size limit even at JPEG quality 40. Narrow the capture with clip or selector.`);
     }
   } finally {
     // Restore secret fields and overlay visibility immediately after capture

@@ -59,7 +59,7 @@ export async function weaveTypeSecret(
     return {
       success: false,
       error_code: "SECRET_NOT_FOUND",
-      message: `[!] Secret not found for key: "${args.envKey}". Run: Weavetab secrets set ${args.envKey}`,
+      message: `[!] Secret not found for key: "${args.envKey}". Run: weavetab secrets set ${args.envKey}`,
     };
   }
 
@@ -73,8 +73,8 @@ export async function weaveTypeSecret(
         `[!] Secret "${args.envKey}" is not scoped for domain "${currentHostname}". ` +
         (allowedDomains.length > 0
           ? `Allowed: [${allowedDomains.join(", ")}]. ` +
-            `To add this domain: Weavetab secrets set ${args.envKey}`
-          : `The allowed domain list is empty — add domains with: Weavetab secrets set ${args.envKey}`),
+            `To add this domain: weavetab secrets set ${args.envKey}`
+          : `The allowed domain list is empty — add domains with: weavetab secrets set ${args.envKey}`),
     };
   }
 

@@ -1,6 +1,6 @@
 # Weavetab Architecture
 
-> **Version:** 2.5.0 (Beta) | **Last Updated:** July 2026
+> **Version:** 2.5.1 | **Last Updated:** July 2026
 
 ---
 
@@ -52,7 +52,7 @@ flowchart LR
 
 ### Session Memory
 
-The session memory system maintains persistent per-domain profiles on disk at `~/.Weavetab/memory/`. Each profile tracks:
+The session memory system maintains persistent per-domain profiles on disk at `~/.weavetab-system/memory/`. Each profile tracks:
 
 ```typescript
 interface DomainProfile {
@@ -140,7 +140,7 @@ Loop Detection Algorithm
 
 ### Knowledge Hints (Rule 16)
 
-Domain-specific knowledge is stored in `~/.Weavetab/knowledge/[domain].md`. When a tool discovers a site-specific quirk (e.g., "this login form requires clicking the label, not the input"), it appends a timestamped note. On subsequent visits, the hint is injected as a system prompt token (max 20 tokens).
+Domain-specific knowledge is stored in `~/.weavetab/knowledge/[domain].md`. When a tool discovers a site-specific quirk (e.g., "this login form requires clicking the label, not the input"), it appends a timestamped note. On subsequent visits, the hint is injected as a system prompt token (max 20 tokens).
 
 **Hint Format:**
 
@@ -233,8 +233,8 @@ The HUD (`src/sensors/thoughts.ts`) provides real-time visual feedback:
 
 The audit system (`src/audit/logger.ts`) maintains structured logs:
 
-- **Mission logs** (`~/.Weavetab/logs/audit.log`) — Human-readable activity log
-- **Structured logs** (`~/.Weavabab/logs/audit.jsonl`) — Machine-readable JSONL format
+- **Mission logs** (`~/.weavetab-system/logs/mission_<timestamp>.log`) — Human-readable activity log
+- **Structured logs** (`~/.weavetab-system/logs/mission_<timestamp>.jsonl`) — Machine-readable JSONL format
 - **Telemetry** (optional) — Event broadcasting for analytics
 
 ---
@@ -339,7 +339,7 @@ flowchart TD
 |-----------|----------------|------------------|
 | **Domain Blacklist** | Hardcoded + custom JSON config | High-risk domain access |
 | **Domain Policy Engine** | Per-domain allow/read-only/deny/audit modes | Unauthorized domain interactions |
-| **RBAC** | 4 roles with tool permission matrix | Privilege escalation |
+| **RBAC** | 5 roles with tool permission matrix | Privilege escalation |
 | **Rate Limiting** | Mutex-based actions/min enforcement | Runaway agent behavior |
 | **Root Guard** | `assertNotRoot()` at startup | Privileged execution |
 | **Storage Blocker** | Optional localStorage/sessionStorage nullification | Tracking/fingerprinting |

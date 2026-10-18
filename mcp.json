@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
   "mcpName": "dev.weavetab/mcp",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "icon": "icon.png",
   "author": "fy2ne",
@@ -426,16 +426,6 @@
           "Site quirk registration (cookie_banner, rate_limit, modal_popup)"
         ]
       },
-      "browser_github": {
-        "category": "github",
-        "description": "Interact with GitHub repositories without burning browser turns. Analyze repo trees, read raw source files, search/inspect issues, and examine PR diffs and review comments.",
-        "features": [
-          "Action-based repo analysis, file reading, issues, and PR review",
-          "Zero GitHub API token requirement for raw reads",
-          "Automated active tab repository context resolution",
-          "Line range subset reading and issue/PR search"
-        ]
-      },
       "browser_office": {
         "category": "documents",
         "description": "Read and extract structured content from office documents (Excel, Word, PDF, CSV) via live browser session cookies or local downloads directory.",
@@ -570,14 +560,15 @@
       "rbac": {
         "description": "Role-Based Access Control enforcing tool execution boundaries based on configured session role.",
         "roles": {
-          "admin": "Full access to all 44 tools and system operations",
-          "system": "Full tool access excluding system-level operations",
-          "viewer": "Read-only access (browser_map, browser_find, browser_scrape, browser_screenshot, browser_inspect, browser_snapshot, browser_console, browser_pdf, browser_storage, browser_cookies, browser_tabs, browser_wait, browser_github)",
-          "automation": "Restricted execution set for non-interactive automated workflows"
+          "admin": "Full access to all tools and system operations",
+          "operator": "Full access to all tools and system operations (same as admin)",
+          "system": "System-level tools only (browser_thoughts, browser_detect, browser_performance, browser_checkpoint, browser_pattern_learn)",
+          "viewer": "Read-only access (browser_map, browser_find, browser_scrape, browser_console, browser_eval, browser_inspect, browser_extract_design, browser_snapshot, browser_screenshot, browser_pdf, browser_cookies, browser_tabs, browser_wait, browser_pattern_learn)",
+          "automation": "Full tool access excluding browser_thoughts (automation agents must be non-interactive)"
         }
       },
       "domain_policy": {
-        "description": "Domain-level access control policy engine configured via ~/.weavetab/policy.json with enforced security domain blocklists.",
+        "description": "Domain-level access control policy engine configured via the top-level policies array in ~/.weavetab/config.json with enforced security domain blocklists.",
         "modes": {
           "allow": "Unrestricted tool access",
           "read-only": "Mutation tool execution blocked",
@@ -754,7 +745,7 @@
       }
     },
     "domainPolicy": {
-      "location": "~/.weavetab/policy.json",
+      "location": "~/.weavetab/config.json (top-level \"policies\" array)",
       "format": {
         "policies": [
           {
@@ -787,12 +778,12 @@
     }
   },
   "metadata": {
-    "total_tools": 50,
+    "total_tools": 41,
     "tool_categories": 15,
     "latency": "3-8ms mean",
     "token_efficiency": "Up to 97% reduction via semantic delta engine + DOM pruner",
     "architecture": "Direct CDP WebSocket (Layer 0) — zero WebDriver, Playwright, or Puppeteer wrapper overhead",
-    "security": "Domain blacklist + RBAC (4 roles) + rate limiting + Blind Injection (secrets.json)",
+    "security": "Domain blacklist + RBAC (5 roles) + rate limiting + Blind Injection (secrets.json)",
     "session_memory": "Persistent per-domain profiles with framework detection and strategy caching",
     "loop_detection": "Strike-based (50-action window), auto-recovery at 10+ strikes",
     "plugin_system": "Dynamic universal weavetab.json & @weavetab/plugin-* auto-discovery",

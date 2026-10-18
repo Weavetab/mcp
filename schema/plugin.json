@@ -12,7 +12,7 @@
     },
     "name": {
       "type": "string",
-      "description": "Unique plugin package name (e.g., '@fy2ne/wt-youtube', 'my-plugin').",
+      "description": "Unique plugin package name (e.g., '@acme/weavetab-plugin', 'my-plugin').",
       "pattern": "^(?:@[a-z0-9-*~][a-z0-9-*._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"
     },
     "version": {
@@ -72,7 +72,7 @@
       "properties": {
         "weavetab": {
           "type": "string",
-          "description": "Semver range of compatible Weavetab versions (e.g., '^2.5.0')."
+          "description": "Semver range of compatible Weavetab versions (e.g., '^2.5.1')."
         },
         "node": {
           "type": "string",

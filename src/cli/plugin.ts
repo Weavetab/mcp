@@ -60,6 +60,28 @@ function runNpmCommand(cmdArgs: string[], cwd: string = process.cwd()): Promise<
   return runCommand("npm", cmdArgs, cwd);
 }
 
+/**
+ * Resolve a human-readable author from a manifest. Handles every shape the
+ * schema allows: a plain `author` string, an `author` object, an `author`
+ * array, or the richer `authors[]` array of strings/objects.
+ */
+function resolveManifestAuthor(manifest: any, fallback: string): string {
+  const pick = (value: any): string | null => {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const name = pick(entry);
+        if (name) return name;
+      }
+    } else if (value && typeof value === "object" && typeof value.name === "string" && value.name.trim()) {
+      return value.name.trim();
+    }
+    return null;
+  };
+
+  return pick(manifest?.author) || pick(manifest?.authors) || fallback;
+}
+
 // ---------------------------------------------------------------------------
 // 1. ADD / INSTALL PLUGIN WITH DISAMBIGUATION
 // ---------------------------------------------------------------------------
@@ -237,7 +259,7 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
       `${pc.bold("Plugin Details:")}`,
       `  ${pc.dim("Name:")}        ${manifest.name || selectedPkg}`,
       `  ${pc.dim("Version:")}     ${manifest.version || "1.0.0"}`,
-      `  ${pc.dim("Author:")}      ${manifest.author || "Community"}`,
+      `  ${pc.dim("Author:")}      ${resolveManifestAuthor(manifest, "Community")}`,
       `  ${pc.dim("Trust Tier:")}  ${trust.badge}`,
       `  ${pc.dim("Description:")} ${manifest.description || "No description provided"}`,
     ];
@@ -359,7 +381,7 @@ export async function runPluginList(): Promise<void> {
     const toolCount = m.tools?.length ?? 0;
 
     console.log(`${trust.badge} ${pc.bold(pc.cyan(pInfo.packageName))} ${pc.dim(`v${m.version || "1.0.0"}`)}`);
-    console.log(`  ${pc.dim("Author:")}      ${m.author || "Unknown"}`);
+    console.log(`  ${pc.dim("Author:")}      ${resolveManifestAuthor(m, "Unknown")}`);
     console.log(`  ${pc.dim("Description:")} ${m.description || "(none)"}`);
     console.log(`  ${pc.dim("Tools:")}       ${toolCount} tool(s) registered`);
 
@@ -588,7 +610,7 @@ export async function runPluginCli(args: string[]): Promise<void> {
     console.log(`  weavetab plugin <command> [options]`);
     console.log();
     console.log(pc.bold("COMMANDS"));
-    console.log(`  ${pc.cyan("add <pkg|path>")}     Install a plugin by npm name or local path (e.g. @fy2ne/wt-youtube, ./my-plugin)`);
+    console.log(`  ${pc.cyan("add <pkg|path>")}     Install a plugin by npm name or local path (e.g. @acme/weavetab-plugin, ./my-plugin)`);
     console.log(`  ${pc.cyan("browse")}             Interactive terminal explorer to browse & 1-click install`);
     console.log(`  ${pc.cyan("search [query]")}     Search plugins across official registry & npm`);
     console.log(`  ${pc.cyan("list")}               List all installed plugins and their registered tools`);

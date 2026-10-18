@@ -1,6 +1,6 @@
 # Contributor Covenant Code of Conduct
 
-> **Version:** 2.5.0 (Beta) | **Last Updated:** July 6, 2026
+> **Version:** 2.5.1 | **Last Updated:** July 6, 2026
 
 ---
 

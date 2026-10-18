@@ -79,14 +79,20 @@ export async function browserClipboard(
         throw new Error("browser_clipboard: image write requires a secure context (https or chrome://). Current page is non-secure (file:// or http://).");
       }
       const mime = mimeType || (dataUrl!.includes(';') ? dataUrl!.split(';')[0].split(':')[1] : "image/png");
+      // When both text and an image are supplied, put them in a single ClipboardItem
+      // so the plain-text flavor is not silently dropped (Windows keeps both).
+      const textFlavor = hasText
+        ? `itemData['text/plain'] = new Blob([${JSON.stringify(text)}], { type: 'text/plain' });`
+        : "";
       const res = await session.Runtime.evaluate({
         expression: `(async function() {
           try {
             const resp = await fetch(${JSON.stringify(dataUrl)});
             const blob = await resp.blob();
-            await navigator.clipboard.write([
-              new ClipboardItem({ ${JSON.stringify(mime)}: blob })
-            ]);
+            const itemData = {};
+            itemData[${JSON.stringify(mime)}] = blob;
+            ${textFlavor}
+            await navigator.clipboard.write([ new ClipboardItem(itemData) ]);
             return "ok";
           } catch(e) {
             return "ERR:" + e.message;

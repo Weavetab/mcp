@@ -77,7 +77,10 @@ async function resolveCanvasViaCDP(
     returnByValue: true,
   });
 
-  return JSON.parse(result.value as string);
+  if (typeof result.value !== 'string') {
+    throw new Error("Canvas data extraction failed (cross-origin/tainted canvas or detached node).");
+  }
+  return JSON.parse(result.value);
 }
 
 async function resolveCanvasViaSelector(
@@ -98,27 +101,49 @@ async function resolveCanvasViaSelector(
     selector = "canvas";
   }
 
-  const { omniEvaluate } = await import("../cdp/omni_broker.js");
-  const raw = await omniEvaluate(session, targetId, `(function() {
-      let el;
-      try { el = document.querySelector(${JSON.stringify(selector)}); } catch(e) { el = null; }
-      // Skip extension overlay canvases
-      if (el && (el.closest('[data-wt-overlay]') || el.closest('.weavetab-overlay') || el.id === '__wt_ghost_canvas')) {
-        var total = document.querySelectorAll('canvas').length;
-        return JSON.stringify({ error: 'Selector matched a WeaveTab overlay canvas (hidden). Found ' + total + ' <canvas> element(s) on page — try a more specific selector or use nodeId.', exists: false });
+  const probe = `(function() {
+      var selector = ${JSON.stringify(selector)};
+      var isDefault = selector === 'canvas';
+      var candidates = [];
+      if (isDefault) {
+        candidates = Array.prototype.slice.call(document.querySelectorAll('canvas')).filter(function(c) {
+          return !(c.closest('[data-wt-overlay]') || c.closest('.weavetab-overlay') || c.id === '__wt_ghost_canvas') && c.width > 0 && c.height > 0;
+        });
+      } else {
+        var el;
+        try { el = document.querySelector(selector); } catch(e) { el = null; }
+        if (el) candidates = [el];
+        if (candidates.length === 1 && (candidates[0].closest('[data-wt-overlay]') || candidates[0].closest('.weavetab-overlay') || candidates[0].id === '__wt_ghost_canvas')) {
+          return JSON.stringify({ error: 'Selector matched a WeaveTab overlay canvas (hidden). Try a more specific selector or use nodeId.', exists: false });
+        }
       }
-      if (!el) {
+      if (candidates.length === 0) {
         var total = document.querySelectorAll('canvas').length;
         if (total === 0) return JSON.stringify({ error: 'No <canvas> elements found on this page.', exists: false });
-        return JSON.stringify({ error: 'Selector did not match any element. Found ' + total + ' <canvas> element(s) on page — try a more specific selector or use nodeId.', exists: false });
+        return JSON.stringify({ error: 'Selector did not match a usable <canvas> (' + total + ' on page — overlay or zero-size canvases are skipped). Try a more specific selector or use nodeId.', exists: false });
       }
-      if (el.tagName !== 'CANVAS') return JSON.stringify({ error: 'Element is not a <canvas> — found <' + el.tagName.toLowerCase() + '> instead.', exists: false });
-      var r = el.getBoundingClientRect();
-      return JSON.stringify({ x: r.left, y: r.top, dataUrl: el.toDataURL('image/png'), exists: true });
-    })()`);
+      var target = candidates[0];
+      if (target.tagName !== 'CANVAS') return JSON.stringify({ error: 'Element is not a <canvas> — found <' + target.tagName.toLowerCase() + '> instead.', exists: false });
+      var r = target.getBoundingClientRect();
+      return JSON.stringify({ x: r.left, y: r.top, dataUrl: target.toDataURL('image/png'), exists: true });
+    })()`;
 
-  const parsed = JSON.parse(raw || "{}");
+  const { omniEvaluate } = await import("../cdp/omni_broker.js");
+  const raw = await omniEvaluate(session, targetId, probe);
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw || "{}");
+  } catch {
+    throw new Error("Canvas query returned a malformed response — retry with a specific selector.");
+  }
   if (parsed.error) throw new Error(parsed.error);
+  if (
+    typeof parsed.dataUrl !== 'string' ||
+    !/^data:[^;]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(parsed.dataUrl)
+  ) {
+    throw new Error("Canvas returned no usable image data (empty, hidden, detached, or tainted canvas).");
+  }
   return parsed;
 }
 

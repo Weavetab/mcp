@@ -14,12 +14,14 @@
  */
 
 import CDP from "chrome-remote-interface";
+import fs from "fs";
+import path from "path";
 import type { Config } from "../config/loader.js";
 import { logAction } from "../audit/logger.js";
 import { recordAction } from "../intelligence/trail.js";
 import { clearTabCache } from "../state/cache.js";
 import { sessionRegistry } from "../state/session.js";
-import { getConfigAgentId } from "../config/loader.js";
+import { getConfigAgentId, getSystemDir } from "../config/loader.js";
 
 export interface CheckpointData {
   name: string;
@@ -39,10 +41,51 @@ export interface CheckpointArgs {
   includeDom?: boolean;
 }
 
-// In-memory checkpoint registry keyed by targetId -> name -> CheckpointData
+// In-memory checkpoint registry keyed by targetId -> name -> CheckpointData.
+// Backed by ~/.weavetab-system/checkpoints/<targetId>.json so checkpoints
+// survive server restarts.
 const checkpointRegistry = new Map<string, Map<string, CheckpointData>>();
+const loadedTargets = new Set<string>();
+
+function checkpointFilePath(targetId: string): string {
+  const dir = getSystemDir("checkpoints");
+  const safe = targetId.replace(/[^a-zA-Z0-9_-]/g, "_") || "default";
+  return path.join(dir, `${safe}.json`);
+}
+
+function ensureTargetLoaded(targetId: string): void {
+  if (loadedTargets.has(targetId)) return;
+  loadedTargets.add(targetId);
+  try {
+    const file = checkpointFilePath(targetId);
+    if (!fs.existsSync(file)) return;
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as {
+      checkpoints?: Record<string, CheckpointData>;
+    };
+    if (parsed?.checkpoints) {
+      checkpointRegistry.set(targetId, new Map(Object.entries(parsed.checkpoints)));
+    }
+  } catch {
+    // Corrupt or unreadable file — start empty rather than crash.
+  }
+}
+
+function persistTarget(targetId: string): void {
+  try {
+    const map = checkpointRegistry.get(targetId) ?? new Map<string, CheckpointData>();
+    const payload = {
+      targetId,
+      updatedAt: new Date().toISOString(),
+      checkpoints: Object.fromEntries(map),
+    };
+    fs.writeFileSync(checkpointFilePath(targetId), JSON.stringify(payload, null, 2), "utf-8");
+  } catch {
+    // Persistence is best-effort; the in-memory registry remains authoritative.
+  }
+}
 
 export function getCheckpointsForTarget(targetId: string): Map<string, CheckpointData> {
+  ensureTargetLoaded(targetId);
   let map = checkpointRegistry.get(targetId);
   if (!map) {
     map = new Map<string, CheckpointData>();
@@ -52,7 +95,19 @@ export function getCheckpointsForTarget(targetId: string): Map<string, Checkpoin
 }
 
 export function clearAllCheckpoints(): void {
+  const targets = new Set<string>([...loadedTargets, ...checkpointRegistry.keys()]);
   checkpointRegistry.clear();
+  loadedTargets.clear();
+  // Also purge persisted checkpoints; otherwise ensureTargetLoaded() would
+  // lazily reload them from disk on the next access.
+  for (const targetId of targets) {
+    try {
+      const file = checkpointFilePath(targetId);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
 }
 
 export async function browserCheckpoint(
@@ -96,6 +151,7 @@ export async function browserCheckpoint(
       };
     }
     const existed = targetCheckpoints.delete(args.name);
+    if (existed) persistTarget(targetId);
     return {
       success: existed,
       action: "delete",
@@ -207,6 +263,7 @@ export async function browserCheckpoint(
     };
 
     targetCheckpoints.set(args.name, checkpoint);
+    persistTarget(targetId);
 
     logAction("browser_checkpoint", args.name, `Saved checkpoint at ${currentUrl}`);
     recordAction({

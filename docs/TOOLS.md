@@ -1,8 +1,8 @@
 # Weavetab MCP Tool Reference
 
-> **Version:** 2.5.0 | **Total Tools:** 42 | **Architecture:** Layer 0 Direct CDP
+> **Version:** 2.5.1 | **Total Tools:** 41 | **Architecture:** Layer 0 Direct CDP
 
-Weavetab provides 42 production-grade MCP tools organized into functional categories.
+Weavetab provides 41 production-grade MCP tools organized into functional categories.
 
 | Tool Name | Category | Description | Key Features |
 | :--- | :--- | :--- | :--- |
@@ -45,10 +45,9 @@ Weavetab provides 42 production-grade MCP tools organized into functional catego
 | `browser_detect` | `tabs` | CRITICAL INITIALIZATION TOOL. Detect available browsers and configured desktop apps (Discord, Slack, etc.). Call this FIRST before interacting with the environment to know if apps are online/offline and what tabs they have open. | Local browser engine discovery, Engine CDP API coverage analysis, Tool compatibility reporting per browser engine |
 | `browser_performance` | `performance` | Retrieve page performance metrics. Collects Core Web Vitals (FCP, LCP, CLS) and detailed network resource timing distributions. | First Contentful Paint (FCP) and Largest Contentful Paint (LCP) capture, Cumulative Layout Shift (CLS) tracking, Resource loading timing distributions |
 | `browser_pattern_learn` | `memory` | Read (action=get), register (action=learn), update, or record execution outcome for a named workflow pattern on a given origin in ~/.weavetab-system/memory/sites/. Use action=get at session start to inspect site profiles and reliability scores. Use learn after completing a flow to persist it for future fast-path replay. | Site profile inspection via action=get (reads ~/.weavetab-system/memory/sites/), Named pattern creation and update (merge-on-write, no duplicates), Volatile selector stabilization before persistence |
-| `browser_github` | `github` | Interact with GitHub repositories without burning browser turns. Analyze repo trees, read raw source files, search/inspect issues, and examine PR diffs and review comments. | Action-based repo analysis, file reading, issues, and PR review, Zero GitHub API token requirement for raw reads, Automated active tab repository context resolution |
 | `browser_office` | `documents` | Read and extract structured content from office documents (Excel, Word, PDF, CSV) via live browser session cookies or local downloads directory. | In-session authenticated document fetching, Structured tabular extraction (.xlsx, .csv), Document text and metadata extraction (.docx, .pdf) |
 | `browser_emulate` | `environment` | Emulate browser environmental conditions over CDP: network throttling profiles, CPU slowdown multipliers, geolocation overrides, timezone IDs, and custom User-Agent strings. | Network throttling (Offline, Slow 3G, Fast 3G, 4G), CPU throttling multipliers, Geolocation and timezone overrides |
 
 ---
 
-*Auto-generated via `npm run docs:generate` on 2026-10-17.*
+*Auto-generated via `npm run docs:generate` on 2026-10-18.*

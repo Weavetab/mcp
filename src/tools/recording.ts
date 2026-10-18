@@ -170,6 +170,17 @@ export async function browserRecording(
     });
 
     logAction("browser_recording", sessionId, `stopped (${count} frames, compiled: ${compileRes.videoPath || "none"})`);
+
+    if (!compileRes.success) {
+      return {
+        success: false,
+        recordings: Array.from(activeRecordings.values()),
+        frameCount: count,
+        dir: state.dir,
+        error: compileRes.error,
+      };
+    }
+
     return {
       success: true,
       recordings: Array.from(activeRecordings.values()),

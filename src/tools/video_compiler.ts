@@ -145,6 +145,16 @@ export async function compileVideo(options: CompileVideoOptions): Promise<Compil
   // Check if FFmpeg is available for webm / mp4 or fallback
   const ffmpegPresent = isFFmpegAvailable();
 
+  if (!ffmpegPresent) {
+    if (format === "webm" || format === "mp4") {
+      return {
+        success: false,
+        error: `Video output requires ffmpeg (https://ffmpeg.org) — ffmpeg not found on PATH. .webp and .gif output are still available (pure Node, no system dependency). The raw frame images were kept in the recording directory.`,
+        compilerUsed: "none",
+      };
+    }
+  }
+
   if (ffmpegPresent) {
     try {
       const outputFileName = `recording.${format === "webp" || format === "gif" ? format : format}`;

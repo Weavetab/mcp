@@ -22,7 +22,7 @@ Weavetab solves this with a **Two-Tier Persistent Memory System** that accumulat
 | `~/.weavetab-system/memory/sites/` | **Persistent Site Profiles**: named workflow patterns, quirks, reliability scores | Weavetab Engine (autonomous) |
 | `~/.weavetab-system/memory/` | **Selector Confidence Cache**: per-domain element selectors and strike counters | Weavetab Engine (autonomous) |
 | `~/.weavetab-system/sessions/` | **Rolling Action Trails**: 50-step window for loop detection | Weavetab Engine (autonomous) |
-| `~/.weavetab/` | **User Configuration**: `config.json`, `secrets.json`, `policy.json`, plugins | User / Developer (manual) |
+| `~/.weavetab/` | **User Configuration**: `config.json`, `secrets.json`, `knowledge/`, plugins | User / Developer (manual) |
 
 > **Directory Law**: Machine-compiled memory profiles are strictly located in `~/.weavetab-system/memory/sites/`. User configuration in `~/.weavetab/` is never polluted by machine learning trails or dynamic decay counters.
 
@@ -105,7 +105,7 @@ $$\text{Reliability}_{t} = 0.85 \times \text{Reliability}_{t-1} + 0.15 \times (\
 All site memory operations use a single tool. Use `action: "get"` to read a site profile, `action: "learn"` to register a workflow, `action: "record_execution"` to update reliability scores, and `action: "record_quirk"` to store site quirks:
 
 ```json
-{ "action": "get", "origin": "https://github.com" }
+{ "tool": "get", "origin": "https://github.com" }
 ```
 
 ```json

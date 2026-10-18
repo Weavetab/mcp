@@ -1,6 +1,6 @@
 # Weavetab Plugin System & SDK Specification
 
-> **Version:** 2.5.0 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
+> **Version:** 2.5.1 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
 
 The **Weavetab Plugin System** allows developers to extend the MCP runtime with custom tools, visual HUD overlays, thought bubbles, lifecycle hooks, and tool overrides.
 
@@ -9,31 +9,33 @@ The **Weavetab Plugin System** allows developers to extend the MCP runtime with 
 ## 1. Quick Start
 
 ### Scaffold a New Plugin
-````bash
+
+```bash
 npx @weavetab/sdk init my-custom-plugin
 cd my-custom-plugin
 npm install
-`
+```
 
 ### Build & Compile
-````bash
+
+```bash
 npm run build
-`
+```
 
 ---
 
 ## 2. Plugin Architecture
 
-Every Weavetab plugin exports a plugin definition created with definePlugin:
+Every Weavetab plugin exports a plugin definition created with `definePlugin`:
 
-`	ypescript
+```typescript
 // src/index.ts
-import { definePlugin, type PluginContext } from @weavetab/sdk;
+import { definePlugin, type PluginContext } from "@weavetab/sdk";
 
 export default definePlugin({
-  name: weavetab-plugin-sample,
-  version: 1.0.0,
-  description: Sample custom tool plugin for Weavetab,
+  name: "weavetab-plugin-sample",
+  version: "1.0.0",
+  description: "Sample custom tool plugin for Weavetab",
 
   defaultConfig: {
     enableHud: true,
@@ -42,24 +44,24 @@ export default definePlugin({
   async onLoad(ctx: PluginContext) {
     // Register a custom MCP tool
     ctx.mcp.registerTool({
-      name: custom_analyzer,
-      description: Performs custom DOM analysis,
+      name: "custom_analyzer",
+      description: "Performs custom DOM analysis",
       schema: {
-        type: object,
+        type: "object",
         properties: {
-          selector: { type: string, description: Target CSS selector }
+          selector: { type: "string", description: "Target CSS selector" }
         },
-        required: [selector]
+        required: ["selector"]
       },
       handler: async (args: { selector: string }, session: any) => {
-        // Show thought bubble on browser tab
+        // Show thought bubble on the browser tab
         if (ctx.config.enableHud && session) {
-          await ctx.extension.showThought(session, Analyzing ...);
+          await ctx.extension.showThought(session, `Analyzing ${args.selector}`);
         }
 
         return {
           content: [
-            { type: text, text: Analysis complete for  }
+            { type: "text", text: `Analysis complete for ${args.selector}` }
           ]
         };
       }
@@ -70,23 +72,39 @@ export default definePlugin({
     // Cleanup resources
   }
 });
-`
+```
 
 ---
 
 ## 3. Manifest Specification (weavetab.json)
 
-Plugins require a weavetab.json manifest in their package root:
+Plugins require a `weavetab.json` manifest in their package root:
 
-`json
+```json
 {
-  name: weavetab-plugin-sample,
-  version: 1.0.0,
-  entry: ./dist/index.js,
-  permissions: [storage, extension, cdp],
-  tools: [custom_analyzer]
+  "$schema": "https://weavetab.dev/schema/plugin.json",
+  "name": "weavetab-plugin-sample",
+  "version": "1.0.0",
+  "entry": "dist/index.js",
+  "engines": {
+    "weavetab": "^2.5.1",
+    "node": ">=18.0.0"
+  },
+  "permissions": {
+    "extension": { "hud": true, "reason": "Displays HUD thoughts" },
+    "cdp": { "evaluate": true, "reason": "Runs DOM analysis" },
+    "tools": { "add": true, "reason": "Registers the custom_analyzer tool" }
+  },
+  "tools": [
+    {
+      "name": "custom_analyzer",
+      "description": "Performs custom DOM analysis"
+    }
+  ]
 }
-`
+```
+
+> Registering tools at runtime via `ctx.mcp.registerTool()` requires the `permissions.tools.add` permission.
 
 ---
 
@@ -94,28 +112,28 @@ Plugins require a weavetab.json manifest in their package root:
 
 | Capability | API | Description |
 | :--- | :--- | :--- |
-| **Sandboxed Storage** | ctx.storage.get(), ctx.storage.set() | Isolated key-value storage in ~/.weavetab/plugins/<name>/. |
-| **Thought Bubbles** | ctx.extension.showThought(session, text) | Floating green thoughts on the live browser tab. |
-| **HUD Badges** | ctx.extension.setHudState(session, state) | Real-time status in the Weavetab overlay. |
-| **Tool Overrides** | ctx.mcp.overrideTool(name, wrapperFn) | Wrap or intercept built-in MCP tools with custom pre/post logic. |
-| **Lifecycle Hooks** | ctx.hooks.beforeToolCall, ctx.hooks.afterToolCall | Global auditing and security filters. |
+| **Sandboxed Storage** | `ctx.storage.get()`, `ctx.storage.set()` | Isolated key-value storage in `~/.weavetab/plugins/<name>/`. |
+| **Thought Bubbles** | `ctx.extension.showThought(session, text)` | Floating green thoughts on the live browser tab. |
+| **HUD Badges** | `ctx.extension.setHudState(session, state)` | Real-time status in the Weavetab overlay. |
+| **Tool Overrides** | `ctx.mcp.overrideTool(name, wrapperFn)` | Wrap or intercept built-in MCP tools with custom pre/post logic. |
+| **Lifecycle Hooks** | `ctx.hooks.beforeToolCall`, `ctx.hooks.afterToolCall` | Global auditing and security filters. |
 
 ---
 
 ## 5. Installing Plugins
 
 ```bash
-# Install an official plugin
-weavetab plugin add @weavetab/plugin-youtube
-
-# Install community plugins (any npm package)
+# Install a plugin by npm package name
 weavetab plugin add my-custom-plugin
+
+# Install from a local path
+weavetab plugin add ./my-plugin
 
 # List installed plugins
 weavetab plugin list
 
 # Remove a plugin
 weavetab plugin rm my-custom-plugin
-`
+```
 
-Restart weavetab to load the newly installed plugin tools into the MCP server.
+Restart Weavetab to load the newly installed plugin tools into the MCP server.

@@ -9,7 +9,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6?style=flat-square" alt="license" /></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square" alt="Node" />
-  <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-42-ec4899?style=flat-square" alt="tools" /></a>
+  <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-41-ec4899?style=flat-square" alt="tools" /></a>
   <a href="https://github.com/sponsors/fy2ne"><img src="https://img.shields.io/badge/sponsor-fy2ne-ea4aaa?style=flat-square&logo=github-sponsors" alt="sponsor" /></a>
 </p>
 
@@ -35,17 +35,17 @@ Built and architected by [fy2ne](https://github.com/fy2ne).
 
 ## Why not Playwright or Puppeteer?
 
-> The standard approach ΓÇö Playwright over MCP ΓÇö works. But it carries fundamental architectural costs that compound at scale.
+> The standard approach — Playwright over MCP — works. But it carries fundamental architectural costs that compound at scale.
 
 |  | Playwright / Puppeteer | **Weavetab** |
 |---|---|---|
 | **Protocol layer** | WebDriver BiDi or CDP via browser binary | Raw CDP WebSocket, Layer 0 |
-| **Tool execution latency** | 50ΓÇô300 ms (binary + IPC overhead) | **3ΓÇô8 ms** |
-| **Desktop app control** | Browser only | Chrome + any Electron app (Discord, VS Code, FigmaΓÇª) |
+| **Tool execution latency** | 50–300 ms (binary + IPC overhead) | **3–8 ms** |
+| **Desktop app control** | Browser only | Chrome + any Electron app (Discord, VS Code, Figma…) |
 | **DOM representation** | Full HTML dump to LLM | Semantic Map 3.0 with delta diffing |
-| **Token cost per map** | ~2,000ΓÇô8,000 tokens | **~80ΓÇô400 tokens** (95% reduction via delta) |
+| **Token cost per map** | ~2,000–8,000 tokens | **~80–400 tokens** (95% reduction via delta) |
 | **CAPTCHA** | API service required | **Zero-API** via CDP mouse physics |
-| **Credential safety** | Secrets passed in plaintext | **Blind Injection** ΓÇö never in LLM context |
+| **Credential safety** | Secrets passed in plaintext | **Blind Injection** — never in LLM context |
 | **Extension access** | Limited | Full Chrome Extension API surface |
 
 ---
@@ -62,14 +62,14 @@ MCP Client (Claude / Cursor / Antigravity / Copilot / Windsurf)
 |                                                             |
 |  +-----------------+   +---------------------------------+  |
 |  | Security Layer  |-->|  Intelligence Engine            |  |
-|  | Rate ┬╖ RBAC     |   |  Map 3.0 ┬╖ Delta ┬╖ Memory       |  |
-|  | Policy ┬╖ Audit  |   |  Pruner ┬╖ Framework Detector    |  |
+|  | Rate · RBAC     |   |  Map 3.0 · Delta · Memory       |  |
+|  | Policy · Audit  |   |  Pruner · Framework Detector    |  |
 |  +-----------------+   +----------------+----------------+  |
 |                                         |                   |
 |                              +----------v----------------+  |
 |                              |  CDP Bridge               |  |
-|                              |  Ghost Cursor ┬╖ Typing    |  |
-|                              |  App Router ┬╖ Loop Guard  |  |
+|                              |  Ghost Cursor · Typing    |  |
+|                              |  App Router · Loop Guard  |  |
 |                              +----------+----------------+  |
 +-------------------------------------------------------------+
                                           |  CDP WebSocket (127.0.0.1)
@@ -120,10 +120,10 @@ Add to your MCP client config:
 The primary bottleneck in browser-based agents is DOM representation. Full HTML dumps are noisy, large, and structurally meaningless to language models. Weavetab's `browser_map` runs an in-browser CDP walker that produces a compact semantic map:
 
 ```
-ΓòöΓòÉ ACTIVE DIALOG: "Confirm Payment" ΓòÉΓòù
+╔═ ACTIVE DIALOG: "Confirm Payment" ═╗
   [w:3] button "Confirm"  [w:4] button "Cancel"
 
-Γöî "Pro Plan ΓÇö $49/mo"
+┌ "Pro Plan — $49/mo"
   [w:12] button "Upgrade"   [w:13] button "View Details"
   [w:14] input val:"john@example.com"  ph:"Email address"  FOCUSED
 
@@ -133,10 +133,10 @@ The primary bottleneck in browser-based agents is DOM representation. Full HTML 
 Key properties:
 
 - **Ref IDs** (`w:N`) are stable within a session and used by all interaction tools
-- **Container binding** ΓÇö buttons and inputs are grouped under their parent card, row, or section header
-- **Modal hoisting** ΓÇö open dialogs are isolated at the top so agents cannot miss them
-- **Link collapsing** ΓÇö repeated nav/footer runs of 4+ links compress into a single token line
-- **Semantic delta** ΓÇö on re-reads, only changed nodes are transmitted (`~` modified, `+` added, `ΓêÆ` removed), cutting re-read cost by up to 95%
+- **Container binding** — buttons and inputs are grouped under their parent card, row, or section header
+- **Modal hoisting** — open dialogs are isolated at the top so agents cannot miss them
+- **Link collapsing** — repeated nav/footer runs of 4+ links compress into a single token line
+- **Semantic delta** — on re-reads, only changed nodes are transmitted (`~` modified, `+` added, `−` removed), cutting re-read cost by up to 95%
 
 ### Ghost Cursor
 
@@ -184,13 +184,13 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 
 ### Zero-API CAPTCHA Solving
 
-`browser_captcha` solves Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha by orchestrating CDP mouse events that replicate human behavioral signatures ΓÇö velocity curves, micro-pauses, scroll inertia ΓÇö with no third-party API, no external service, and no API key required.
+`browser_captcha` solves Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha by orchestrating CDP mouse events that replicate human behavioral signatures — velocity curves, micro-pauses, scroll inertia — with no third-party API, no external service, and no API key required.
 
 ---
 
 ## Tool Suite
 
-42 tools across 9 categories. Full parameter reference: [`docs/tools/tools.md`](docs/tools/tools.md)
+41 tools across 9 categories. Full parameter reference: [`docs/tools/tools.md`](docs/tools/tools.md)
 
 | Category | Tools |
 |---|---|
@@ -201,7 +201,7 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 | **Safety & Human Oversight** | `browser_dialog` `browser_thoughts` `browser_clipboard` `browser_wait` |
 | **Autonomous CAPTCHA** | `browser_captcha` |
 | **Network & Storage** | `browser_network_intercept` `browser_storage` `browser_cookies` `browser_checkpoint` `browser_performance` |
-| **GitHub & Documents** | `browser_github` `browser_office` |
+| **Office Documents** | `browser_office` |
 | **Canvas & Eval** | `browser_eval` `browser_pdf` `browser_canvas` `browser_highlight` |
 
 ---
@@ -209,11 +209,11 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 ## Security
 
 - **Transport**: CDP WebSocket strictly bound to `127.0.0.1`. No listener on external interfaces.
-- **Policy Engine**: Per-domain `allow` / `read-only` / `deny` / `audit` rules in `~/.weavetab/policy.json`
-- **RBAC**: Four roles ΓÇö `admin`, `operator`, `viewer`, `automation` ΓÇö enforce tool-level permission gates
+- **Policy Engine**: Per-domain `allow` / `read-only` / `deny` / `audit` rules under the top-level `policies` array in `~/.weavetab/config.json`
+- **RBAC**: Five roles — `admin`, `operator`, `viewer`, `automation`, `system` — enforce tool-level permission gates
 - **Blind Injection**: Credentials resolved server-side, masked in all outputs and audit logs
 - **Loop Breaker**: Strike-based stuck-loop detector halts runaway autonomous sequences
-- **Audit Log**: All tool invocations, policy decisions, and errors written to `~/.weavetab/logs/audit.log`
+- **Audit Log**: All tool invocations, policy decisions, and errors written to `~/.weavetab-system/logs/mission_<timestamp>.log`
 
 Security vulnerabilities: `security@fy2ne.me` (do not use public issues).
 

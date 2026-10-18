@@ -172,6 +172,12 @@ export async function weaveKey(
     postUrl = frameTree.frame.url;
     const activeSession = sessionRegistry.getActive(getConfigAgentId(_config));
     if (activeSession) activeSession.url = postUrl;
+    const titleRes = await session.Runtime.evaluate({ expression: "document.title", returnByValue: true }).catch(() => null);
+    if (titleRes?.result?.value) {
+      postTitle = String(titleRes.result.value);
+    } else if (activeSession?.title) {
+      postTitle = activeSession.title;
+    }
   } catch { /* ignore */ }
 
   const urlChanged = postUrl !== urlBefore;

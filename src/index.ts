@@ -211,7 +211,6 @@ async function main(): Promise<void> {
       }
       getSystemDir("logs");
       getSystemDir("memory");
-      getSystemDir("profiles");
     } catch (err) {
       process.stderr.write("[Weavetab] Warning: Failed to lazily initialize directories " + err + "\n");
     }
@@ -508,7 +507,6 @@ async function main(): Promise<void> {
           console.log(boxen(pc.cyan("SECTION C: DEVELOPER & TELEMETRY"), { padding: 1, borderStyle: 'round', borderColor: 'cyan' }));
           if ((await run([
             S.cf("Send anonymous telemetry?", "telemetry", false),
-            S.tx("GitHub cache TTL (ms)", "githubCacheTtlMs", "1800000", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 0) return "Positive integer."; }),
           ])) === "back") process.exit(0);
         }
 
@@ -580,7 +578,6 @@ async function main(): Promise<void> {
           actionabilityTimeout: parseInt(a.actionabilityTimeout as string) || 500,
           refCacheTtlMs: parseInt(a.refCacheTtlMs as string) || 30000,
           telemetry: a.telemetry || false,
-          githubCacheTtlMs: parseInt(a.githubCacheTtlMs as string) || 1800000,
           downloadDir: a.downloadDir || "",
           pdfDir: a.pdfDir || "",
           snapshotDir: a.snapshotDir || "",

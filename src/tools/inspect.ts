@@ -29,7 +29,7 @@ export async function browserInspect(
 
   const { DOM, CSS, DOMDebugger } = session;
   await DOM.enable();
-  const doc = await DOM.getDocument({ depth: -1 }).catch(() => null);
+  await DOM.getDocument({ depth: 0 }).catch(() => null);
   await CSS.enable().catch(() => {});
 
   let resolvedNodeId: number | null = nodeId || null;
@@ -38,16 +38,12 @@ export async function browserInspect(
   if (!resolvedNodeId && ref) {
     const active = sessionRegistry.getActive(getConfigAgentId(_config));
     if (active) {
-      // getCachedActionMap returns null when the DOM has mutated since the last
-      // read (lastMutationTime > lastReadTime). On a cache miss, rebuild the map
-      // so ref IDs remain resolvable after any DOM change instead of silently
-      // falling through to "Could not resolve element to a node ID".
       let map = getCachedActionMap(active.targetId);
       if (!map) {
         try {
           map = await buildActionMap(session, { lite: true }, active.targetId);
           cacheActionMap(active.targetId, map);
-        } catch { /* best-effort; will fall through to selector strategies */ }
+        } catch { /* best-effort */ }
       }
       if (map) {
         const el = map.elements.find((e) => e.id === ref || e.id.endsWith(ref.startsWith("w:") ? ref.slice(2) : ref));
@@ -58,7 +54,6 @@ export async function browserInspect(
         if (!resolvedNodeId && el?.selector) {
           selector = el.selector;
         }
-        // Also try data-wt-id selector directly when backendNodeId lookup fails
         if (!resolvedNodeId && ref) {
           const rawId = ref.startsWith("w:") ? ref.slice(2) : ref;
           selector = selector || `[data-wt-id="${rawId}"]`;
@@ -92,14 +87,47 @@ export async function browserInspect(
   // Step 2: Fetch box model, computed styles, and event listeners in parallel
   const boxModel = await DOM.getBoxModel({ nodeId: resolvedNodeId }).catch(() => null);
 
+  function reconstructShorthand(prefix: 'margin' | 'padding', styles: Record<string, string>): string | undefined {
+    const t = styles[`${prefix}-top`];
+    const r = styles[`${prefix}-right`];
+    const b = styles[`${prefix}-bottom`];
+    const l = styles[`${prefix}-left`];
+    if (t === undefined && r === undefined && b === undefined && l === undefined) return undefined;
+    if (t === b && r === l) return t === r ? t : `${t} ${r}`;
+    if (r === l) return `${t} ${r} ${b}`;
+    return `${t} ${r} ${b} ${l}`;
+  }
+
   // Try CSS.getComputedStyleForNode first (CDP-native), fall back to Runtime.evaluate
   let computedStylesData: Record<string, string> | null = null;
   const cssResult = await CSS.getComputedStyleForNode({ nodeId: resolvedNodeId }).catch(() => null);
   if (cssResult?.computedStyle) {
-    const INTERESTING = ['display','position','width','height','margin','padding','color','background-color','font-size','visibility','opacity','z-index','pointer-events'];
-    computedStylesData = cssResult.computedStyle
+    const INTERESTING = [
+      'display','position','width','height','color','background-color','font-size','visibility','opacity','z-index','pointer-events',
+      'margin-top','margin-right','margin-bottom','margin-left',
+      'padding-top','padding-right','padding-bottom','padding-left'
+    ];
+    const rawStyles: Record<string, string> = cssResult.computedStyle
       .filter((s: any) => INTERESTING.includes(s.name))
-      .reduce((acc: Record<string, string>, curr: any) => ({ ...acc, [curr.name]: curr.value }), {});
+      .reduce((acc: Record<string, string>, curr: any) => ({ ...acc, [curr.name]: curr.value }), {} as Record<string, string>);
+
+    const margin = reconstructShorthand('margin', rawStyles);
+    const padding = reconstructShorthand('padding', rawStyles);
+    computedStylesData = {
+      display: rawStyles.display,
+      position: rawStyles.position,
+      width: rawStyles.width,
+      height: rawStyles.height,
+      ...(margin ? { margin } : {}),
+      ...(padding ? { padding } : {}),
+      color: rawStyles.color,
+      'background-color': rawStyles['background-color'],
+      'font-size': rawStyles['font-size'],
+      visibility: rawStyles.visibility,
+      opacity: rawStyles.opacity,
+      'z-index': rawStyles['z-index'],
+      'pointer-events': rawStyles['pointer-events']
+    };
   }
   if (!computedStylesData && selector) {
     // Fallback: use window.getComputedStyle via Runtime.evaluate

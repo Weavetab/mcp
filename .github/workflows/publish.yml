@@ -3,9 +3,28 @@ name: Publish
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run preflight only (verify, build, test, npm publish --dry-run - no upload)
+        type: boolean
+        default: false
+
+# One publish at a time; never cancel a release mid-upload.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
-  publish:
+  # ---------------------------------------------------------------------
+  # Gate. Runs the ENTIRE publish path without uploading. If anything here
+  # fails, `publish` never runs, so a release can never half-publish.
+  # ---------------------------------------------------------------------
+  preflight:
+    name: Preflight (dry-run)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -14,19 +33,86 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.x
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Ensure NPM_TOKEN is configured
+        shell: bash
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN secret is not set for this repository."
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm ci
+      - run: npm run verify
+      - run: npm test
+      - run: npm run build
+      - name: Guard - release tag matches package.json version
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "package.json=$pkg  release tag=$tag"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::Version mismatch: package.json ($pkg) != release tag ($tag)"
+            exit 1
+          fi
+      - name: Guard - version is not already published
+        shell: bash
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          ver="$(node -p "require('./package.json').version")"
+          if npm view "${name}@${ver}" version >/dev/null 2>&1; then
+            echo "::error::${name}@${ver} is already published - bump the version first."
+            exit 1
+          fi
+          echo "OK: ${name}@${ver} is clear to publish."
+      - name: Dry-run publish (validates tarball, files, lifecycle scripts)
+        run: npm publish --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Validate the Docker image build here too, so a broken Dockerfile is
+      # caught BEFORE npm is published (the docker job later only pushes).
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate Dockerfile (build only, no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: weavetab-mcp:preflight
+
+  publish:
+    name: Publish
+    needs: preflight
+    if: github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm provenance (--provenance)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
-      - run: npm test
       - run: npm run build
-      - run: npm publish --provenance
+      - name: Publish to npm
+        run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   docker:
     needs: publish
+    if: github.event_name == 'release' && github.event.inputs.dry_run != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

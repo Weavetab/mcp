@@ -127,6 +127,19 @@ async function enforceMaxTabs(config: Config): Promise<void> {
   logAction("browser_tabs", victim.id, `auto-closed idle tab: ${victim.title}`);
 }
 
+function normalizeUrl(u: string): string {
+  try {
+    const parsed = new URL(u);
+    let path = parsed.pathname;
+    if (path.length > 1 && path.endsWith('/')) {
+      path = path.slice(0, -1);
+    }
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}${parsed.hash}`.replace(/\/$/, "");
+  } catch {
+    return u.trim().replace(/\/+$/, "").toLowerCase();
+  }
+}
+
 // ─── Tools ────────────────────────────────────────────────────────────────────
 
 export async function WeavetabOpen(
@@ -135,12 +148,16 @@ export async function WeavetabOpen(
   reuse = true,
   appName?: string
 ): Promise<{ success: true; tabId: string; url: string; reused?: boolean }> {
-  // Infer appName from active session if omitted
   let resolvedAppName = appName;
   if (!resolvedAppName) {
-    const lastApp = sessionRegistry.getLastActiveApp();
-    if (lastApp) {
-      resolvedAppName = lastApp;
+    // Only inherit the sticky Electron app when no web-browser session is active
+    // (mirrors inferTargetApp()). Otherwise a plain `open` must target the browser:
+    // Electron targets cannot create new tabs via CDP (Target.createTarget fails).
+    if (!sessionRegistry.isBrowserSessionActive()) {
+      const lastApp = sessionRegistry.getLastActiveApp();
+      if (lastApp) {
+        resolvedAppName = lastApp;
+      }
     }
   }
 
@@ -150,8 +167,9 @@ export async function WeavetabOpen(
   if (reuse && url) {
     try {
       const targets = await getTabList(getConfigAgentId(config), resolvedAppName);
+      const targetNorm = normalizeUrl(url);
       const existing = targets.find(
-        (t: any) => t.url === url
+        (t: any) => normalizeUrl(t.url) === targetNorm
       );
       if (existing) {
         const client = await connectToTab(existing.id, undefined, undefined, undefined, resolvedAppName);
@@ -170,40 +188,68 @@ export async function WeavetabOpen(
 
   const bctxId = resolvedAppName ? undefined : sessionRegistry.getBrowserContextIdForAgent(getConfigAgentId(config));
   const metaSession = await CDP({ host: "127.0.0.1", port });
-  const { targetId } = await metaSession.Target.createTarget({ url, browserContextId: bctxId });
+  let targetId: string;
+  try {
+    ({ targetId } = await metaSession.Target.createTarget({ url, browserContextId: bctxId }));
+  } catch (err: any) {
+    await metaSession.close().catch(() => {});
+    if (resolvedAppName) {
+      throw new Error(
+        `[!] Electron app "${resolvedAppName}" does not support opening new tabs or windows via CDP ` +
+        `(Target.createTarget: ${err?.message || err}). Use browser_navigate with ` +
+        `{ app: "${resolvedAppName}", url: "${url}" } to load this URL in the app's existing window instead.`
+      );
+    }
+    throw err;
+  }
   await metaSession.close();
 
   recordTabActivity(targetId);
-  await connectToTab(targetId, port, getConfigAgentId(config), bctxId, appName);
-  await evaluateTabSemantics(targetId, appName);
+  const client = await connectToTab(targetId, port, getConfigAgentId(config), bctxId, resolvedAppName);
+  try {
+    await client.session.Target.activateTarget({ targetId });
+  } catch { /* non-fatal */ }
+  sessionRegistry.setActive(targetId, getConfigAgentId(config), resolvedAppName);
+  await evaluateTabSemantics(targetId, resolvedAppName);
 
-  logAction("browser_tabs", url, `opened ${targetId}`);
+  logAction("browser_tabs", url, `opened and activated ${targetId}`);
   return { success: true, tabId: targetId, url };
 }
 
-export async function WeavetabSwitch(tabId: string, config: Config, appName?: string): Promise<{ success: true; tab_id: string; title: string; url: string; contextSwitchCostMs: number }> {
-  const client = await connectToTab(tabId, undefined, undefined, undefined, appName);
-  
-  const startSwitch = Date.now();
-  await client.session.Target.activateTarget({ targetId: tabId });
-  sessionRegistry.setActive(tabId, getConfigAgentId(config), appName);
-  recordTabActivity(tabId);
-
-  const { frameTree } = await client.session.Page.getFrameTree();
-  let title = tabId;
+export async function WeavetabSwitch(tabId: string, config: Config, appName?: string): Promise<{ success: boolean; tab_id?: string; title?: string; url?: string; contextSwitchCostMs?: number; error_code?: string; message?: string }> {
   try {
-    const titleRes = await client.session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
-    if (titleRes?.result?.value) {
-      title = titleRes.result.value as string;
-    }
-  } catch {}
-  const url = frameTree.frame.url;
+    const client = await connectToTab(tabId, undefined, undefined, undefined, appName);
+    
+    const startSwitch = Date.now();
+    await client.session.Target.activateTarget({ targetId: tabId });
+    sessionRegistry.setActive(tabId, getConfigAgentId(config), appName);
+    recordTabActivity(tabId);
 
-  const cost = Date.now() - startSwitch;
-  logAction("browser_tabs", tabId, `switched to ${title} (cost: ${cost}ms)`);
-  resetLoopCounter("tab_switch");
-  
-  return { success: true, tab_id: tabId, title, url, contextSwitchCostMs: cost };
+    const { frameTree } = await client.session.Page.getFrameTree();
+    let title = client.title || "";
+    try {
+      const titleRes = await client.session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
+      if (titleRes?.result?.value) {
+        title = titleRes.result.value as string;
+      }
+    } catch {}
+    const url = frameTree?.frame?.url || client.url || "";
+    if (!title) {
+      title = frameTree?.frame?.name || url || tabId;
+    }
+
+    const cost = Date.now() - startSwitch;
+    logAction("browser_tabs", tabId, `switched to ${title} (cost: ${cost}ms)`);
+    resetLoopCounter("tab_switch");
+    
+    return { success: true, tab_id: tabId, title, url, contextSwitchCostMs: cost };
+  } catch (err: any) {
+    return {
+      success: false,
+      error_code: "TAB_NOT_FOUND",
+      message: `Failed to switch to tab ${tabId}: ${err?.message || err}`,
+    };
+  }
 }
 
 export async function WeavetabList(config: Config, appName?: string): Promise<{ tabs: TabInfo[] }> {
@@ -212,6 +258,12 @@ export async function WeavetabList(config: Config, appName?: string): Promise<{ 
   const activeTargetId = sessionRegistry.getActive(getConfigAgentId(config), appName)?.targetId;
 
   const tabs: TabInfo[] = targets
+    .filter((t: any) => {
+      if (t.url && (t.url.startsWith("chrome-extension://") || t.url.includes("/hud/index.html"))) {
+        return false;
+      }
+      return true;
+    })
     .map((t: any) => ({
       id: t.id,
       title: t.title,
@@ -224,7 +276,7 @@ export async function WeavetabList(config: Config, appName?: string): Promise<{ 
           ? "locked"
           : isIdleTab(t.id, activeTargetId)
             ? "idle"
-            : "loading",
+            : "alive",
     }));
 
   return { tabs };

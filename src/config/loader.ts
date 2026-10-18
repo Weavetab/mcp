@@ -59,7 +59,6 @@ export interface Config {
   actionabilityTimeoutMs: number;
   maxTabs: number;
   maxActionsPerMinute: number;
-  githubCacheTtlMs: number;
   refCacheTtlMs: number;
   
   downloadDir: string;
@@ -120,7 +119,6 @@ export const DEFAULT_CONFIG: Config = {
   actionabilityTimeoutMs: 300,
   maxTabs: 10,
   maxActionsPerMinute: 60,
-  githubCacheTtlMs: 30 * 60 * 1000,
   refCacheTtlMs: 30_000,
   
   downloadDir: "",
@@ -193,7 +191,6 @@ export function migrateToSimple(sectioned: any): Config {
     actionabilityTimeoutMs: sectioned.performance?.timeouts?.actionability || 500,
     maxTabs: sectioned.performance?.limits?.maxTabs || 10,
     maxActionsPerMinute: sectioned.performance?.limits?.maxActionsPerMinute || 60,
-    githubCacheTtlMs: sectioned.performance?.cache?.githubTtlMs || 30 * 60 * 1000,
     refCacheTtlMs: sectioned.performance?.cache?.refCacheTtlMs || 30_000,
     
     downloadDir: sectioned.paths?.downloads || "",
@@ -412,7 +409,6 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
     actionabilityTimeoutMs: validateField("actionabilityTimeoutMs", raw.actionabilityTimeoutMs, isNum, d.actionabilityTimeoutMs, v => v >= 50 && v <= 15000),
     maxTabs:             validateField("maxTabs", raw.maxTabs, isNum, d.maxTabs, v => v >= 1 && v <= 100),
     maxActionsPerMinute: validateField("maxActionsPerMinute", raw.maxActionsPerMinute, isNum, d.maxActionsPerMinute, v => v >= 1 && v <= 600),
-    githubCacheTtlMs:    validateField("githubCacheTtlMs", raw.githubCacheTtlMs, isNum, d.githubCacheTtlMs, v => v >= 0),
     refCacheTtlMs:       validateField("refCacheTtlMs", raw.refCacheTtlMs, isNum, d.refCacheTtlMs, v => v >= 1000 && v <= 300_000),
     
     downloadDir,
@@ -833,10 +829,6 @@ export function getConfigActionabilityTimeoutMs(config: Config): number {
   return config.actionabilityTimeoutMs;
 }
 
-export function getConfigGithubCacheTtl(config: Config): number {
-  return config.githubCacheTtlMs;
-}
-
 export function getConfigRefCacheTtl(config: Config): number {
   return config.refCacheTtlMs;
 }
@@ -891,10 +883,6 @@ export function getConfigNavigationTimeoutMs(config: Config): number {
   return config.navigationTimeout;
 }
 
-
-export function getConfigGithubCacheTtlMs(config: Config): number {
-  return config.githubCacheTtlMs;
-}
 
 export function getConfigRefCacheTtlMs(config: Config): number {
   return config.refCacheTtlMs;

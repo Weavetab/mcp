@@ -97,7 +97,7 @@ export async function weaveClick(
       execution_ms: Date.now() - startMs,
       tab_id: targetId,
       url: initialUrl,
-      title: "",
+      title: clientMatch?.title || "",
       url_changed: false,
       dom_changed: false,
       stuck_warning: false,
@@ -398,9 +398,10 @@ export async function weaveClick(
       return { stuck: false, url: currentUrl, newMap: null, dialog_open: true };
     }
 
+    const isElectronSession = Boolean(clientMatch?.isElectron);
     await Promise.all([
       waitForDOMStable(session, 20, 150),
-      waitForNetworkIdle(session, 30, 150).catch(() => {})
+      isElectronSession ? Promise.resolve() : waitForNetworkIdle(session, 30, 150).catch(() => {})
     ]);
     const finalUrl = (await Page.getFrameTree()).frameTree.frame.url;
 
@@ -460,10 +461,21 @@ export async function weaveClick(
 
     let newMap = getCachedActionMap(targetId, finalUrl);
     if (!newMap) {
-      newMap = await buildActionMap(session, { lite: true }, targetId);
-      cacheActionMap(targetId, newMap);
+      const _emptyMap: import('../cdp/walker.js').ActionMap = { url: finalUrl, title: '', elements: [], targetId };
+      const timeoutMap = new Promise<import('../cdp/walker.js').ActionMap>((resolve) => {
+        setTimeout(() => resolve(_emptyMap), 1500);
+      });
+      newMap = await Promise.race([
+        buildActionMap(session, { lite: true }, targetId),
+        timeoutMap
+      ]).catch(() => _emptyMap);
+
+      if (newMap.elements.length > 0) {
+        cacheActionMap(targetId, newMap);
+      }
     }
-    const delta = computeDelta(targetId, initialUrl, newMap.elements);
+    const safeMap = newMap || { url: finalUrl, title: '', elements: [], targetId };
+    const delta = computeDelta(targetId, initialUrl, safeMap.elements);
     const changesCount = delta ? delta.added.length + delta.removed.length + delta.changed.length : 0;
 
     // Check scroll position — same-page anchors scroll without URL/DOM change
@@ -600,7 +612,7 @@ export async function weaveClick(
     execution_ms: executionMs,
     tab_id: targetId,
     url: finalUrl,
-    title: newMap?.title || "",
+    title: newMap?.title || clientMatch?.title || "",
     url_changed: finalUrl !== initialUrl,
     ...(args.include_map ? { page_map: newMap ? toMarkdownTable(newMap.elements, finalUrl, newMap.title) : "" } : {}),
     dom_changed: !isStuck,

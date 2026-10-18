@@ -13,14 +13,16 @@ export interface SelectOptions {
   selector?: string;
   ref?: string;
   id?: string;
+  target?: string;
   value: string;
 }
 
 async function getSelector(session: CDP.Client, options: SelectOptions, config: Config): Promise<string> {
   if (options.selector) return options.selector;
   
-  if (options.ref || options.id) {
-    const ref = (options.ref || options.id) as string;
+  const targetRef = options.ref || options.id || options.target;
+  if (targetRef) {
+    const ref = targetRef;
     if (ref.startsWith("w:")) {
       return `[data-wt-id="${ref.slice(2)}"]`;
     }
@@ -70,7 +72,7 @@ async function getSelector(session: CDP.Client, options: SelectOptions, config: 
     });
     return result.value as string;
   }
-  throw new Error("browser_select requires either selector, nodeId, ref, or id");
+  throw new Error("browser_select requires either selector, nodeId, ref, target, or id");
 }
 
 function escapeSelector(sel: string): string {
@@ -81,9 +83,9 @@ export async function browserSelect(
   session: CDP.Client,
   options: SelectOptions,
   _config: Config
-): Promise<{ success: boolean; message: string }> {
-  if (!options.selector && !options.nodeId && !options.ref && !options.id) {
-    throw new Error("browser_select requires either selector, nodeId, ref, or id");
+): Promise<{ success: boolean; message: string; value?: string; selected?: string }> {
+  if (!options.selector && !options.nodeId && !options.ref && !options.id && !options.target) {
+    throw new Error("browser_select requires either selector, nodeId, ref, target, or id");
   }
 
   const selector = await getSelector(session, options, _config);
@@ -233,7 +235,12 @@ export async function browserSelect(
       input: { ref: selector, value },
       result: { success: true, stuck: false },
     });
-    return { success: true, message: `Selected value "${value}" on ${beforeState.isNative === "true" ? "native <select>" : "custom UI dropdown"} (${confirm.attempts} attempts, settled ${confirm.settleMs}ms)` };
+    return {
+      success: true,
+      value,
+      selected: value,
+      message: `Selected value "${value}" on ${beforeState.isNative === "true" ? "native <select>" : "custom UI dropdown"} (${confirm.attempts} attempts, settled ${confirm.settleMs}ms)`
+    };
   }
 
   recordAction({
@@ -244,6 +251,7 @@ export async function browserSelect(
   });
   return {
     success: false,
+    value,
     message: `Selection did not take effect. Before: value="${beforeState.value}". After: value="${confirm.after.value}".`
   };
 }

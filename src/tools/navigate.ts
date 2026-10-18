@@ -1,5 +1,5 @@
 /**
- * Weavetab â€” tools/navigate.ts
+ * Weavetab — tools/navigate.ts
  * URL navigation with domain blocklist enforcement and post-navigation DOM stability wait.
  * Weavetab by fy2ne
  */
@@ -36,18 +36,18 @@ export async function weaveNavigate(
 ): Promise<NavigateResult | WeaveError> {
   logDebug(`[weaveNavigate] Attempting navigation to: ${url}`);
   let parsed: URL;
-  if (url.startsWith('Weavetab://')) {
-    const page = url.replace('Weavetab://', '').split('?')[0] || 'dashboard';
+  if (url.toLowerCase().startsWith('weavetab://')) {
+    const page = url.slice('weavetab://'.length).split('?')[0] || 'dashboard';
     try {
       const { getFromExtension } = await import("../cdp/helpers.js");
       const extUrl = await getFromExtension(session, { type: 'RESOLVE_EXTENSION_URL', page });
       if (extUrl) {
         parsed = new URL(extUrl);
       } else {
-        return { success: false, error_code: "EXTENSION_URL_FAILED", message: `Could not resolve Weavetab://${page}` };
+        return { success: false, error_code: "EXTENSION_URL_FAILED", message: `Could not resolve weavetab://${page}` };
       }
     } catch {
-      return { success: false, error_code: "EXTENSION_NOT_AVAILABLE", message: "Extension runtime not available for Weavetab:// navigation" };
+      return { success: false, error_code: "EXTENSION_NOT_AVAILABLE", message: "Extension runtime not available for weavetab:// navigation" };
     }
   } else {
     try {
@@ -94,10 +94,10 @@ export async function weaveNavigate(
 
 
   // Extension pages: open in new tab instead of navigating current tab
-  // (chrome-extension:// pages use a different process context â€” Page.navigate
+  // (chrome-extension:// pages use a different process context — Page.navigate
   //  can break the CDP session or not fire loadEventFired properly)
   if (parsed.protocol === 'chrome-extension:') {
-    logDebug(`[weaveNavigate] Extension URL detected â€” opening in new tab: ${parsed.href}`);
+    logDebug(`[weaveNavigate] Extension URL detected — opening in new tab: ${parsed.href}`);
     const { sendToExtension } = await import("../cdp/helpers.js");
     await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `opening extension page...` } });
     const { WeavetabOpen } = await import("./tabs.js");

@@ -45,5 +45,5 @@ Any validation or security failure short-circuits the pipeline immediately and r
 | **Token efficiency** | **Semantic Deltas (97% reduction)** | Full DOM dumps | Full DOM dumps | Full DOM dumps |
 | **Desktop Electron Apps** | **Native (any Electron app)** | Experimental | Limited | Third-party driver |
 | **CAPTCHA Solver** | **Autonomous Zero-API** | None | None | None |
-| **MCP native** | **Yes (44 tools)** | No | No | No |
+| **MCP native** | **Yes (41 Tools)** | No | No | No |
 | **Cloud dependency** | **Zero** | Optional | Optional | Grid required |

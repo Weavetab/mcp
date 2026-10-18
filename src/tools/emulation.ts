@@ -26,6 +26,8 @@ export interface EmulationOptions {
   };
   /** Override browser timezone (e.g. "America/New_York", "Europe/London") */
   timezoneId?: string;
+  /** Emulate prefers-color-scheme (dark/light mode) */
+  colorScheme?: "light" | "dark" | "no-preference";
   /** User Agent string override */
   userAgent?: string;
 }
@@ -96,6 +98,14 @@ export async function browserEmulate(
         userAgent: options.userAgent,
       });
       applied.push(`userAgent: ${options.userAgent}`);
+    }
+
+    // 6. Color Scheme (prefers-color-scheme) Override
+    if (options.colorScheme) {
+      await session.Emulation.setEmulatedMedia({
+        features: [{ name: "prefers-color-scheme", value: options.colorScheme }],
+      });
+      applied.push(`colorScheme: ${options.colorScheme}`);
     }
 
     logAction("browser_emulate", "emulation", applied.join(", "));

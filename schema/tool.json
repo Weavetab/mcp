@@ -31,6 +31,10 @@
     "schema": {
       "type": "object",
       "description": "Alternative schema definition field."
+    },
+    "requiresSession": {
+      "type": "boolean",
+      "description": "When false, the host does not establish a browser/CDP session before invoking the tool (for API-only tools). Defaults to true."
     }
   },
   "additionalProperties": true

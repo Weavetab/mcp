@@ -1,6 +1,6 @@
 # Weavetab MCP Security Policy
 
-> **Version:** 2.5.0 (Beta) | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.5.1 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 ---
 
@@ -23,12 +23,12 @@ Weavetab interacts directly with the local Chromium browser instance via the Chr
 
 | Mechanism | Description | Implementation |
 |-----------|-------------|----------------|
-| **Domain Blacklist** | High-risk domains (banking portals, IAM providers, cloud infrastructure consoles) are hard-blocked from navigation and interaction | Hardcoded entries + user-configurable `block`/`allow` lists in `~/.Weavetab/policy.json` |
+| **Domain Blacklist** | High-risk domains (banking portals, IAM providers, cloud infrastructure consoles) are hard-blocked from navigation and interaction | Hardcoded entries + user-configurable `block`/`allow` lists in `~/.weavetab/config.json` |
 | **Domain Policy Engine** | Per-domain modes: `allow`, `read-only`, `deny`, `audit` | Policies defined as `{ pattern, mode }` entries; read-only mode blocks mutation tools |
 | **Localhost Binding** | The CDP WebSocket endpoint is strictly bound to `127.0.0.1` | No external network interfaces are exposed |
 | **Zero Cloud Dependency** | Weavetab executes entirely on the local machine | No telemetry, analytics, or user data transmitted unless `telemetry: true` is configured |
 | **Rate Limiting** | Configurable actions-per-minute threshold | Mutex-based enforcement prevents runaway agent behavior |
-| **Role-Based Access Control** | Four roles restrict tool access | `admin`, `operator`, `viewer`, `automation` with permission matrices |
+| **Role-Based Access Control** | Five roles restrict tool access | `admin`, `operator`, `viewer`, `automation`, `system` with permission matrices |
 | **Root Guard** | Prevents execution as root or superuser at startup | `assertNotRoot()` check on Unix systems |
 | **Shadow DOM UI Isolation** | All injected interfaces run in isolated contexts | Prevents host page script tampering |
 | **Blind Injection** | Secrets injected via `browser_type_secret` are masked to `[REDACTED]` in all subsequent DOM reads and audit logs | Domain scoping, Shadow DOM isolation, JS property hardening |
@@ -102,7 +102,7 @@ The old `EnvSecretProvider` (`.env`-based) is **deprecated and no longer support
 | Tool Category | admin | viewer | system |
 |---------------|-------|--------|--------|
 | All mutation tools | ✅ | ❌ | ❌ |
-| Read-only (map, find, scrape, console, eval, inspect, snapshot, screenshot, pdf, cookies, tabs, wait, browser_github) | ✅ | ✅ | ❌ |
+| Read-only (map, find, scrape, console, eval, inspect, snapshot, screenshot, pdf, cookies, tabs, wait) | ✅ | ✅ | ❌ |
 | burst, plan, wait, map | ✅ | ❌ | ✅ |
 | System (logs, detect, performance) | ✅ | ❌ | ❌ |
 
@@ -171,7 +171,7 @@ We strive to provide regular updates on progress throughout the process. If a fi
 ### For Users
 
 1. **Keep Weavetab Updated** — Always use the latest version to ensure security patches
-2. **Use RBAC** — Restrict tool access using appropriate roles (`admin`, `viewer`, `system`)
+2. **Use RBAC** — Restrict tool access using appropriate roles (`admin`, `operator`, `viewer`, `automation`, `system`)
 3. **Configure Domain Policies** — Block high-risk domains
 4. **Use Blind Injection** — Never pass passwords or 2FA codes directly to `browser_type`; use `browser_type_secret`
 

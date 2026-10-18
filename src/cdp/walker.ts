@@ -203,7 +203,22 @@ export async function buildActionMap(
   // ── Begin a new walk pass — resets per-pass dedup registry ─────────────────
   const passCounterBase = beginWalkPass();
   const url = options.url ?? (await session.Page.getFrameTree()).frameTree.frame.url;
-  const title = options.title ?? "";
+  let title = options.title;
+  if (!title) {
+    try {
+      const evalRes = await session.Runtime.evaluate({
+        expression: "document.title",
+        returnByValue: true
+      });
+      if (evalRes?.result?.value) {
+        title = String(evalRes.result.value);
+      }
+    } catch { /* ignore */ }
+  }
+  if (!title) {
+    const { sessionRegistry } = await import("../state/session.js");
+    title = sessionRegistry.getAll().find(c => c.targetId === targetId)?.title || "";
+  }
 
   // Inherit sticky pruning state from session if not explicitly set in options
   if (options.prune === undefined) {
@@ -430,7 +445,8 @@ export async function buildActionMap(
                 secretRegex.test(el.getAttribute('id') || '') ||
                 secretRegex.test(el.getAttribute('aria-label') || '')
               ));
-            var labelStr = el.getAttribute('aria-label') || el.innerText || (isSecret ? '' : el.value) || el.placeholder || '';
+            var richPh = el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-placeholder') || (el.querySelector ? (el.querySelector('[data-slate-placeholder]')?.textContent || '') : '') || '';
+            var labelStr = el.getAttribute('aria-label') || el.innerText || (isSecret ? '' : el.value) || richPh || '';
             // For radio/checkbox, serialize checked state as 'true'/'false' so the agent
             // can see which option is selected without having to scrape the DOM separately.
             var elType = (el.type || '').toLowerCase();
@@ -517,7 +533,7 @@ export async function buildActionMap(
               role: el.getAttribute('role') || role,
               type: elType || undefined,
               label: labelStr,
-              placeholder: el.placeholder || undefined,
+              placeholder: el.placeholder || richPh || undefined,
               value: valStr,
               x: Math.round(rect.left + rect.width / 2),
               y: Math.round(rect.top + rect.height / 2),
@@ -818,14 +834,26 @@ export function findAllMatches(
   // 1. Exact match (highest priority)
   elements.forEach(el => { if (n(el.label) === q) addMatch(el); });
 
+  // 1.5 Prefix stripped exact match (e.g. searching "general" for "#general" or vice versa)
+  const qStripped = q.replace(/^[#@]/, '');
+  if (qStripped !== q) {
+    elements.forEach(el => {
+      const elLabelClean = n(el.label).replace(/^[#@]/, '');
+      if (elLabelClean === qStripped) addMatch(el);
+    });
+  }
+
   // 2. placeholder text
-  elements.forEach(el => { if (n(el.placeholder) === q) addMatch(el); });
+  elements.forEach(el => { if (n(el.placeholder) === q || n(el.placeholder) === qStripped) addMatch(el); });
 
   // 3. data-testid
   elements.forEach(el => { if (n(el.testId) === q) addMatch(el); });
 
   // 4. visible text content / partial label match
-  elements.forEach(el => { if (n(el.label).includes(q)) addMatch(el); });
+  elements.forEach(el => {
+    const lbl = n(el.label);
+    if (lbl.includes(q) || (qStripped.length >= 3 && lbl.includes(qStripped))) addMatch(el);
+  });
 
   // 4.5 fuzzy partial match (split words)
   const words = q.split(/\s+/);
@@ -962,6 +990,14 @@ export async function resolveByAria(
       }
       if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
 
+      // 1.5 Partial aria-label match (e.g. "general" in "general (text channel)")
+      found = [];
+      for (i=0;i<all.length;i++) {
+        var aVal = norm(all[i].getAttribute('aria-label'));
+        if (aVal.indexOf(qLow)>=0 && aVal.length < qLow.length*4) found.push(all[i]);
+      }
+      if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
+
       // 2. Exact innerText on interactive elements
       all = document.querySelectorAll(INTERACTIVE);
       found = [];
@@ -971,11 +1007,12 @@ export async function resolveByAria(
       }
       if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
 
-      // 3. Placeholder
-      all = document.querySelectorAll('[placeholder]');
+      // 3. Placeholder and rich placeholders (data-placeholder, aria-placeholder, data-slate-placeholder)
+      all = document.querySelectorAll('[placeholder],[data-placeholder],[aria-placeholder],[data-slate-placeholder]');
       found = [];
       for (i=0;i<all.length;i++) {
-        if (norm(all[i].getAttribute('placeholder'))===qLow) found.push(all[i]);
+        var phVal = norm(all[i].getAttribute('placeholder') || all[i].getAttribute('data-placeholder') || all[i].getAttribute('aria-placeholder') || all[i].textContent);
+        if (phVal===qLow || phVal.indexOf(qLow)>=0) found.push(all[i]);
       }
       if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
 

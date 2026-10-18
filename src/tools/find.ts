@@ -51,23 +51,33 @@ export async function browserFind(
     expression: `(function(q, returnAll, maxMatches) {
       function norm(s) { return (s || '').toLowerCase().replace(/[.\\u2026\\s]+/g, ' ').trim(); }
       var qLow = norm(q);
-      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, null, false);
+      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null, false);
       var matchedNodes = [];
       var seenElements = new Set();
 
       while (walker.nextNode()) {
         var node = walker.currentNode;
-        var el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
-        if (!el || seenElements.has(el)) continue;
-
-        var text = norm(node.textContent);
-        var aria = norm(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || '');
-
-        if ((text && text.includes(qLow)) || (aria && aria.includes(qLow))) {
-          seenElements.add(el);
-          matchedNodes.push(el);
-          if (!returnAll && matchedNodes.length >= 1) break;
-          if (matchedNodes.length >= maxMatches) break;
+        if (node.nodeType === Node.TEXT_NODE) {
+          var t = norm(node.nodeValue);
+          if (t && t.includes(qLow)) {
+            var p = node.parentElement;
+            if (p && !seenElements.has(p)) {
+              seenElements.add(p);
+              matchedNodes.push(p);
+              if (!returnAll && matchedNodes.length >= 1) break;
+              if (matchedNodes.length >= maxMatches) break;
+            }
+          }
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          var el = node;
+          if (seenElements.has(el)) continue;
+          var aria = norm(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '');
+          if (aria && aria.includes(qLow)) {
+            seenElements.add(el);
+            matchedNodes.push(el);
+            if (!returnAll && matchedNodes.length >= 1) break;
+            if (matchedNodes.length >= maxMatches) break;
+          }
         }
       }
 
@@ -82,13 +92,29 @@ export async function browserFind(
         } else if (match.id) {
           sel = '#' + CSS.escape(match.id);
         } else {
-          var tmp = 'wt-find-' + i + '-' + Math.random().toString(36).slice(2,6);
-          match.setAttribute('data-wt-id', tmp);
-          sel = '[data-wt-id="' + tmp + '"]';
-          wtId = tmp;
+          // Construct clean selector path without dirtying the DOM
+          var path = [];
+          var curr = match;
+          while (curr && curr.nodeType === Node.ELEMENT_NODE && curr !== document.body && curr !== document.documentElement) {
+            var tag = curr.tagName.toLowerCase();
+            if (curr.id) {
+              path.unshift('#' + CSS.escape(curr.id));
+              break;
+            }
+            var p = curr.parentElement;
+            if (p) {
+              var sibs = Array.from(p.children).filter(function(c) { return c.tagName === curr.tagName; });
+              if (sibs.length > 1) {
+                tag += ':nth-of-type(' + (sibs.indexOf(curr) + 1) + ')';
+              }
+            }
+            path.unshift(tag);
+            curr = p;
+          }
+          sel = path.join(' > ') || match.tagName.toLowerCase();
         }
         return {
-          ref: 'w:' + wtId,
+          ref: wtId ? ('w:' + wtId) : undefined,
           label: match.getAttribute('aria-label') || (match.textContent||'').trim().slice(0,80) || q,
           tag: match.tagName.toLowerCase(),
           x: Math.round(r.left),

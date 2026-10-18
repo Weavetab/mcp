@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "author": {
     "name": "fy2ne",
@@ -68,7 +68,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "npm run build:ext && npm run build:hud && tsc",
+    "build": "node scripts/build.js",
     "build:hud": "esbuild ext-dist/hud/src/index.ts --bundle --minify --outfile=ext-dist/hud/hud.js --format=iife",
     "build:ext": "node scripts/build-ext.js",
     "docs:generate": "node scripts/generate-docs.js",

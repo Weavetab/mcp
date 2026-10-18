@@ -44,8 +44,8 @@ Use `browser_burst` to chain multiple actions in a single round-trip:
   "name": "browser_burst",
   "arguments": {
     "steps": [
-      { "action": "navigate_and_read", "url": "https://example.com" },
-      { "action": "click_and_wait", "selector": "#login-btn" }
+      { "tool": "navigate_and_read", "url": "https://example.com" },
+      { "tool": "click_and_wait", "selector": "#login-btn" }
     ]
   }
 }

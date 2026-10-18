@@ -104,10 +104,10 @@ async function detectFieldType(session: CDP.Client, selector: string): Promise<{
       if (!el) return JSON.stringify({ exists: false, fillable: false });
       if (el.tagName === 'LABEL') {
         var forId = el.getAttribute('for');
-        var target = forId ? document.getElementById(forId) : el.querySelector('input, textarea, select');
+        var target = forId ? document.getElementById(forId) : el.querySelector('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-slate-editor], [role="textbox"]');
         if (target) el = target;
       } else if (!['input', 'select', 'textarea'].includes(el.tagName.toLowerCase()) && !el.isContentEditable) {
-        var inner = el.querySelector('input, textarea, select');
+        var inner = el.querySelector('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-slate-editor], [role="textbox"]');
         if (inner) el = inner;
       }
       var tag = el.tagName.toLowerCase();
@@ -215,22 +215,21 @@ async function applyFieldValue(
         if (!el) return JSON.stringify({ ok: false, msg: 'Element not found' });
         if (el.tagName === 'LABEL') {
           var forId = el.getAttribute('for');
-          var target = forId ? document.getElementById(forId) : el.querySelector('input, textarea, select');
+          var target = forId ? document.getElementById(forId) : el.querySelector('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-slate-editor], [role="textbox"]');
           if (target) el = target;
         } else if (!['input', 'select', 'textarea'].includes(el.tagName.toLowerCase()) && !el.isContentEditable) {
-          var inner = el.querySelector('input, textarea, select');
+          var inner = el.querySelector('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-slate-editor], [role="textbox"]');
           if (inner) el = inner;
         }
 
         if (type === 'text') {
           el.focus();
-          // NOTE: el.click() intentionally removed — it generates bubbling click events
-          // that can activate extension UI elements (wt-minimize-btn etc.) when the
-          // field is adjacent to the WeaveTab panel. el.focus() is sufficient; the
-          // value is written via native setter + synthetic input/change events.
-          if (el.isContentEditable) {
-            // contenteditable: set via textContent and also try execCommand for rich editors
-            el.textContent = value;
+          if (el.isContentEditable || el.getAttribute('contenteditable') === 'true' || el.hasAttribute('data-slate-editor')) {
+            // contenteditable/Slate: use execCommand to preserve React/Slate virtual DOM tree
+            var isSlate = el.hasAttribute('data-slate-editor') || !!el.closest('[data-slate-editor]');
+            if (!isSlate) {
+              el.textContent = value;
+            }
             try { document.execCommand('selectAll', false, null); document.execCommand('insertText', false, value); } catch(e2) {}
           } else {
             var tag = el.tagName.toLowerCase();
@@ -246,14 +245,13 @@ async function applyFieldValue(
           var shouldCheck = value === 'true' || value === 'yes' || value === 'checked' || value === '1' || value === 'on';
           var isNative = el.tagName === 'INPUT' && el.type === 'checkbox';
           if (isNative) {
-            var currentlyChecked = el.checked;
-            if (currentlyChecked !== shouldCheck) {
-              // Use native checked setter to bypass React's synthetic event system
-              var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
-              if (nativeSetter) nativeSetter.call(el, shouldCheck); else el.checked = shouldCheck;
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              el.dispatchEvent(new Event('change', { bubbles: true }));
-              el.dispatchEvent(new Event('input', { bubbles: true }));
+            // A real click both toggles the box and fires trusted click/input/change
+            // events, keeping React/Vue controlled components in sync. Never set
+            // el.checked and then also dispatch a synthetic click: dispatching a
+            // click event runs the checkbox's default activation behavior and
+            // toggles it straight back, leaving the box unchanged.
+            if (el.checked !== shouldCheck) {
+              el.click();
             }
           } else {
             // ARIA custom checkbox (role=checkbox/switch): toggle aria-checked and click
@@ -530,7 +528,7 @@ export async function browserFill(
     try {
       const scanRes = await session.Runtime.evaluate({
         expression: `(function() {
-          const all = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea, select, [role="textbox"], [role="searchbox"], [role="combobox"], [role="checkbox"], [role="radio"], [role="switch"], [contenteditable="true"]'));
+          const all = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]), textarea, select, [role="textbox"], [role="searchbox"], [role="combobox"], [role="checkbox"], [role="radio"], [role="switch"], [contenteditable]:not([contenteditable="false"]), [data-slate-editor], [data-lexical-editor], .ProseMirror'));
           const activeEl = document.activeElement;
           
           return JSON.stringify(all.map((el, i) => {
@@ -552,21 +550,22 @@ export async function browserFill(
               label = el.getAttribute('name') || '';
             }
             
+            var isCheckable = type === 'checkbox' || type === 'radio' || role === 'checkbox' || role === 'radio' || role === 'switch';
             var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
-            var isSecret = el.hasAttribute('data-wt-secret') ||
+            var isSecret = !isCheckable && (el.hasAttribute('data-wt-secret') ||
               (el.tagName === 'INPUT' && (
                 type === 'password' ||
                 secretRegex.test(el.getAttribute('autocomplete') || '') ||
                 secretRegex.test(el.getAttribute('name') || '') ||
                 secretRegex.test(el.getAttribute('id') || '') ||
                 secretRegex.test(el.getAttribute('aria-label') || '')
-              ));
+              )));
 
             let val = '';
-            if (isSecret) {
-              val = '[REDACTED]';
-            } else if (type === 'checkbox' || type === 'radio' || role === 'checkbox' || role === 'radio' || role === 'switch') {
+            if (isCheckable) {
               val = el.checked !== undefined ? String(el.checked) : (el.getAttribute('aria-checked') || 'false');
+            } else if (isSecret) {
+              val = '[REDACTED]';
             } else if (tag === 'select') {
               val = el.options && el.selectedIndex >= 0 && el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : (el.value || '');
             } else if (el.isContentEditable) {
@@ -600,7 +599,7 @@ export async function browserFill(
       return {
         success: true,
         total_fields: inputsList.length,
-        succeeded: inputsList.length,
+        succeeded: 0,
         failed: 0,
         submitted: false,
         inputs: inputsList,
@@ -695,13 +694,11 @@ export async function browserFill(
             el.dispatchEvent(new Event('change', { bubbles: true }));
             results.push({ ref: f.ref, ok: true, msg: 'selected:' + el.options[foundIdx].text, type: 'select', isSecret: isSecret });
           } else if (tag === 'input' && inputType === 'checkbox') {
-            // Native checkbox
+            // Native checkbox — a real click toggles once and fires click/input/change
+            // (dispatching a synthetic click after setting el.checked toggles it back).
             var want = f.value === 'true' || f.value === 'yes' || f.value === 'checked' || f.value === '1' || f.value === 'on';
             if (el.checked !== want) {
-              var ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
-              if (ns) ns.call(el, want); else el.checked = want;
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              el.dispatchEvent(new Event('change', { bubbles: true }));
+              el.click();
             }
             results.push({ ref: f.ref, ok: true, msg: want ? 'checked' : 'unchecked', type: 'checkbox', isSecret: isSecret });
           } else if (tag === 'input' && inputType === 'radio') {

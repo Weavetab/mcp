@@ -133,8 +133,8 @@ To target an Electron application, simply pass the `app` argument to any Weaveta
   "arguments": {
     "app": "vscode",
     "steps": [
-      { "action": "click_and_wait", "selector": ".monaco-editor" },
-      { "action": "type_and_send", "text": "npm test" }
+      { "tool": "click_and_wait", "selector": ".monaco-editor" },
+      { "tool": "type_and_send", "text": "npm test" }
     ]
   }
 }
@@ -209,6 +209,17 @@ On Windows, applications like Discord and Slack install inside versioned folders
 To ensure external AI agents do not accidentally trigger a web browser launch when intending to control an Electron application:
 
 1. **Automatic Domain Routing**: When `browser_navigate` or `browser_tabs(action: "open")` receives an app domain (e.g. `discord.com`, `slack.com`, `linear.app`, `notion.so`), Weavetab automatically routes the target to the configured desktop application.
-2. **Sticky App Sessions**: When an agent operates inside an Electron app, the target session context remains sticky. Subsequent calls to `browser_tabs` or DOM tools stick to that active desktop app without spawning an unwanted Chrome window.
+2. **Sticky App Sessions**: When an agent operates inside an Electron app, the target session context remains sticky. Subsequent DOM calls stick to that active desktop app without spawning an unwanted Chrome window. The sticky Electron app is only used while **no web-browser session is active**; once a web-browser session is running, a plain `browser_tabs(action: "open")` (no `app`) targets the browser.
 3. **Explicit Browser Targeting**: When the agent specifically intends to use the web browser, passing `"app": "browser"` overrides desktop routing and directs operations to the web browser.
+
+---
+
+## 8. Opening Tabs Inside Electron Apps
+
+Electron apps do **not** implement the CDP `Target.createTarget` command, so a brand-new tab or window cannot be created inside a desktop app from the outside. `browser_tabs(action: "open")` therefore:
+
+- **Reuses** the existing tab/window when the requested URL is already loaded (focuses it) — the default `reuse: true` behavior.
+- **Fails fast with an actionable error** when a genuinely new tab is required in an Electron app, e.g. `[!] Electron app "slack" does not support opening new tabs or windows via CDP ... Use browser_navigate with { app: "slack", url: "..." } ...` — instead of surfacing a raw `Not supported` CDP message.
+
+To load a URL inside an Electron app, navigate its existing window with `browser_navigate({ app: "<name>", url: "..." })`.
 

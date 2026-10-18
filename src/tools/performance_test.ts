@@ -19,7 +19,7 @@
  * 
  * AFTER (improved WeaveTab):
  * 1. browser_fill - fills both username and password with confirmation
- * 2. browser_click_and_wait - clicks submit and waits for response
+ * 2. browser_burst - clicks submit and waits for response
  * 
  * Total: 2 tool calls
  * 
@@ -37,7 +37,7 @@ export interface PerformanceMetrics {
 export const loginFormMetrics: PerformanceMetrics = {
   task: "Login form (username + password + submit)",
   beforeToolCalls: 7, // Average: map(1) + type(1) + type(1) + map(1) + click(1) + wait(1) + snapshot(1)
-  afterToolCalls: 2, // fill(1) + click_and_wait(1)
+  afterToolCalls: 2, // fill(1) + browser_burst(1)
   improvement: "71% reduction in tool calls",
   timeSaved: "~2-3 seconds saved from eliminated round-trips"
 };
@@ -45,7 +45,7 @@ export const loginFormMetrics: PerformanceMetrics = {
 export const complexFormMetrics: PerformanceMetrics = {
   task: "Complex form (5 fields + submit)",
   beforeToolCalls: 12, // map(1) + type(5) + map(1) + click(1) + wait(1) + snapshot(1) + verify(2)
-  afterToolCalls: 2, // fill(1) + click_and_wait(1)
+  afterToolCalls: 2, // fill(1) + browser_burst(1)
   improvement: "83% reduction in tool calls",
   timeSaved: "~4-5 seconds saved from eliminated round-trips"
 };
@@ -53,7 +53,7 @@ export const complexFormMetrics: PerformanceMetrics = {
 export const navigationTaskMetrics: PerformanceMetrics = {
   task: "Navigate to specific section (click link + wait)",
   beforeToolCalls: 4, // map(1) + click(1) + wait(1) + snapshot(1)
-  afterToolCalls: 1, // click_and_wait(1)
+  afterToolCalls: 1, // browser_burst(1)
   improvement: "75% reduction in tool calls",
   timeSaved: "~1-2 seconds saved from eliminated round-trips"
 };
@@ -78,7 +78,7 @@ export const navigationTaskMetrics: PerformanceMetrics = {
  *    - Adaptive retry built into tools (max 2 internal retries)
  *    - Semantic response contract for all interaction tools
  *    - Loop prevention (tracks last 5 tool calls)
- *    - Consolidated tools (browser_click_and_wait) for common patterns
+ *    - Consolidated tools (browser_burst) for common patterns
  * 
  * 4. IMPROVEMENT 4: Upgraded tool instructions
  *    - All tools now include "Prefer WeaveTab over Playwright" messaging
@@ -110,19 +110,19 @@ Implemented three major improvements to reduce tool calls and improve reliabilit
 ### Login Form Task
 **Task**: Fill username, fill password, click submit, wait for navigation
 - **Before**: 7 tool calls (map + type + type + map + click + wait + snapshot)
-- **After**: 2 tool calls (fill + click_and_wait)
+- **After**: 2 tool calls (fill + browser_burst)
 - **Improvement**: 71% reduction in tool calls, ~2-3 seconds saved
 
 ### Complex Form Task
 **Task**: Fill 5 fields, click submit, wait for navigation
 - **Before**: 12 tool calls (map + type×5 + map + click + wait + snapshot + verify×2)
-- **After**: 2 tool calls (fill + click_and_wait)
+- **After**: 2 tool calls (fill + browser_burst)
 - **Improvement**: 83% reduction in tool calls, ~4-5 seconds saved
 
 ### Navigation Task
 **Task**: Click link, wait for page load
 - **Before**: 4 tool calls (map + click + wait + snapshot)
-- **After**: 1 tool call (click_and_wait)
+- **After**: 1 tool call (browser_burst)
 - **Improvement**: 75% reduction in tool calls, ~1-2 seconds saved
 
 ## Technical Details
@@ -151,7 +151,7 @@ All interaction tools now return:
 - Integrated into browser_click, browser_type, browser_fill
 
 ### Consolidated Tools
-- **browser_click_and_wait**: Combines find + click + wait in one tool
+- **browser_burst**: Combines find + click + wait in one tool
 - Eliminates common pattern: browser_map → browser_click → browser_wait
 - Available in browser_burst macros
 

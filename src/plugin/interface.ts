@@ -8,6 +8,11 @@ export interface WeavetabToolDefinition {
   name: string;
   description: string;
   schema: Record<string, z.ZodType<any>>;
+  /**
+   * When `false`, the host does NOT establish a browser/CDP session before
+   * invoking this tool. Use for API-only tools. Defaults to `true`.
+   */
+  requiresSession?: boolean;
   handler: (args: Record<string, any>, session: CDP.Client, config: Config) => Promise<Record<string, any>>;
 }
 
@@ -160,6 +165,8 @@ export interface WeavetabPluginTool<TArgs = any> {
   schema?: Record<string, any> | Record<string, z.ZodType<any>>;
   inputSchema?: Record<string, any>;
   parameters?: Record<string, any>;
+  /** See {@link WeavetabToolDefinition.requiresSession}. Defaults to `true`. */
+  requiresSession?: boolean;
   handler: (args: TArgs, session?: any, config?: any) => Promise<any>;
 }
 

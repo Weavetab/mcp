@@ -35,7 +35,7 @@ npm install -D @weavetab/sdk@latest
 | **Ultra-Low Latency** | Sub-10 ms tool execution via direct CDP WebSocket connections |
 | **Universal Control** | Native orchestration across Chromium web tabs and any Electron desktop app |
 | **Autonomous CAPTCHA** | Zero-API solving (Cloudflare Turnstile, GeeTest, reCAPTCHA) via human Bézier mouse physics |
-| **Security & RBAC** | 4-tier RBAC + domain policies + Blind Credential Injection + profile isolation |
+| **Security & RBAC** | 5-tier RBAC + domain policies + Blind Credential Injection + profile isolation |
 | **Token Efficiency** | Semantic Delta diffing (up to 97% reduction) + intelligent DOM pruning |
 | **Stealth & Physics** | Ghost Cursor (Bézier curves), human typing jitter, and CDP early-script fingerprint spoofing |
 | **Self-Learning** | Per-domain session memory, framework detection, and automated loop recovery |
@@ -43,7 +43,7 @@ npm install -D @weavetab/sdk@latest
 
 ## What You Get
 
-- **44 built-in MCP tools** covering DOM vision, input synthesis, desktop apps, tabs, network interception, office files, design extraction, and plugin lifecycle
+- **41 built-in MCP tools** covering DOM vision, input synthesis, desktop apps, tabs, network interception, office files, design extraction, and plugin lifecycle
 - **Universal Desktop App Runtime** — control Chrome and native Electron apps (Discord, Figma, VS Code) side-by-side without port conflicts
 - **Autonomous Zero-API CAPTCHA Solver** — solve Cloudflare Turnstile, GeeTest, and reCAPTCHA locally via CDP mouse physics with $0 API costs
 - **Two transport modes** — stdio (Claude Desktop, Cursor, VS Code, Windsurf, Antigravity) and WebSocket (`weavetab --ws --port 3000`)
@@ -57,4 +57,4 @@ npm install -D @weavetab/sdk@latest
 - **[Quickstart](quickstart.md)** — install and run a first mission in 60 seconds
 - **[Desktop & Electron Apps](../desktop-automation/electron-apps.md)** — configure and control desktop apps
 - **[Autonomous CAPTCHA Solver](../captcha-stealth/captcha-solver.md)** — zero-API anti-bot solving
-- **[MCP Tools Reference](../tools/tools.md)** — full reference for all 44 built-in automation tools
+- **[MCP Tools Reference](../tools/tools.md)** — full reference for all 41 built-in automation tools

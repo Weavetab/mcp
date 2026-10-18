@@ -414,17 +414,20 @@ export async function browserMap(
       logDebug(`[browserMap] Failed to compute DOM hash: ${e}`);
     }
 
-    // Try strictly validated cache first
-    const cachedMap = getCachedActionMap(targetId, currentUrl);
-    if (cachedMap) {
-      logDebug(`[browserMap] Cache Hit (strict)! Returning cached action map with ${cachedMap.elements.length} elements.`);
-      map = cachedMap;
-    } else {
-      // Fallback: check raw cache with domHash
-      const rawMap = getRawCachedActionMap(targetId, currentUrl);
-      if (rawMap && rawMap.domHash === domHash) {
-        logDebug(`[browserMap] Cache Hit (domHash=${domHash})! MutationObserver invalidated but DOM content length unchanged.`);
-        map = rawMap;
+    const hasFilterOptions = Boolean(options.scope || options.query || options.limit);
+    if (!hasFilterOptions) {
+      // Try strictly validated cache first
+      const cachedMap = getCachedActionMap(targetId, currentUrl);
+      if (cachedMap) {
+        logDebug(`[browserMap] Cache Hit (strict)! Returning cached action map with ${cachedMap.elements.length} elements.`);
+        map = cachedMap;
+      } else {
+        // Fallback: check raw cache with domHash
+        const rawMap = getRawCachedActionMap(targetId, currentUrl);
+        if (rawMap && rawMap.domHash === domHash) {
+          logDebug(`[browserMap] Cache Hit (domHash=${domHash})! MutationObserver invalidated but DOM content length unchanged.`);
+          map = rawMap;
+        }
       }
     }
   }
@@ -498,11 +501,11 @@ export async function browserMap(
         map.domHash = (result.value as number) ?? 0;
       } catch (e) {}
 
-      // Never write an AX-tree result into the primary DOM map cache.
+      // Never write an AX-tree result or a filtered map into the primary DOM map cache.
       // AX tree uses sequential w:1…w:N IDs; DOM walker uses stable content-addressable hashes.
-      // Caching the AX result would make the next plain browser_map() call return AX-tree refs,
-      // causing different tools to see different ref numbering for the same element.
-      if (!usedAXTree) {
+      // Caching a filtered or AX result would make subsequent plain browser_map() calls return incomplete refs.
+      const hasFilterOptions = Boolean(options.scope || options.query || options.limit);
+      if (!usedAXTree && !hasFilterOptions) {
         cacheActionMap(targetId, map);
       }
       logAction("browser_map", map.url, `${map.elements.length} elements`);
@@ -558,7 +561,9 @@ export async function browserMap(
 
   // ── Visual fallback when AX tree is empty ──────────────────────────────────
   let visualFallback: string | null = null;
-  if (map.elements.length === 0) {
+  const hasFilter = Boolean(options.query || options.scope);
+
+  if (map.elements.length === 0 && !hasFilter) {
     try {
       // Canvas detection — check before full screenshot analysis
       const { result: canvasCheck } = await session.Runtime.evaluate({
@@ -643,19 +648,37 @@ export async function browserMap(
         if (totalChanges === 0 && (!richDiff.iframes || richDiff.iframes.length === 0)) {
           lines.push("stable — no DOM changes since last map (use existing refs)");
         } else {
-          for (const r of richDiff.added) lines.push(`+ [${r.id}] ${r.role} "${r.label}"`);
+          const maxLines = 40;
+          let printed = 0;
+
+          for (const r of richDiff.added) {
+            if (printed >= maxLines) break;
+            lines.push(`+ [${r.id}] ${r.role} "${r.label}"`);
+            printed++;
+          }
           for (const r of richDiff.changed) {
+            if (printed >= maxLines) break;
             const changes = Object.keys(r.changes);
             const changeHints = changes.map(c => `${c}: "${r.changes[c].from}" → "${r.changes[c].to}"`).join(', ');
             const actionable = r.actionable ? ` ⚡${r.recommended_action ? ` ${r.recommended_action}` : ''}` : '';
             lines.push(`~ [${r.ref}] ${r.role} "${r.label}"${changeHints ? ` (${changeHints})` : ''}${actionable}`);
+            printed++;
           }
-          for (const id of richDiff.removed) lines.push(`- ${id}`);
+          for (const id of richDiff.removed) {
+            if (printed >= maxLines) break;
+            lines.push(`- [${id}] (removed)`);
+            printed++;
+          }
           if (richDiff.iframes) {
             for (const f of richDiff.iframes) {
+              if (printed >= maxLines) break;
               const icon = f.status === "added" ? "+" : f.status === "removed" ? "-" : "~";
               lines.push(`${icon} [iframe] ${f.frameUrl} (${f.status}, ${f.elementCount} elements)`);
+              printed++;
             }
+          }
+          if (totalChanges > printed) {
+            lines.push(`... (+${totalChanges - printed} more changes omitted)`);
           }
         }
         if (visualFallback) lines.push(visualFallback);
@@ -705,8 +728,18 @@ export async function browserMap(
   const lines: string[] = [];
   if (hint) lines.push(`> ${hint}`);
 
-  // Cure optional-login blindness by explicitly pointing out dismiss buttons
+  // Cure optional-login blindness by explicitly pointing out dismiss buttons on true modals
+  const isTitlebarControl = (el: any) => {
+    const sel = (el.selector || "").toLowerCase();
+    const lbl = (el.label || "").toLowerCase();
+    const isTopCorner = (el.y !== undefined && el.y < 45 && el.x !== undefined && el.x > 800);
+    return isTopCorner || sel.includes("win-close") || sel.includes("titlebar") || sel.includes("window-controls") || lbl === "close window";
+  };
+
+  const hasModalContext = map.elements.some(el => (el as any).isModal || el.role === "dialog" || el.role === "alertdialog");
   const dismissButton = map.elements.find(el =>
+    (hasModalContext || (el as any).isModal) &&
+    !isTitlebarControl(el) &&
     /(not now|skip|close|dismiss|no thanks|^x$)/i.test(el.label) &&
     /(button|link)/i.test(el.role)
   );

@@ -19,7 +19,7 @@ The wizard walks through every option across 6 interactive phases. Re-run it at 
 
 ## Wizard Phases
 
-1. **Phase 1 — Essentials:** Browser path, RBAC role (`admin`, `viewer`, `automation`), headless mode, dev mode, max tabs, actionability timeout, domain block/allow lists.
+1. **Phase 1 — Essentials:** Browser path, RBAC role (`admin`, `operator`, `viewer`, `automation`), headless mode, dev mode, max tabs, actionability timeout, domain block/allow lists.
 2. **Phase 2 — Advanced (optional):** Browser engine selection, timeouts and rate limits, telemetry opt-in, download/proxy directories, domain policy entries.
 3. **Phase 3 — Save Location:** Global (`~/.weavetab/config.json`).
 4. **Phase 4 — MCP Auto-Config:** Auto-detects installed IDEs (Claude Desktop, Cursor, Windsurf) and merges Weavetab into their MCP configuration.
