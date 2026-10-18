@@ -34,16 +34,7 @@ const steps = [
   {
     title: 'HUD overlay',
     detail: 'bundled widget layer',
-    cmd: [
-      node,
-      'node_modules/esbuild/bin/esbuild',
-      'ext-dist/hud/src/index.ts',
-      '--bundle',
-      '--minify',
-      '--format=iife',
-      '--log-level=warning',
-      '--outfile=ext-dist/hud/hud.js',
-    ],
+    cmd: [node, 'scripts/build-hud.js'],
     artifacts: ['ext-dist/hud/hud.js'],
   },
   {
