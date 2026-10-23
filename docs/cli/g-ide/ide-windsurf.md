@@ -16,8 +16,11 @@ Add to `~/.windsurf/mcp_config.json`:
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

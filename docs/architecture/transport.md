@@ -22,7 +22,11 @@ The MCP client spawns Weavetab as a child process and pipes messages over stdin/
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab"
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

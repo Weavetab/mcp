@@ -24,7 +24,6 @@ import { readLock, clearLock, isLockValid, isLockPending, acquireMutex } from ".
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { execSync } from "node:child_process";
 import { getSessionProfile, getElectronProfile } from "./profiles.js";
 import { safelyKillWeavetabProcesses, verifyProfileIsolation, verifyBrowserFingerprint, clearProfileVerificationCache } from "./security.js";
 
@@ -135,6 +134,7 @@ async function initSession(session: CDP.Client, targetId: string, port: number, 
 
   const { initOmniBroker } = await import("./omni_broker.js");
   await initOmniBroker(session, targetId, port);
+  session.Page.bringToFront().catch(() => {});
 
   if (isElectron) {
     // Electron desktop app initialization

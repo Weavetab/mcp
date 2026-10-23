@@ -24,8 +24,11 @@ slug: ide-claude-desktop
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

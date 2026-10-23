@@ -23,8 +23,11 @@ slug: ide-cursor
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

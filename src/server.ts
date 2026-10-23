@@ -2157,10 +2157,10 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     activeLoadedPlugins.set(plugin.name, plugin);
     process.stderr.write(`  [Plugin Loaded] ${plugin.name} v${plugin.version}\n`);
     
-    // Notify the client that tools have changed
+    // Notify the client that tools have changed (if transport is already connected)
     try {
       if ((server as any).server && typeof (server as any).server.sendToolListChanged === "function") {
-        (server as any).server.sendToolListChanged();
+        Promise.resolve((server as any).server.sendToolListChanged()).catch(() => {});
       }
     } catch {
       // Ignore if client doesn't support it or not connected yet
@@ -2178,7 +2178,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     const { WebSocketServerTransport } = await import("./cdp/websocket_transport.js");
     transport = new WebSocketServerTransport(wsPort);
     console.error(`[Weavetab] Mode: ${config.mode || "session"} (${config.mode === 'attach' ? 'user browser' : 'isolated browser'})`);
-    console.error(`[Weavetab] Transport: WebSocket server listening on port ${wsPort}`);
+    console.error(`[Weavetab] Transport: WebSocket server bound to 127.0.0.1:${wsPort} (Bearer/handshake auth & Origin check enabled)`);
   } else {
     transport = new StdioServerTransport();
     console.error(`[Weavetab] Mode: ${config.mode || "session"} (${config.mode === 'attach' ? 'user browser' : 'isolated browser'})`);

@@ -82,13 +82,18 @@ function safeLog(message: string): void {
   }
 }
 
-function printBootBanner(port: number): void {
+function printBootBanner(port: number, isWs = false): void {
   process.stderr.write("\n");
   process.stderr.write(chalk.bgHex("#3b82f6").bold("  Weavetab  ") + chalk.hex("#3b82f6")("  server  \n\n"));
   const config = getCachedConfig();
   process.stderr.write(chalk.gray(`  mode      `) + chalk.green(getConfigMode(config) || "session") + "\n");
-  process.stderr.write(chalk.gray(`  cdp port  `) + chalk.cyan(port === 0 ? "dynamic (auto-assigned)" : String(port)) + "\n");
-  process.stderr.write(chalk.yellow("  security: ") + "CDP port is bound to 127.0.0.1\n\n");
+  if (isWs) {
+    process.stderr.write(chalk.gray(`  ws host   `) + chalk.cyan(`127.0.0.1:${port}`) + "\n");
+    process.stderr.write(chalk.yellow("  security: ") + "CDP & WebSocket bound strictly to 127.0.0.1 (Bearer token + Origin check enforced)\n\n");
+  } else {
+    process.stderr.write(chalk.gray(`  cdp port  `) + chalk.cyan(port === 0 ? "dynamic (auto-assigned)" : String(port)) + "\n");
+    process.stderr.write(chalk.yellow("  security: ") + "CDP port is bound to 127.0.0.1\n\n");
+  }
 }
 
 async function main(): Promise<void> {
@@ -118,7 +123,7 @@ async function main(): Promise<void> {
     }
     const config = await loadConfig();
     (global as any).__wt_is_server = true;
-    await printBootBanner(wsPort);
+    printBootBanner(wsPort, true);
     await startServer(config, "ws", wsPort);
     return;
   }
@@ -175,19 +180,22 @@ async function main(): Promise<void> {
       process.exit(0);
     }
     if (cmd === "plugin") {
+      // Delegate to plugin CLI: enforces 3-tier trust verification (@weavetab/* official,
+      // community verified registry allowlist, and interactive confirmation + permission
+      // manifest inspection for unverified packages).
       const { runPluginCli } = await import("./cli/plugin.js");
       await runPluginCli(args.slice(1));
       process.exit(0);
     }
     if (cmd === "skills") {
-      const { execSync: exec } = await import("node:child_process");
-      const subArgs = args.slice(1).join(" ");
-      try {
-        exec(`npx -y @weavetab/skills@latest ${subArgs}`.trim(), { stdio: "inherit" } as any);
-      } catch {
-        process.exit(1);
-      }
-      process.exit(0);
+      const { spawnSync } = await import("node:child_process");
+      const npxBin = process.platform === "win32" ? "npx.cmd" : "npx";
+      const subArgs = args.slice(1);
+      const res = spawnSync(npxBin, [`@weavetab/skills@${WEAVETAB_VERSION}`, ...subArgs], {
+        stdio: "inherit",
+        shell: false
+      });
+      process.exit(res.status ?? 0);
     }
     if (cmd === "init" || cmd === "create" || cmd === "build" || cmd === "manifest") {
       console.log(pc.yellow(`\n[Weavetab] Plugin authoring commands are part of the developer SDK (@weavetab/sdk).`));
@@ -257,8 +265,8 @@ async function main(): Promise<void> {
 
   function generateMCPConfigEntry(configPath: string): string {
     const entry = {
-      command: "weavetab",
-      args: [],
+      command: "npx",
+      args: ["-y", "@weavetab/mcp"],
       env: {}
     };
     return JSON.stringify(entry, null, 2);
@@ -408,11 +416,11 @@ async function main(): Promise<void> {
         return "next";
       },
       S.sl("Role *", {
-        initialValue: "admin", options: [
-          { value: "admin", label: "Admin", hint: "Full access to all tools" },
-          { value: "operator", label: "Operator", hint: "Full access, standard agent role" },
-          { value: "viewer", label: "Viewer", hint: "Read-only access (map, find, scrape, console)" },
-          { value: "automation", label: "Automation", hint: "CI/CD mode (burst, plan, wait, map)" },
+        initialValue: "operator", options: [
+          { value: "operator", label: "Operator (Recommended)", hint: "Standard agent role with full automation access" },
+          { value: "viewer", label: "Viewer", hint: "Least-privilege read-only access (map, find, scrape, console)" },
+          { value: "automation", label: "Automation", hint: "Non-interactive CI/CD mode (burst, plan, wait, map)" },
+          { value: "admin", label: "Admin", hint: "Unrestricted access to all tools and system operations" },
         ]
       }, "role"),
       S.cf("Run browser in headless mode? *", "headless", false),
@@ -647,8 +655,8 @@ async function main(): Promise<void> {
 
                     if (!existingConfig.mcpServers) existingConfig.mcpServers = {};
                     existingConfig.mcpServers.weavetab = {
-                      command: "weavetab",
-                      args: []
+                      command: "npx",
+      args: ["-y", "@weavetab/mcp"]
                     };
 
                     fs.writeFileSync(ide.configPath, JSON.stringify(existingConfig, null, 2));
@@ -662,8 +670,8 @@ async function main(): Promise<void> {
                   const configSnippet = JSON.stringify({
                     mcpServers: {
                       weavetab: {
-                        command: "weavetab",
-                        args: []
+                        command: "npx",
+      args: ["-y", "@weavetab/mcp"]
                       }
                     }
                   }, null, 2);
@@ -686,8 +694,8 @@ async function main(): Promise<void> {
           const configSnippet = JSON.stringify({
             mcpServers: {
               weavetab: {
-                command: "weavetab",
-                args: []
+                command: "npx",
+      args: ["-y", "@weavetab/mcp"]
               }
             }
           }, null, 2);
@@ -722,17 +730,22 @@ async function main(): Promise<void> {
         });
 
         if (!p.isCancel(agentFramework)) {
-          const { execSync: exec } = await import("node:child_process");
+          const { spawnSync } = await import("node:child_process");
+          const npxBin = process.platform === "win32" ? "npx.cmd" : "npx";
+          const pinnedPkg = `@weavetab/skills@${WEAVETAB_VERSION}`;
           p.note(
-            `${pc.dim("Installing skills for")} ${pc.cyan(agentFramework as string)} ${pc.dim("via")} ${pc.cyan("npx @weavetab/skills@latest")}...`,
+            `${pc.dim("Installing skills for")} ${pc.cyan(agentFramework as string)} ${pc.dim("via")} ${pc.cyan(`npx ${pinnedPkg}`)}...`,
             "SKILLS INSTALLER"
           );
           console.log();
-          try {
-            exec(`npx -y @weavetab/skills@latest --framework ${agentFramework}`, { stdio: "inherit" } as any);
+          const res = spawnSync(npxBin, [pinnedPkg, "--framework", String(agentFramework)], {
+            stdio: "inherit",
+            shell: false
+          });
+          if (res.status === 0) {
             skillsInstalled = true;
-          } catch {
-            console.log(pc.yellow(`[WARN] Skills install failed — run 'npx @weavetab/skills@latest -f ${agentFramework}' manually`));
+          } else {
+            console.log(pc.yellow(`[WARN] Skills install failed — run 'npx ${pinnedPkg} -f ${agentFramework}' manually`));
           }
         }
       }
@@ -1264,7 +1277,7 @@ async function main(): Promise<void> {
     console.log();
 
     console.log(pc.bold("AGENT SKILLS (@weavetab/skills)"));
-    console.log(`  ${pc.dim("Install/update skills:")} ${pc.cyan("npx -y @weavetab/skills@latest")}`);
+    console.log(`  ${pc.dim("Install/update skills:")} ${pc.cyan(`npx @weavetab/skills@${WEAVETAB_VERSION}`)}`);
     console.log(`  ${pc.dim("Via CLI:")}               ${pc.cyan("weavetab skills [options]")}`);
     console.log();
 

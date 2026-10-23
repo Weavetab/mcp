@@ -16,8 +16,11 @@ Create `.vscode/mcp.json` in your workspace root:
 {
   "servers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

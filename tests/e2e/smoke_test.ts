@@ -76,7 +76,7 @@ async function run() {
     const r1 = await browserBurst(session, {
       steps: [
         { tool: "browser_map", args: {} },
-        { tool: "browser_wait", args: { for: "element", value: "h1", timeout: 3000 } },
+        { tool: "browser_wait", args: { for: "element", value: "p", timeout: 3000 } },
         { tool: "browser_scroll", args: { direction: "down", distance: 200 } },
       ]
     }, config);
@@ -84,6 +84,7 @@ async function run() {
     assert(r1.steps_completed === 3, `all 3 steps completed (got ${r1.steps_completed})`);
 
     const r2 = await browserBurst(session, {
+      stop_on_error: false,
       steps: [
         { tool: "browser_click", args: { label: "__nonexistent_xyz__" } },
         { tool: "browser_map",   args: {} },

@@ -50,4 +50,4 @@ Weavetab provides 41 production-grade MCP tools organized into functional catego
 
 ---
 
-*Auto-generated via `npm run docs:generate` on 2026-10-18.*
+*Auto-generated via `npm run docs:generate` on 2026-10-23.*

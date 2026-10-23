@@ -16,8 +16,11 @@ Add to `.opencode/config.json` or `opencode.json`:
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

@@ -25,7 +25,7 @@ Weavetab interacts directly with the local Chromium browser instance via the Chr
 |-----------|-------------|----------------|
 | **Domain Blacklist** | High-risk domains (banking portals, IAM providers, cloud infrastructure consoles) are hard-blocked from navigation and interaction | Hardcoded entries + user-configurable `block`/`allow` lists in `~/.weavetab/config.json` |
 | **Domain Policy Engine** | Per-domain modes: `allow`, `read-only`, `deny`, `audit` | Policies defined as `{ pattern, mode }` entries; read-only mode blocks mutation tools |
-| **Localhost Binding** | The CDP WebSocket endpoint is strictly bound to `127.0.0.1` | No external network interfaces are exposed |
+| **Localhost Binding & WS Auth** | Both the CDP endpoint and the MCP `--ws` daemon listener are strictly bound to `127.0.0.1` | `--ws` requires a 256-bit shared secret (`~/.weavetab-system/ws-secret`) via `Authorization: Bearer` or JSON-RPC handshake (`crypto.timingSafeEqual`), plus `Host` and `Origin` header validation to block cross-site WebSocket hijacking and DNS rebinding |
 | **Zero Cloud Dependency** | Weavetab executes entirely on the local machine | No telemetry, analytics, or user data transmitted unless `telemetry: true` is configured |
 | **Rate Limiting** | Configurable actions-per-minute threshold | Mutex-based enforcement prevents runaway agent behavior |
 | **Role-Based Access Control** | Five roles restrict tool access | `admin`, `operator`, `viewer`, `automation`, `system` with permission matrices |
@@ -97,20 +97,43 @@ The old `EnvSecretProvider` (`.env`-based) is **deprecated and no longer support
 
 ---
 
-## RBAC Role Matrix
+## RBAC Role Matrix & Privileged Tool Safeguards
 
-| Tool Category | admin | viewer | system |
-|---------------|-------|--------|--------|
-| All mutation tools | ✅ | ❌ | ❌ |
-| Read-only (map, find, scrape, console, eval, inspect, snapshot, screenshot, pdf, cookies, tabs, wait) | ✅ | ✅ | ❌ |
-| burst, plan, wait, map | ✅ | ❌ | ✅ |
-| System (logs, detect, performance) | ✅ | ❌ | ❌ |
+Weavetab defaults to the **`operator`** role. Users who want strict read-only inspection without DOM mutation, clipboard writes, or network interception can switch to the **`viewer`** role in `~/.weavetab/config.json`.
+
+| Tool Category | operator (default) | viewer (least-privilege) | automation | system | admin |
+|---------------|--------------------|--------------------------|------------|--------|-------|
+| DOM Mutation (`click`, `type`, `fill`, `select`, `pointer`, `upload`) | ✅ | ❌ | ✅ | ❌ | ✅ |
+| High-Privilege (`eval`, `cookies`, `storage`, `clipboard`, `network_intercept`, `type_secret`) | ✅ (Audit-logged + Domain Policy guarded) | Read-only subset | ✅ | ❌ | ✅ |
+| Read-only (`map`, `find`, `scrape`, `console`, `inspect`, `snapshot`, `screenshot`, `pdf`, `tabs`, `wait`) | ✅ | ✅ | ✅ | ❌ | ✅ |
+| System (`thoughts`, `detect`, `performance`, `checkpoint`, `pattern_learn`) | ✅ | ❌ | Non-interactive only | ✅ | ✅ |
 
 ### Role Definitions
 
-- **admin** — Full access to all tools and system operations
-- **viewer** — Read-only access to observation tools only
-- **system** — Restricted to burst/plan/wait/map for automated workflows
+- **operator (Default)** — Standard agent automation role with full tool access governed by domain blocklists (`*.bank.*`, `paypal.com`), rate limiting, and structured audit logging
+- **viewer** — Least-privilege read-only role for auditing and observation without DOM mutation, form submission, or network interception
+- **automation** — Non-interactive CI/CD execution role
+- **system** — Restricted to telemetry, diagnostics, and checkpointing
+- **admin** — Unrestricted administrative access
+
+### High-Privilege Tool Protections (`browser_eval`, `browser_cookies`, `browser_storage`, `browser_clipboard`)
+
+Because Weavetab is a Layer 0 browser and desktop automation engine, tools like `browser_eval`, `browser_cookies`, `browser_storage`, and `browser_clipboard` are core primitives rather than accidental exposures. To protect against indirect prompt injection from untrusted web content:
+1. **Pre-Execution Domain Gate**: Every tool call passes through `checkDomain()` before touching CDP. High-risk domains and user-configured `deny` or `read-only` policies block execution immediately.
+2. **Structured Audit Trail**: High-privilege invocations (`browser_eval`, `browser_cookies`, `browser_storage`, `browser_network_intercept`, `browser_type_secret`) are recorded via `logActionStructured()` in `~/.weavetab-system/logs/`.
+3. **Secret Redaction**: `SessionSecretTracker` strips and masks any blind-injected credentials (`[REDACTED]`) from `browser_eval`, `browser_scrape`, `browser_map`, and snapshot outputs so injected secrets cannot be exfiltrated via script evaluation.
+
+---
+
+## Plugin System Security & 3-Tier Trust Model
+
+The `weavetab plugin add <pkg>` CLI and runtime plugin loader (`src/plugin/loader.ts`, `src/plugin/registry.ts`) enforce a strict 3-tier verification model:
+
+1. **Tier 1 — Official (`@weavetab/*`)**: Cryptographically trusted first-party packages maintained by the Weavetab team.
+2. **Tier 2 — Verified Registry**: Community plugins audited and listed in the Weavetab Verified Registry (`registry.json`).
+3. **Tier 3 — Unverified Third-Party Packages**:
+   - **Mandatory Interactive Confirmation**: Unverified npm packages display a high-visibility security warning detailing code execution, CDP, and filesystem risks, and **block installation** in non-interactive shells unless explicitly overridden by the user.
+   - **Manifest & Permission Inspection (`weavetab.json`)**: Before activation, `inspectInstalledPackage()` and `normalizePermissions()` validate the plugin's declared permission manifest (`cdp`, `network`, `fs`, `shell`, `ReadOnly`) and engine compatibility without executing runtime code.
 
 ---
 

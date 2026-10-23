@@ -177,6 +177,7 @@ export async function weaveNavigate(
   sendToExtension(session, { type: 'Weavetab_STATE', cursor: { x: 10, y: 10 }, state: 'thinking' }).catch(() => {});
 
   await session.Page.navigate({ url: parsed.href });
+  session.Page.bringToFront().catch(() => {});
 
   // Fast navigation wait
   try {

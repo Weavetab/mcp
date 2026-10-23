@@ -55,7 +55,7 @@ Built and architected by [fy2ne](https://github.com/fy2ne).
 ```
 MCP Client (Claude / Cursor / Antigravity / Copilot / Windsurf)
        |
-       |  JSON-RPC 2.0  (stdio or WebSocket :3000)
+       |  JSON-RPC 2.0  (stdio or WebSocket 127.0.0.1:3000)
        v
 +-------------------------------------------------------------+
 |                   Weavetab MCP Server                       |
@@ -79,7 +79,7 @@ MCP Client (Claude / Cursor / Antigravity / Copilot / Windsurf)
        (any tab)                   (Electron apps)            (local dev)
 ```
 
-No cloud. No external process. The CDP WebSocket connection is strictly bound to `127.0.0.1`.
+No cloud. No external process. Both the CDP WebSocket connection and the optional MCP WebSocket daemon (`--ws`) are strictly bound to `127.0.0.1` with shared-secret authentication (`~/.weavetab-system/ws-secret`) and `Origin`/`Host` header verification.
 
 ---
 
@@ -208,9 +208,10 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 
 ## Security
 
-- **Transport**: CDP WebSocket strictly bound to `127.0.0.1`. No listener on external interfaces.
-- **Policy Engine**: Per-domain `allow` / `read-only` / `deny` / `audit` rules under the top-level `policies` array in `~/.weavetab/config.json`
-- **RBAC**: Five roles — `admin`, `operator`, `viewer`, `automation`, `system` — enforce tool-level permission gates
+- **Transport**: Both CDP WebSocket and MCP WebSocket daemon (`--ws`) are strictly bound to `127.0.0.1` with 256-bit shared-secret Bearer/handshake authentication and `Origin`/`Host` validation. No listener on external interfaces.
+- **Policy Engine**: Per-domain `allow` / `read-only` / `deny` / `audit` rules under the top-level `policies` array in `~/.weavetab/config.json` (blocks `*.bank.*` and `paypal.com` out of the box)
+- **RBAC**: Five roles — `operator` (default), `viewer` (least-privilege read-only), `automation`, `system`, `admin` — enforce tool-level permission gates
+- **Plugin Trust & Manifests**: 3-tier verification (`@weavetab/*` official, verified registry allowlist, and mandatory interactive confirmation + `weavetab.json` permission manifest inspection for unverified packages)
 - **Blind Injection**: Credentials resolved server-side, masked in all outputs and audit logs
 - **Loop Breaker**: Strike-based stuck-loop detector halts runaway autonomous sequences
 - **Audit Log**: All tool invocations, policy decisions, and errors written to `~/.weavetab-system/logs/mission_<timestamp>.log`
@@ -223,11 +224,11 @@ Security vulnerabilities: `security@fy2ne.me` (do not use public issues).
 
 ```bash
 weavetab                        # Start in stdio mode (default)
-weavetab --ws --port 3000       # WebSocket daemon mode
+weavetab --ws --port 3000       # WebSocket daemon mode (bound to 127.0.0.1)
 weavetab config                 # Interactive configuration wizard
 weavetab secrets set KEY_NAME   # Store a secret (never echoed)
 weavetab secrets list           # List stored secret keys (not values)
-weavetab plugin add <name>      # Install a plugin from npm
+weavetab plugin add <name>      # Install a verified/confirmed plugin
 weavetab plugin list            # List installed plugins
 ```
 
@@ -239,7 +240,7 @@ Configuration file: `~/.weavetab/config.json`
   "headless": false,
   "extension": true,
   "maxActionsPerMinute": 60,
-  "role": "admin",
+  "role": "operator",
   "electron": {
     "discord":     "...",
     "vscode":      "...",

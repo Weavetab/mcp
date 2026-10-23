@@ -11,7 +11,7 @@ import pdfParse from "pdf-parse";
 // @ts-ignore
 import mammoth from "mammoth";
 // @ts-ignore
-import * as xlsx from "xlsx";
+import * as xlsx from "@e965/xlsx";
 
 export interface OfficeParseOptions {
   /** URL to a remote document (PDF, XLSX, DOCX, CSV). Fetched in-browser using the user's active cookies. */

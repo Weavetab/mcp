@@ -108,7 +108,7 @@ export const DEFAULT_CONFIG: Config = {
   apps: undefined,
   electron: undefined,
   
-  role: "admin",
+  role: "operator",
   block: ["*.bank.*", "paypal.com"],
   allow: [],
   policies: [],

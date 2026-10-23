@@ -18,8 +18,11 @@ Any client speaking MCP JSON-RPC 2.0 can connect to Weavetab.
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

@@ -16,8 +16,11 @@ Add to `~/.antigravity/mcp.json` or workspace `mcp.json`:
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

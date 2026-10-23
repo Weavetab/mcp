@@ -16,9 +16,18 @@ Add to project `.claude/settings.json` or global configuration:
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab",
-      "args": []
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }
+```
+
+Or add directly via Claude Code CLI:
+
+```bash
+claude mcp add weavetab -- npx -y @weavetab/mcp
 ```

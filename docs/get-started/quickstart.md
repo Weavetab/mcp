@@ -23,13 +23,17 @@ npx -y @weavetab/mcp@latest
 
 ## 2. Wire to your MCP Client
 
-Point any MCP-compatible client (Claude Desktop, Cursor, Windsurf, VS Code, Antigravity) at the binary:
+Point any MCP-compatible client (Claude Desktop, Cursor, Windsurf, VS Code, Antigravity) at the server:
 
 ```json
 {
   "mcpServers": {
     "weavetab": {
-      "command": "weavetab"
+      "command": "npx",
+      "args": [
+        "-y",
+        "@weavetab/mcp"
+      ]
     }
   }
 }

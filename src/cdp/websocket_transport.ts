@@ -29,6 +29,30 @@ export function getWebSocketSecret(): string {
   return wsSecret;
 }
 
+function verifySecret(provided: string, expected: string): boolean {
+  if (typeof provided !== "string" || !provided) return false;
+  const a = Buffer.from(provided, "utf-8");
+  const b = Buffer.from(expected, "utf-8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true; // non-browser CLI/MCP clients omit Origin
+  try {
+    const parsed = new URL(origin);
+    return parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const hostname = host.split(":")[0]?.toLowerCase();
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+}
+
 export class WebSocketServerTransport implements Transport {
   private wss: WebSocketServer;
   private activeSocket: WebSocket | null = null;
@@ -39,29 +63,52 @@ export class WebSocketServerTransport implements Transport {
   onmessage?: (message: JSONRPCMessage) => void;
 
   constructor(port: number) {
-    this.wss = new WebSocketServer({ port, maxPayload: 1024 * 1024 }); // 1MB limit
-    this.wss.on("connection", (ws) => {
+    this.wss = new WebSocketServer({
+      host: "127.0.0.1",
+      port,
+      maxPayload: 1024 * 1024,
+      verifyClient: (info, cb) => {
+        if (!isAllowedHost(info.req.headers.host)) {
+          cb(false, 403, "Forbidden: DNS rebinding check failed");
+          return;
+        }
+        if (!isAllowedOrigin(info.origin)) {
+          cb(false, 403, "Forbidden: cross-origin WebSocket rejected");
+          return;
+        }
+        cb(true);
+      }
+    });
+
+    this.wss.on("connection", (ws, req) => {
       if (this.activeSocket) {
         ws.close(1013, "Only one concurrent connection allowed");
         return;
       }
       
-      // Require authentication before accepting messages
-      this.authenticated = false;
+      // Allow HTTP Authorization: Bearer <secret> during upgrade handshake
+      const authHeader = req?.headers?.authorization;
+      const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      if (bearerToken && verifySecret(bearerToken, getWebSocketSecret())) {
+        this.authenticated = true;
+        this.activeSocket = ws;
+      } else {
+        this.authenticated = false;
+      }
       
       ws.on("message", (data) => {
         try {
           const rawMessage = data.toString();
           const message = JSON.parse(rawMessage) as JSONRPCMessage;
           
-          // Check for authentication handshake
+          // Check for authentication handshake if not already authenticated via Bearer header
           if (!this.authenticated) {
             const msg = message as any;
             if (msg.method === "authenticate" && msg.params && Array.isArray(msg.params)) {
               const providedSecret = msg.params[0] as string;
               const expectedSecret = getWebSocketSecret();
               
-              if (providedSecret === expectedSecret) {
+              if (verifySecret(providedSecret, expectedSecret)) {
                 this.authenticated = true;
                 this.activeSocket = ws;
                 ws.send(JSON.stringify({ result: { authenticated: true }, id: msg.id }));
