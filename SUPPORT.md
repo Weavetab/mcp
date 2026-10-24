@@ -57,7 +57,7 @@ Consult our **[Security Policy](SECURITY.md)** and report sensitive security iss
 
 Need dedicated support, custom MCP tool development, enterprise security auditing, or on-premise multi-agent orchestration?
 
-* **Founder & Lead Maintainer**: Anas Khezaz (y2ne)
+* **Founder & Lead Maintainer**: fy2ne (y2ne)
 * **Contact**: [hello@fy2ne.me](mailto:hello@fy2ne.me)
 * **Website**: [https://fy2ne.me](https://fy2ne.me)
 
