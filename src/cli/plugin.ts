@@ -4,6 +4,19 @@ import boxen from "boxen";
 import ora from "ora";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+
+function getGlobalPluginDir(): string {
+  const dir = path.join(os.homedir(), ".weavetab", "plugins");
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const pkgPath = path.join(dir, "package.json");
+  if (!fs.existsSync(pkgPath)) {
+    fs.writeFileSync(pkgPath, JSON.stringify({ name: "weavetab-plugins", private: true, dependencies: {} }, null, 2));
+  }
+  return dir;
+}
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
@@ -234,7 +247,8 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
 
   // Run npm install
   const spinner = ora(`Installing ${pc.cyan(selectedPkg)} via npm...`).start();
-  const installResult = await runNpmCommand(["install", selectedPkg]);
+  const globalPluginDir = getGlobalPluginDir();
+  const installResult = await runNpmCommand(["install", selectedPkg], globalPluginDir);
 
   if (installResult.code !== 0) {
     spinner.fail(pc.red(`Failed to install ${selectedPkg}`));
@@ -247,7 +261,7 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
   spinner.succeed(pc.green(`installed ${pc.bold(selectedPkg)}`));
 
   // Inspect installed package for weavetab.json
-  const targetDir = path.join(process.cwd(), "node_modules", selectedPkg);
+  const targetDir = path.join(globalPluginDir, "node_modules", selectedPkg);
   const installedInfo = inspectInstalledPackage(targetDir);
 
   if (installedInfo && installedInfo.manifest) {
@@ -329,7 +343,8 @@ export async function runPluginAddLocal(inputPath: string): Promise<void> {
   }
 
   const spinner = ora(`Installing local plugin ${pc.cyan(local.packageName)} from ${pc.dim(absDir)} via npm...`).start();
-  const installResult = await runNpmCommand(["install", absDir]);
+  const globalPluginDir = getGlobalPluginDir();
+  const installResult = await runNpmCommand(["install", absDir], globalPluginDir);
   if (installResult.code !== 0) {
     spinner.fail(pc.red(`Failed to install ${local.packageName}`));
     if (installResult.stderr) console.error(pc.dim(installResult.stderr));
@@ -337,7 +352,7 @@ export async function runPluginAddLocal(inputPath: string): Promise<void> {
   }
   spinner.succeed(pc.green(`installed ${pc.bold(local.packageName)} (local path)`));
 
-  const targetDir = path.join(process.cwd(), "node_modules", local.packageName);
+  const targetDir = path.join(globalPluginDir, "node_modules", local.packageName);
   const installedInfo = fs.existsSync(targetDir) ? inspectInstalledPackage(targetDir) : local;
   const manifest = (installedInfo?.manifest || local.manifest) as any;
   const tools = manifest.tools || [];
@@ -546,7 +561,8 @@ export async function runPluginRemove(pkgName: string, args: string[] = []): Pro
   }
 
   const spinner = ora(`Uninstalling ${pc.cyan(pkgName)} via npm...`).start();
-  const result = await runNpmCommand(["uninstall", pkgName]);
+  const globalPluginDir = getGlobalPluginDir();
+  const result = await runNpmCommand(["uninstall", pkgName], globalPluginDir);
 
   if (result.code !== 0) {
     spinner.fail(pc.red(`Failed to remove ${pkgName}`));
