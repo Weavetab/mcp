@@ -40,8 +40,8 @@ Any validation or security failure short-circuits the pipeline immediately and r
 
 | Feature | Weavetab | Playwright | Puppeteer | Selenium |
 |---|---|---|---|---|
-| **Architecture** | Direct CDP Layer 0 | Node bridge abstraction | CDP wrapper | WebDriver |
-| **Mean latency** | **3–8 ms** | 15–40 ms | 10–25 ms | 50–150 ms |
+| **Architecture** | Direct CDP WebSocket | Node bridge abstraction | CDP wrapper | WebDriver |
+| **Execution model** | **In-process local socket** | IPC binary bridge | IPC binary bridge | HTTP WebDriver relay |
 | **Token efficiency** | **Semantic Deltas (97% reduction)** | Full DOM dumps | Full DOM dumps | Full DOM dumps |
 | **Desktop Electron Apps** | **Native (any Electron app)** | Experimental | Limited | Third-party driver |
 | **CAPTCHA Solver** | **Autonomous Zero-API** | None | None | None |

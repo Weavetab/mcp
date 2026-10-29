@@ -1365,7 +1365,7 @@ server.tool(
   // ── 31. browser_scrape ──────────────────────────────────────────────────────
   server.tool(
     "browser_scrape",
-    "Sub-5ms latency, zero waste extraction. Best for batch list extraction, table parsing, targeted data mining. Prefer this over browser_map for pure data extraction. Note: XPath selectors lack shadow-DOM support; use CSS selectors for shadow DOMs.",
+    "Structured data extraction via CSS or XPath selectors. Best for batch list extraction, table parsing, targeted data mining. Prefer this over browser_map for pure data extraction. Note: XPath selectors lack shadow-DOM support; use CSS selectors for shadow DOMs.",
     {
       query: z.string().describe("CSS Selector or XPath query to extract."),
       type: z.enum(["css", "xpath"]).optional().describe("Query type (default 'css')."),

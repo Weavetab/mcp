@@ -201,7 +201,7 @@ async function main(): Promise<void> {
       console.log(pc.yellow(`\n[Weavetab] Plugin authoring commands are part of the developer SDK (@weavetab/sdk).`));
       console.log(pc.dim("To scaffold a new plugin:   ") + pc.cyan("npx -y @weavetab/sdk init <name>"));
       console.log(pc.dim("To build/validate a plugin: ") + pc.cyan("npx @weavetab/sdk build"));
-      console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://github.com/weavetab/sdk\n"));
+      console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://weavetab.dev/docs/sdk-overview\n"));
       process.exit(0);
     }
   }
@@ -1235,7 +1235,7 @@ async function main(): Promise<void> {
         runMainUI();
       }
       if (k === "g") {
-        await open("https://github.com/weavetab");
+        await open("https://github.com/weavetab/mcp");
       }
       if (k === "n") {
         await open("https://www.npmjs.com/package/@weavetab/mcp");
@@ -1308,7 +1308,7 @@ async function main(): Promise<void> {
     console.log();
 
     console.log(pc.bold("LINKS"));
-    console.log(`  ${pc.cyan("GitHub:")}  ${pc.dim("https://github.com/weavetab")}`);
+    console.log(`  ${pc.cyan("GitHub:")}  ${pc.dim("https://github.com/weavetab/mcp")}`);
     console.log(`  ${pc.cyan("npm:")}     ${pc.dim("https://www.npmjs.com/package/@weavetab/mcp")}`);
     console.log(`  ${pc.cyan("Website:")} ${pc.dim("https://weavetab.dev")}`);
     console.log();

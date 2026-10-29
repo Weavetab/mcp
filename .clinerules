@@ -6,7 +6,7 @@ Welcome, Agent. This file is your strict, immutable operational guide for develo
 
 ## 🏛️ Full Weavetab Architecture
 
-Weavetab is a production-grade local browser automation platform. It operates directly at **Layer 0** (using direct WebSocket-based Chrome DevTools Protocol communication), completely bypassing heavy, high-latency testing engines like Puppeteer or Playwright.
+Weavetab is a production-grade local browser automation platform. It communicates directly over the Chrome DevTools Protocol (CDP) WebSocket, bypassing external testing drivers like Puppeteer or Playwright.
 
 ### The 4-Layer Feature Flow:
 1. **Layer 1: The MCP Schema Definition (`src/server.ts`)**

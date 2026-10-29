@@ -1,6 +1,6 @@
 ---
 title: "Desktop & Electron Apps"
-description: "Native Layer 0 automation for VS Code, Discord, Figma, Slack, and any Electron app."
+description: "Native CDP automation for VS Code, Discord, Figma, Slack, and any Electron app."
 product: mcp
 section: desktop-automation
 badge: new
@@ -10,7 +10,7 @@ slug: electron-apps
 
 # Desktop & Electron Application Automation
 
-Weavetab is a **universal Layer 0 agent runtime**. In addition to standard Chromium web browsing, Weavetab gives AI agents direct, native CDP control over **any desktop Electron application** — including Discord, VS Code, Figma, Slack, Obsidian, Postman, Notion, Spotify, and custom internal tools.
+Weavetab is a **universal browser and desktop agent runtime**. In addition to standard Chromium web browsing, Weavetab gives AI agents direct, native CDP control over **any desktop Electron application** — including Discord, VS Code, Figma, Slack, Obsidian, Postman, Notion, Spotify, and custom internal tools.
 
 ## How It Works
 
@@ -174,13 +174,13 @@ Then in your `config.json`, simply map `"vscode": 9222` or `"obsidian": 9225`.
     {
       "name": "discord",
       "status": "running_no_debug",
-      "configuredPath": "C:\\Users\\username\\AppData\\Local\\Discord\\app-1.0.9256\\Discord.exe"
+      "configuredPath": "%LOCALAPPDATA%\\Discord\\app-<version>\\Discord.exe"
     },
     {
       "name": "slack",
       "status": "connected",
       "port": 9222,
-      "configuredPath": "C:\\Users\\username\\AppData\\Local\\slack\\app-4.38.125\\slack.exe",
+      "configuredPath": "%LOCALAPPDATA%\\slack\\app-<version>\\slack.exe",
       "activeTabs": [
         { "id": "PAGE_1", "title": "general - Slack", "url": "https://app.slack.com/client/..." }
       ]
@@ -188,7 +188,7 @@ Then in your `config.json`, simply map `"vscode": 9222` or `"obsidian": 9225`.
     {
       "name": "vscode",
       "status": "offline",
-      "configuredPath": "C:\\Users\\username\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+      "configuredPath": "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe"
     }
   ]
 }

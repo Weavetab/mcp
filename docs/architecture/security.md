@@ -9,7 +9,7 @@ slug: security
 
 # Security Model
 
-Weavetab executes direct Layer 0 CDP commands — security is layered and **deny-by-default for risky surfaces**.
+Weavetab executes direct CDP commands — security is layered and **deny-by-default for risky surfaces**.
 
 ## Defense-in-Depth Mechanisms
 

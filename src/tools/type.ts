@@ -1,6 +1,6 @@
 import { logDebug } from "../audit/logger.js";
 // src/tools/type.ts
-// Priority 2: Sub-10ms Typing Path & Predictive Action Queue
+// typing dispatch and stuck-input recovery
 
 import CDP from "chrome-remote-interface";
 import { buildActionMap, findBestMatch, findAllMatches, toRefEntries, safeSelector, toMarkdownTable, resolveByAria, recoverDetachedRef } from "../cdp/walker.js";

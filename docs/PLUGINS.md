@@ -1,6 +1,6 @@
 # Weavetab Plugin System & SDK Specification
 
-> **Version:** 2.5.1 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
+> **Version:** 2.5.2 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
 
 The **Weavetab Plugin System** allows developers to extend the MCP runtime with custom tools, visual HUD overlays, thought bubbles, lifecycle hooks, and tool overrides.
 
@@ -87,7 +87,7 @@ Plugins require a `weavetab.json` manifest in their package root:
   "version": "1.0.0",
   "entry": "dist/index.js",
   "engines": {
-    "weavetab": "^2.5.1",
+    "weavetab": "^2.5.2",
     "node": ">=18.0.0"
   },
   "permissions": {

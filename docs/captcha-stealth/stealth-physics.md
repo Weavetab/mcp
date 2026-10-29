@@ -39,7 +39,7 @@ The `browser_type` engine dispatches native CDP `Input.dispatchKeyEvent` calls w
 
 ---
 
-## 3. Layer 0 Fingerprint Spoofing
+## 3. Early-Script Fingerprint Spoofing
 
 Weavetab's early-script CDP injection guarantees that the following patches execute **before any page JavaScript runs**:
 

@@ -1,6 +1,6 @@
 ---
 title: "Introduction"
-description: "What Weavetab is, Layer 0 CDP architecture, and design tenets."
+description: "What Weavetab is, direct CDP architecture, and design tenets."
 product: mcp
 section: get-started
 icon: BookOpen
@@ -9,9 +9,9 @@ slug: introduction
 
 # Introduction
 
-Weavetab is a production-grade, local **Model Context Protocol (MCP) server** that grants AI agents human-like control over Chromium browsers and native **Electron desktop applications** (VS Code, Discord, Slack, Figma, Obsidian, Postman, Antigravity IDE, etc.) — communicating directly over the **Chrome DevTools Protocol (CDP)** at Layer 0.
+Weavetab is a production-grade, local **Model Context Protocol (MCP) server** that grants AI agents human-like control over Chromium browsers and native **Electron desktop applications** (VS Code, Discord, Slack, Figma, Obsidian, Postman, Antigravity IDE, etc.) — communicating directly over the **Chrome DevTools Protocol (CDP)**.
 
-No WebDriver. No browser binary downloads. No Playwright or Puppeteer abstraction layer. No cloud dependency. Tool invocations resolve in **3–8 ms** of mean latency.
+No WebDriver. No browser binary downloads. No Playwright or Puppeteer abstraction layer. No cloud dependency. Tool invocations execute directly over local CDP sockets.
 
 ## Synchronized Ecosystem Releases
 
@@ -32,7 +32,7 @@ npm install -D @weavetab/sdk@latest
 
 | Tenet | Implementation |
 |---|---|
-| **Ultra-Low Latency** | Sub-10 ms tool execution via direct CDP WebSocket connections |
+| **Direct Execution** | In-process tool execution via direct CDP WebSocket connections |
 | **Universal Control** | Native orchestration across Chromium web tabs and any Electron desktop app |
 | **Autonomous CAPTCHA** | Zero-API solving (Cloudflare Turnstile, GeeTest, reCAPTCHA) via human Bézier mouse physics |
 | **Security & RBAC** | 5-tier RBAC + domain policies + Blind Credential Injection + profile isolation |

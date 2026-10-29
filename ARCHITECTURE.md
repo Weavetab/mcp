@@ -1,16 +1,14 @@
 # Weavetab Architecture
 
-> **Version:** 2.5.1 | **Last Updated:** July 2026
+> **Version:** 2.5.2 | **Last Updated:** October 2026
 
 ---
 
 ## System Overview
 
-Weavetab is an MCP (Model Context Protocol) server engineered for AI-driven browser automation. Unlike Playwright or Puppeteer, it communicates directly with Chromium via the Chrome DevTools Protocol (CDP) WebSocket — there is no WebDriver process, no browser binary download, and no heavy abstraction layer. This yields sub-10ms tool execution latency.
+Weavetab is an MCP (Model Context Protocol) server engineered for AI-driven browser and desktop automation. Unlike Playwright or Puppeteer, it communicates directly with Chromium via the Chrome DevTools Protocol (CDP) WebSocket — there is no WebDriver process, no browser binary download, and no intermediate wrapper layer.
 
 The system is composed of five architectural layers:
-
-
 
 ---
 
@@ -88,10 +86,6 @@ The delta engine (`src/state/delta.ts`) implements a per-tab snapshot diffing sy
 | **Iframe Tracking** | Per-frame element counts tracked separately |
 | **Actionable Recommendations** | Changed interactive elements flagged with suggested action |
 
-**Delta Flow:**
-
-
-
 ### Semantic DOM Pruner
 
 The pruner (`src/cdp/pruner.ts`) performs **one-shot compression of a single DOM snapshot before it is returned to the agent**. This is fundamentally distinct from the Delta Engine:
@@ -109,7 +103,6 @@ The pruner (`src/cdp/pruner.ts`) performs **one-shot compression of a single DOM
 | Aspect | Detail |
 |--------|--------|
 | **Execution** | 1 `Runtime.evaluate` call (2 if page exceeds perf gate) |
-| **Performance target** | p95 < 5ms on Jira/AWS-scale DOMs |
 | **Pass 1 — controlsMap** | Collects all `aria-controls`, `aria-owns`, `data-target` values |
 | **Pass 2 — subtree annotation** | Bottom-up walk, computes `hasInteractiveDescendant` per node |
 | **Pass 3 — prune decision** | Keep if: visible OR has interactive descendant OR in controlsMap |
@@ -138,7 +131,7 @@ Loop Detection Algorithm
 - Burst mode start
 - Manual override via `browser_map({ force: true })` or `browser_wait({ reset_loop: true })`
 
-### Knowledge Hints (Rule 16)
+### Knowledge Hints
 
 Domain-specific knowledge is stored in `~/.weavetab/knowledge/[domain].md`. When a tool discovers a site-specific quirk (e.g., "this login form requires clicking the label, not the input"), it appends a timestamped note. On subsequent visits, the hint is injected as a system prompt token (max 20 tokens).
 
@@ -353,17 +346,15 @@ flowchart TD
 
 ## Performance Characteristics
 
-### Latency Breakdown
+### Latency Profile
 
-| Operation | Mean Latency | P95 Latency | P99 Latency |
-|-----------|--------------|-------------|-------------|
-| **Tool security checks** | 0.5ms | 1ms | 2ms |
-| **CDP round-trip** | 2-5ms | 8ms | 15ms |
-| **DOM walk (first)** | 8-15ms | 25ms | 40ms |
-| **DOM walk (cached)** | 1-3ms | 5ms | 10ms |
-| **Delta computation** | 1-2ms | 4ms | 8ms |
-| **Ghost cursor execution** | 3-8ms | 12ms | 20ms |
-| **Total end-to-end** | 3-8ms | 15ms | 25ms |
+| Operation | Typical Range | Notes |
+|-----------|---------------|-------|
+| **Tool security & RBAC checks** | < 1ms | In-memory policy evaluation |
+| **CDP WebSocket round-trip** | 2–5ms | Localhost loopback transport |
+| **DOM walk (cached / delta)** | 1–5ms | In-memory fingerprint diffing |
+| **DOM walk (first pass)** | 10–35ms | Scales with DOM node density |
+| **Interactive input dispatch** | 50–250ms | Includes actionability verification & humanized pacing |
 
 ### Memory Footprint
 
@@ -468,123 +459,11 @@ When `devMode: true` is enabled, the HUD displays:
 
 Weavetab's architecture is designed for **autonomous AI agents** requiring:
 
-- **Sub-10ms latency** for real-time interaction
-- **5-10x token efficiency** for cost-effective operation
-- **Enterprise-grade security** for production deployment
-- **Self-learning capabilities** for improved success rates
-- **Human-like behavior** for authorized automation
-- **Extensibility** for custom workflows
+- **Direct in-process CDP execution** without intermediate WebDriver binaries
+- **5-10x token efficiency** via semantic DOM pruning and delta diffing
+- **Layered local security** with domain policies, RBAC, and blind secret injection
+- **Self-learning capabilities** through persistent per-domain session memory
+- **Human-like kinematics** for reliable interaction with modern web applications
+- **Extensibility** via the `@weavetab/sdk` plugin architecture
 
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.
-- Loop detection warnings
-- User chat messages
-
----
-
-## Conclusion
-
-Weavetab's architecture is designed for **autonomous AI agents** requiring:
-
-- **Sub-10ms latency** for real-time interaction
-- **5-10x token efficiency** for cost-effective operation
-- **Enterprise-grade security** for production deployment
-- **Self-learning capabilities** for improved success rates
-- **Human-like behavior** for authorized automation
-- **Extensibility** for custom workflows
-
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.
-- Loop detection warnings
-- User chat messages
-
----
-
-## Conclusion
-
-Weavetab's architecture is designed for **autonomous AI agents** requiring:
-
-- **Sub-10ms latency** for real-time interaction
-- **5-10x token efficiency** for cost-effective operation
-- **Enterprise-grade security** for production deployment
-- **Self-learning capabilities** for improved success rates
-- **Human-like behavior** for authorized automation
-- **Extensibility** for custom workflows
-
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.
-    description: string;
-    handler: (session: CDP.Client, config: Config) => Promise<any>;
-  }>;
-}
-```
-
-### Skills Ecosystem
-
-The `@weavetab/skills` package provides pre-built workflow patterns:
-
-- **Multi-step form automation** — Complex form filling with validation
-- **E-commerce checkout** — Shopping cart navigation and payment
-- **Data extraction pipelines** — Structured scraping and export
-- **CMS workflows** — WordPress, Drupal, and CMS-specific patterns
-- **API testing** — Endpoint testing and response verification
-
-### Custom Tool Registration
-
-Developers can add custom tools by:
-
-1. Implementing the tool handler function
-2. Registering via `server.tool()` in `src/server.ts`
-3. Adding Zod schema validation
-4. Implementing security checks via `withSecurity()`
-5. Adding audit logging via `logAction()`
-
----
-
-## Monitoring and Observability
-
-### Built-in Metrics
-
-- **Tool execution time** — Per-tool timing breakdown
-- **Cache hit rates** — DOM map and delta cache efficiency
-- **Loop detection events** — Strike count and severity
-- **Domain profile hits** — Session memory utilization
-- **Network request counts** — Per-domain request tracking
-
-### Audit Trail
-
-Every tool invocation generates structured audit logs:
-
-```json
-{
-  "timestamp": "2026-07-06T14:30:00Z",
-  "sessionId": "default",
-  "tool": "browser_click",
-  "duration": 8,
-  "result": "success",
-  "pageUrl": "https://example.com",
-  "tabTitle": "Example Domain"
-}
-```
-
-### DevMode HUD
-
-When `devMode: true` is enabled, the HUD displays:
-
-- Current tool execution
-- Real-time timing metrics
-- Token usage estimates
-- Loop detection warnings
-- User chat messages
-
----
-
-## Conclusion
-
-Weavetab's architecture is designed for **autonomous AI agents** requiring:
-
-- **Sub-10ms latency** for real-time interaction
-- **5-10x token efficiency** for cost-effective operation
-- **Enterprise-grade security** for production deployment
-- **Self-learning capabilities** for improved success rates
-- **Human-like behavior** for authorized automation
-- **Extensibility** for custom workflows
-
-The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a solid foundation for AI-driven browser automation at scale.
+The five-layer architecture (Transport → Security → Intelligence → Sensors → CDP) provides a deterministic foundation for local browser and desktop automation.

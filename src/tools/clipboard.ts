@@ -187,7 +187,7 @@ export async function browserClipboard(
     return (valRes?.value as string) || null;
   }
 
-  // Layer 0: Direct OS system clipboard read via clipboardy
+  // Direct OS system clipboard read via clipboardy
   try {
     const clipboardy = (await import("clipboardy")).default;
     const sysText = await clipboardy.read();

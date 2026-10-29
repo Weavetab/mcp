@@ -1,6 +1,6 @@
 # Contributing to Weavetab MCP
 
-> **Version:** 2.5.1 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.5.2 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 Thank you for your interest in contributing to Weavetab, the production-grade MCP server for AI-driven browser automation.
 
@@ -51,7 +51,7 @@ If applicable, add screenshots to help explain your problem.
 **Environment:**
  - OS: [e.g. Windows 11, macOS 14, Ubuntu 22.04]
  - Node Version: [e.g. 18.17.0]
- - Weavetab Version: [e.g. 2.5.1]
+ - Weavetab Version: [e.g. 2.5.2]
  - Browser: [e.g. Chrome 126, Edge 126]
 
 **Additional Context**
@@ -288,7 +288,7 @@ If you are contributing a new MCP tool, ensure it meets the following requiremen
 1. **Return structured errors**: On failure, return a `WeaveError` object with a descriptive message
 2. **Emit audit logs**: Use `logAction()` and `logActionStructured()` for every invocation
 3. **Respect security policies**: Call `checkDomain()` and `isToolAllowedInMode()` for domain/RBAC enforcement
-4. **Optimize for latency**: Target sub-10ms CDP execution without unnecessary DOM roundtrips
+4. **Optimize for latency**: Minimize unnecessary DOM roundtrips during CDP execution
 5. **Support multi-tab**: Accept an optional `tab_id` parameter for cross-tab execution where applicable (the server maps the public `tabId` argument onto it)
 6. **Define a Zod schema**: Every parameter must be typed with Zod for MCP schema generation
 7. **Register in server.ts**: Import the handler and add a `server.tool()` registration call
@@ -385,7 +385,7 @@ server.tool(
 
 ### Performance Guidelines
 
-- Target sub-10ms latency for CDP operations
+- Minimize latency for CDP operations
 - Minimize DOM roundtrips — batch operations when possible
 - Use caching for repeated operations
 - Avoid blocking the event loop
@@ -493,8 +493,8 @@ WHAT: <description> | WHEN: <usage guidance> | CANNOT: <limitations> | EXAMPLE: 
 
 1. Update version in `package.json`
 2. Update CHANGELOG.md
-3. Create git tag: `git tag v2.5.1`
-4. Push tag: `git push origin v2.5.1`
+3. Create git tag: `git tag v2.5.2`
+4. Push tag: `git push origin v2.5.2`
 5. Publish to NPM: `npm publish`
 6. Create GitHub release
 

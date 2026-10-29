@@ -6,7 +6,7 @@ This document is the universal specification for AI agents (Cursor, Antigravity,
 
 ## Architectural Principles
 
-1. **Layer 0 Direct CDP**:
+1. **Direct CDP Transport**:
    * Weavetab connects directly to Chrome DevTools Protocol (CDP) via WebSocket (`127.0.0.1`).
    * **Do NOT introduce Puppeteer, Playwright, or Selenium wrapper abstractions**.
    * Supports both standard browsers (Chrome/Chromium) and **any Electron/desktop webview app** (Discord, VS Code, Antigravity, Figma, Obsidian, Slack, or local apps from source) via the generic `app` parameter and `electron` config mapping.

@@ -472,7 +472,7 @@ export async function runPluginSearch(query?: string): Promise<void> {
 
   if (results.length === 0) {
     console.log(pc.yellow(`No plugins matching "${q}" found.`));
-    console.log(pc.dim(`Try browsing the registry or visit ${pc.cyan("https://github.com/weavetab/mcp/plugins")}\n`));
+    console.log(pc.dim(`Try browsing the registry or visit ${pc.cyan("https://weavetab.dev/discover")}\n`));
     return;
   }
 
@@ -650,7 +650,7 @@ export async function runPluginCli(args: string[]): Promise<void> {
     console.log(pc.yellow(`\n[Weavetab] Plugin authoring commands belong to the developer SDK (@weavetab/sdk).`));
     console.log(pc.dim("To scaffold a new plugin:   ") + pc.cyan("npx @weavetab/sdk init <name>"));
     console.log(pc.dim("To build/validate a plugin: ") + pc.cyan("npx @weavetab/sdk build"));
-    console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://github.com/weavetab/sdk\n"));
+    console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://weavetab.dev/docs/sdk-overview\n"));
     return;
   }
 

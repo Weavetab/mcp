@@ -4,16 +4,16 @@
   "title": "Weavetab",
   "description": "Open automation engine for AI agents. Control live browsers and desktop apps locally.",
   "repository": {
-    "url": "https://github.com/Weavetab/mcp",
+    "url": "https://github.com/weavetab/mcp",
     "source": "github"
   },
-  "version": "2.5.1",
+  "version": "2.5.2",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@weavetab/mcp",
-      "version": "2.5.1",
+      "version": "2.5.2",
       "transport": {
         "type": "stdio"
       },

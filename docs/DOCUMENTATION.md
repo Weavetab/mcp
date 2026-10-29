@@ -1,26 +1,26 @@
-﻿# Weavetab MCP Documentation
+# Weavetab MCP Documentation
 
-> **Package:** `@weavetab/mcp` | **Version:** 2.5.1 | **License:** AGPLv3 | **Author:** fy2ne
+> **Package:** `@weavetab/mcp` | **Version:** 2.5.2 | **License:** AGPLv3 | **Author:** fy2ne
 
 ---
 
 ## Overview
 
-Weavetab is a production-grade, in-process MCP (Model Context Protocol) server providing AI agents with direct, physical Layer 0 control across Chromium browsers and Electron desktop applications. It communicates directly over the Chrome DevTools Protocol (CDP) WebSocket at Layer 0 â€” no WebDriver process, no browser binary download, no cloud middleware.
+Weavetab is a production-grade, in-process MCP (Model Context Protocol) server providing AI agents with direct control across Chromium browsers and Electron desktop applications. It communicates directly over the Chrome DevTools Protocol (CDP) WebSocket — no WebDriver process, no browser binary download, no cloud middleware.
 
 ### Core Capabilities
 
 - **41 Built-in MCP Tools** across functional categories (Vision, Navigation, Input, Tabs, Mission Execution, Dialog, Wait, Storage, Device, Network, Canvas, Output, Evaluation, Office Documents)
-- **Direct CDP WebSocket** â€” 3-8ms mean latency, zero process overhead
-- **Semantic Delta Engine** â€” 5-10x token reduction via per-tab snapshot diffing
-- **Ghost Cursor** â€” BÃ©zier curve click engine with human acceleration and jitter
-- **Human Typing Engine** â€” burst-pattern profiling, per-character jitter, natural pauses
-- **Blind Injection** â€” enterprise-grade credential injection via `secrets.json` with domain scoping, Shadow DOM isolation, and JS property hardening
-- **Self-Learning** â€” per-domain session memory, knowledge hints, automatic framework detection
-- **Security Stack** â€” domain blacklist, RBAC (5 roles), rate limiter, loop detection, input filter, root guard
-- **Burst Mode** â€” chain N actions in 1 MCP call via `browser_burst`
-- **Plugin System** â€” Extensible plugin ecosystem supporting tool additions, overrides (with originalHandler wrapping), and tool removals across 3 trust tiers (Official, Verified, Unverified)
-- **GitHub Automation (Plugin)** â€” Repo analysis, file reading, issues, and PRs are provided by the official `@weavetab/plugin-github` plugin, not built in
+- **Direct CDP WebSocket** — Local in-process transport, zero external driver overhead
+- **Semantic Delta Engine** — 5-10x token reduction via per-tab snapshot diffing
+- **Ghost Cursor** — Bézier curve click engine with human acceleration and jitter
+- **Human Typing Engine** — burst-pattern profiling, per-character jitter, natural pauses
+- **Blind Injection** — enterprise-grade credential injection via `secrets.json` with domain scoping, Shadow DOM isolation, and JS property hardening
+- **Self-Learning** — per-domain session memory, knowledge hints, automatic framework detection
+- **Security Stack** — domain blacklist, RBAC (5 roles), rate limiter, loop detection, input filter, root guard
+- **Burst Mode** — chain N actions in 1 MCP call via `browser_burst`
+- **Plugin System** — Extensible plugin ecosystem supporting tool additions, overrides (with originalHandler wrapping), and tool removals across 3 trust tiers (Official, Verified, Unverified)
+- **GitHub Automation (Plugin)** — Repo analysis, file reading, issues, and PRs are provided by the official `@weavetab/plugin-github` plugin, not built in
 
 ### Weavetab Skills
 
@@ -32,11 +32,11 @@ npm install -g @weavetab/skills
 ```
 
 **Available Skills:**
-- **Multi-step Form Automation** â€” Complex form filling with validation handling
-- **E-commerce Checkout** â€” Shopping cart navigation and payment processing
-- **Data Extraction Pipelines** â€” Structured data scraping and export
-- **Content Management Systems** â€” WordPress, Drupal, and CMS-specific workflows
-- **API Testing & Validation** â€” Endpoint testing and response verification
+- **Multi-step Form Automation** — Complex form filling with validation handling
+- **E-commerce Checkout** — Shopping cart navigation and payment processing
+- **Data Extraction Pipelines** — Structured data scraping and export
+- **Content Management Systems** — WordPress, Drupal, and CMS-specific workflows
+- **API Testing & Validation** — Endpoint testing and response verification
 
 Skills are automatically discovered by compatible MCP clients and provide context-aware guidance for mission planning.
 
@@ -45,8 +45,8 @@ Skills are automatically discovered by compatible MCP clients and provide contex
 ## Architecture
 
 ```
-MCP Client â†’ stdio/WebSocket â†’ WithSecurity Pipeline â†’ CDP WebSocket â†’ Chromium
-                                 (RateLimit â†’ DomainPolicy â†’ RBAC)
+MCP Client → stdio/WebSocket → WithSecurity Pipeline → CDP WebSocket → Chromium
+                                 (RateLimit → DomainPolicy → RBAC)
 ```
 
 ### Five Architectural Layers
@@ -69,8 +69,8 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_map` | DOM enumeration with volatile `w:NN` ref IDs, Set-of-Marks visual grounding (`visual: true` / `"auto"`), entity & card container binding (`â”Œ Heading`), active modal hoisting (`â•”â• ACTIVE DIALOG â•â•—`), nav cluster collapsing, delta diffing, and scope filtering (`modal`, `form`, `main`). |
-| `browser_find` | Native CDP text search with single and multi-match (`all: true`, `limit: N`) returning bounding rects and selectors â€” ~10x cheaper than map |
+| `browser_map` | DOM enumeration with volatile `w:NN` ref IDs, Set-of-Marks visual grounding (`visual: true` / `"auto"`), entity & card container binding (`┌ Heading`), active modal hoisting (`╔═ ACTIVE DIALOG ═╗`), nav cluster collapsing, delta diffing, and scope filtering (`modal`, `form`, `main`). |
+| `browser_find` | Native CDP text search with single and multi-match (`all: true`, `limit: N`) returning bounding rects and selectors — ~10x cheaper than map |
 | `browser_scrape` | CSS/XPath structured data extraction in 1 CDP call |
 | `browser_inspect` | Computed CSS styles + inline styles + event listener types |
 | `browser_snapshot` | MHTML capture/restore of DOM state + resources |
@@ -88,12 +88,12 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_click` | Ghost Cursor (BÃ©zier) click with direct visual mark targeting (`mark: N`), intent memory, occlusion detection, and stuck-loop detection |
+| `browser_click` | Ghost Cursor (Bézier) click with direct visual mark targeting (`mark: N`), intent memory, occlusion detection, and stuck-loop detection |
 | `browser_type` | Human keystroke engine with zero-target `document.activeElement` typing, anti-unfocus click avoidance, jitter, and burst patterns |
-| `browser_type_secret` | Blind Injection from `secrets.json` â€” domain check before value load, Shadow DOM isolation, JS property hardening |
+| `browser_type_secret` | Blind Injection from `secrets.json` — domain check before value load, Shadow DOM isolation, JS property hardening |
 | `browser_key` | Native keyboard dispatch with combo hotkeys (`"Ctrl+A"`, `"Cmd+K"`, `"Alt+Tab"`) and zero arbitrary delay |
 | `browser_pointer` | Hover, double-click, drag-and-drop, and multi-level flyout menu traversal via `hover_chain: ["File", "Export As", "PNG"]` |
-| `browser_select` | Native `<select>` dropdown selection â€” React/Vue safe (prototype setter + events) |
+| `browser_select` | Native `<select>` dropdown selection — React/Vue safe (prototype setter + events) |
 | `browser_fill` | Smart multi-field form batch completion with input discovery scanner (`scan: true`), flexible field selectors, and Google Sheets `grid_data` |
 | `browser_upload` | Bypass file dialogs via CDP `DOM.setFileInputFiles` |
 | `browser_scroll` | Fast non-blocking directional + element-relative scroll without redundant action map rebuilds |
@@ -110,7 +110,7 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | Tool | Description |
 |------|-------------|
 | `browser_burst` | Chain N actions in 1 MCP call. Supports 4 macro steps: `type_and_send`, `navigate_and_read`, `click_and_wait`, `scroll_and_read` |
-| `browser_automation` | Inject persistent self-running scripts â€” monitoring, polling, background extraction |
+| `browser_automation` | Inject persistent self-running scripts — monitoring, polling, background extraction |
 
 ### Dialog & User Interaction (3 tools)
 
@@ -124,7 +124,7 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_wait` | Wait for element/text/URL/stable/network/auto â€” timeout configurable, optional loop counter reset (`reset_loop: true`) |
+| `browser_wait` | Wait for element/text/URL/stable/network/auto — timeout configurable, optional loop counter reset (`reset_loop: true`) |
 | `browser_captcha` | Autonomous zero-API detection and solving for Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha via CDP mouse physics |
 
 ### Storage & Cookies (2 tools)
@@ -152,13 +152,13 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | Tool | Description |
 |------|-------------|
 | `browser_canvas` | Get image data (base64 PNG) or draw points on canvas |
-| `browser_highlight` | Visual CDP overlay highlight â€” zero token cost |
+| `browser_highlight` | Visual CDP overlay highlight — zero token cost |
 
 ### Output (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_pdf` | Print page to PDF â€” landscape, scale, page ranges |
+| `browser_pdf` | Print page to PDF — landscape, scale, page ranges |
 | `browser_recording` | Compile browser screencast frames into video (.webp, .gif, .mp4, .webm) |
 
 ### Evaluation (1 tool)
@@ -277,7 +277,7 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
 | `attachPort` | number | 0 | Chrome DevTools Protocol port |
 | `extension` | boolean | true | Enable Weavetab extension integration |
 | `cookies` | boolean | false | Persist cookies/storage across sessions. When `false`, `document.cookie`, `localStorage`, and `sessionStorage` are all neutered at the browser level (returns empty/null for everything) + a fresh isolated profile is used each session. When `true`, cookies/storage work normally and persist via the profile directory. |
-| `browserFlags` | string[] | `[]` | Extra Chromium command-line flags to append on launch (e.g., `["--disable-web-security"]`). The `--disable-sync` flag is mandatory and cannot be overridden â€” any conflicting flag is automatically dropped. |
+| `browserFlags` | string[] | `[]` | Extra Chromium command-line flags to append on launch (e.g., `["--disable-web-security"]`). The `--disable-sync` flag is mandatory and cannot be overridden — any conflicting flag is automatically dropped. |
 | `policies` | PolicyEntry[] | `[]` | Domain-level access control policies (see [Domain Policy](#domain-policy) below). Supersedes the legacy `block`/`allow` lists. |
 | `electron` | Record<string, string> | `{}` | Map of registered Electron desktop applications (e.g. Discord, VS Code, Figma, Antigravity, local dev apps) to executable paths or startup commands. |
 
@@ -285,7 +285,7 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
 
 ## Domain Policy
 
-The `policies` config option provides **fine-grained domain-level access control** that supersedes the legacy `block`/`allow` lists. Policies are checked **in array order** before every tool execution â€” the first matching pattern wins. If no policy matches, the legacy `block`/`allow` lists are checked as fallback, then access is allowed by default.
+The `policies` config option provides **fine-grained domain-level access control** that supersedes the legacy `block`/`allow` lists. Policies are checked **in array order** before every tool execution — the first matching pattern wins. If no policy matches, the legacy `block`/`allow` lists are checked as fallback, then access is allowed by default.
 
 Configure policies in your `config.json` under the top-level `policies` array:
 
@@ -331,7 +331,7 @@ Configure policies in your `config.json` under the top-level `policies` array:
 |---------|----------------------|------------|
 | Modes | Only allow or deny | 4 modes: allow, deny, read-only, audit-only |
 | Wildcards | Supported | Supported (`*` wildcard) |
-| Order | No ordering | **First match wins** â€” order matters |
+| Order | No ordering | **First match wins** — order matters |
 | Granularity | Domain only | Domain + per-tool enforcement (read-only blocks writes) |
 | Check timing | At navigation | Every tool execution |
 
@@ -472,11 +472,11 @@ npm install -g @weavetab/skills
 
 ### Available Skills
 
-- **Form Automation** â€” Handles complex forms with validation, multi-page flows, and error recovery
-- **E-commerce** â€” Shopping cart navigation, product selection, checkout processes
-- **Data Extraction** â€” Structured scraping, pagination handling, data export
-- **CMS Workflows** â€” WordPress, Drupal, and other CMS-specific operations
-- **API Testing** â€” Endpoint discovery, request/response validation, test automation
+- **Form Automation** — Handles complex forms with validation, multi-page flows, and error recovery
+- **E-commerce** — Shopping cart navigation, product selection, checkout processes
+- **Data Extraction** — Structured scraping, pagination handling, data export
+- **CMS Workflows** — WordPress, Drupal, and other CMS-specific operations
+- **API Testing** — Endpoint discovery, request/response validation, test automation
 
 ### Skill Integration
 
@@ -493,7 +493,7 @@ Skills are automatically discovered by MCP clients and provide:
 
 Weavetab natively supports **generic automation of any Electron or Chromium-based desktop application** (e.g. Discord, Slack, VS Code, Antigravity IDE, Figma, Obsidian, Postman, or local developer applications running from source).
 
-### Why It Works at Layer 0
+### How It Works Under the Hood
 Electron desktop applications run a bundled Chromium/Blink engine under the hood. When started with Chrome DevTools Protocol debugging enabled (either automatically via Weavetab or via `--remote-debugging-port`), Weavetab connects directly to the desktop app's internal WebSockets and exposes all 41 built-in MCP tools without requiring external drivers or wrappers.
 
 ### Registering Applications
@@ -502,7 +502,7 @@ In `~/.weavetab/config.json` or project-scoped `.weavetab/config.json`:
 ```json
 {
   "electron": {
-    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-1.0.9183\\Discord.exe",
+    "discord": "C:\\Users\\<user>\\AppData\\Local\\Discord\\app-<version>\\Discord.exe",
     "antigravity": "C:\\Users\\<user>\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
     "vscode": "C:\\Users\\<user>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
     "figma": "C:\\Users\\<user>\\AppData\\Local\\Figma\\Figma.exe",
@@ -544,11 +544,11 @@ Every Weavetab tool supports the optional `app` parameter:
 
 ### Common Issues
 
-1. **CDP connection failed** â€” Ensure Chrome is running with `--remote-debugging-port=9222`
-2. **Extension not loading** â€” Use headed mode or `--headless=new` Chrome flag
-3. **High memory usage** â€” Clear cache with `weavetab reset` or enable pruning
-4. **Token usage high** â€” Use `delta: true` and `prune: true` in `browser_map`
-5. **Clicks failing** â€” Use ref IDs from `browser_map` instead of labels
+1. **CDP connection failed** — Ensure Chrome is running with `--remote-debugging-port=9222`
+2. **Extension not loading** — Use headed mode or `--headless=new` Chrome flag
+3. **High memory usage** — Clear cache with `weavetab reset` or enable pruning
+4. **Token usage high** — Use `delta: true` and `prune: true` in `browser_map`
+5. **Clicks failing** — Use ref IDs from `browser_map` instead of labels
 
 ### Debug Mode
 

@@ -55,4 +55,4 @@ Use `browser_burst` to chain multiple actions in a single round-trip:
 }
 ```
 
-You will see the browser launch, the Ghost Cursor glide across the page along human Bézier curves, and the agent complete the task with sub-10ms CDP execution.
+You will see the browser launch, the Ghost Cursor glide across the page along human Bézier curves, and the agent complete the task via direct CDP execution.

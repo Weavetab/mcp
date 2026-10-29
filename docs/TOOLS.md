@@ -1,6 +1,6 @@
 # Weavetab MCP Tool Reference
 
-> **Version:** 2.5.1 | **Total Tools:** 41 | **Architecture:** Layer 0 Direct CDP
+> **Version:** 2.5.2 | **Total Tools:** 41 | **Architecture:** Direct CDP WebSocket
 
 Weavetab provides 41 production-grade MCP tools organized into functional categories.
 
@@ -24,7 +24,7 @@ Weavetab provides 41 production-grade MCP tools organized into functional catego
 | `browser_fill` | `input` | Smart multi-field form-filling. Evaluates field control types (text, select, checkbox, radio, contenteditable) and processes inputs sequentially with atomic verification. | Multi-field batch input execution, Automatic control type classification, Per-field post-input verification |
 | `browser_highlight` | `canvas_and_visual` | Highlight elements on page. Renders temporary visual overlays over target elements without DOM tree mutations. Supports multi-element consideration overlays (refs: ['w:12', 'w:15']), presentation styles ('consideration', 'target', 'danger', 'success', 'shimmer'), floating badges, and configurable durations. | Multi-candidate consideration overlay (refs array), Five visual styles: consideration, target lock, danger, success, shimmer, Floating label badge display above highlighted elements |
 | `browser_upload` | `input` | Upload files to a file input. Bypasses OS native file pickers via CDP DOM.setFileInputFiles directly targeting file input node IDs using absolute file paths. | Direct CDP file payload injection, Multi-file payload support, Zero OS file picker interaction required |
-| `browser_find` | `vision` | Sub-5ms CDP text search. Zero token waste. Best for locating specific keywords/text on page without a full DOM walk. | Native CDP search (zero DOM walk overhead), Sub-5ms execution latency, Exact keyword matching and match indexing |
+| `browser_find` | `vision` | Fast in-page text search via a leaf-optimized TreeWalker. Best for locating specific keywords/text on page without a full DOM map. | Leaf-optimized TreeWalker text search, Low-overhead in-page matching, Exact keyword matching and match indexing |
 | `browser_storage` | `storage_and_cookies` | Manage localStorage and sessionStorage. Reads, writes, and clears key-value pairs for the active origin. | localStorage and sessionStorage scope targeting, Atomic key-value retrieval and mutation, Origin storage purging |
 | `browser_checkpoint` | `storage_and_cookies` | Snapshot and restore browser state (cookies, localStorage, sessionStorage, and scroll/URL) into named checkpoints to time-travel and rollback failed automation branches. | Session state time-travel and rollback, Cookies backup and restoration (HttpOnly and Secure via CDP), LocalStorage and SessionStorage snapshotting |
 | `browser_network_intercept` | `network` | Intercept/stub network responses (mock APIs, block tracking) and capture raw protocol network telemetry (TLS/SSL certificate metadata, microsecond timing breakdown, and OS-level network failure reasons). | URL glob pattern matching and response mocking, TLS/SSL Certificate security metadata (issuer, protocol, validity, cipher), Microsecond Network Timing breakdown (DNS, TCP, SSL, send, TTFB, download) |
@@ -33,7 +33,7 @@ Weavetab provides 41 production-grade MCP tools organized into functional catego
 | `browser_eval` | `evaluation` | Run arbitrary JS via CDP in page context via CDP Runtime.evaluate. Supports asynchronous evaluation and structured JSON serialization. | Page JS context execution, Async/await promise resolution, Structured JSON return serialization |
 | `browser_cookies` | `storage_and_cookies` | Manage browser cookies. Full CRUD management for HTTP and document cookies via CDP Network domain. | Cookie property retrieval, setting, and deletion, Domain and path attribute scoping |
 | `browser_canvas` | `canvas_and_visual` | For ALL canvas content (charts, games, graphs). Use get_image to read pixel data as Base64 PNG, draw to simulate programmatic coordinate gesture paths. | Base64 PNG pixel buffer export, Programmatic gesture path drawing, Canvas node targeting via ref ID or selector |
-| `browser_scrape` | `vision` | Sub-5ms latency, zero waste extraction via CSS or XPath selectors in a single CDP evaluation step. Returns structured text/attribute arrays. | CSS and XPath query evaluation, Targeted attribute extraction, Single-step execution (high throughput) |
+| `browser_scrape` | `vision` | Structured data extraction via CSS or XPath selectors in a single CDP evaluation step. Returns structured text/attribute arrays. | CSS and XPath query evaluation, Targeted attribute extraction, Single-step execution (high throughput) |
 | `browser_snapshot` | `vision` | Capture or restore an MHTML snapshot (DOM + inline assets). Facilitates offline state serialization, replay verification, and compliance auditing. | Full DOM and asset stream serialization, Atomic capture and restore operations, Offline state audit capability |
 | `browser_screenshot` | `vision` | 95-135ms capture latency via CDP Page.captureScreenshot. Supports PNG and JPEG formats, full-page rendering, and clip region bounding boxes. | Full-page and viewport bounding box capture, PNG and JPEG format encoding, Custom clip region bounding box support |
 | `browser_viewport` | `device_and_environment` | Set viewport dimensions and device emulation (width, height, DPR, mobile, geolocation, timezone, locale, color scheme). | Viewport width, height, and DPR emulation, Mobile viewport and touch event emulation, Geolocation coordinate override |
@@ -50,4 +50,4 @@ Weavetab provides 41 production-grade MCP tools organized into functional catego
 
 ---
 
-*Auto-generated via `npm run docs:generate` on 2026-10-23.*
+*Auto-generated via `npm run docs:generate` on 2026-10-29.*

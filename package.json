@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "author": {
     "name": "fy2ne",
@@ -8,13 +8,13 @@
     "url": "https://fy2ne.me"
   },
   "license": "AGPL-3.0-only",
-  "homepage": "https://github.com/Weavetab/mcp",
+  "homepage": "https://github.com/weavetab/mcp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Weavetab/mcp.git"
+    "url": "https://github.com/weavetab/mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/Weavetab/mcp/issues"
+    "url": "https://github.com/weavetab/mcp/issues"
   },
   "keywords": [
     "mcp server",

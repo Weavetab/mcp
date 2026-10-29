@@ -8,7 +8,7 @@
   <a href="https://github.com/weavetab/mcp/releases"><img src="https://img.shields.io/github/v/release/weavetab/mcp?label=version&style=flat-square&color=3b82f6" alt="version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6?style=flat-square" alt="license" /></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
-  <img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square" alt="Node" />
+  <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square" alt="Node" />
   <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-41-ec4899?style=flat-square" alt="tools" /></a>
   <a href="https://github.com/sponsors/fy2ne"><img src="https://img.shields.io/badge/sponsor-fy2ne-ea4aaa?style=flat-square&logo=github-sponsors" alt="sponsor" /></a>
 </p>
@@ -27,7 +27,7 @@
 
 Weavetab is the open automation engine for AI agents. It connects models directly to live Chromium browsers and Electron desktop applications via native **Chrome DevTools Protocol (CDP)** sockets — no WebDriver binaries, no cloud relay, zero telemetry.
 
-Actions execute with **sub-10ms latency**. Web pages are translated into agent-readable semantic maps with turn-by-turn diffing that reduces token usage by **up to 95%**. Built-in security enforces local domain policies, role-based access control, and client-side credential injection.
+Actions execute directly over local CDP sockets without external driver overhead. Web pages are translated into agent-readable semantic maps with turn-by-turn diffing that reduces token usage by **up to 95%**. Built-in security enforces local domain policies, role-based access control, and client-side credential injection.
 
 Built and architected by [fy2ne](https://github.com/fy2ne).
 
@@ -39,8 +39,8 @@ Built and architected by [fy2ne](https://github.com/fy2ne).
 
 |  | Playwright / Puppeteer | **Weavetab** |
 |---|---|---|
-| **Protocol layer** | WebDriver BiDi or CDP via browser binary | Raw CDP WebSocket, Layer 0 |
-| **Tool execution latency** | 50–300 ms (binary + IPC overhead) | **3–8 ms** |
+| **Protocol layer** | WebDriver BiDi or CDP via browser binary | Direct CDP WebSocket |
+| **Tool execution overhead** | 50–300 ms (binary + IPC overhead) | **In-process** (direct local socket) |
 | **Desktop app control** | Browser only | Chrome + any Electron app (Discord, VS Code, Figma…) |
 | **DOM representation** | Full HTML dump to LLM | Semantic Map 3.0 with delta diffing |
 | **Token cost per map** | ~2,000–8,000 tokens | **~80–400 tokens** (95% reduction via delta) |

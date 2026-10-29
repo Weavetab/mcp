@@ -1,7 +1,7 @@
 {
   "name": "@weavetab/mcp",
   "mcpName": "dev.weavetab/mcp",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "icon": "icon.png",
   "author": "fy2ne",
@@ -223,10 +223,10 @@
       },
       "browser_find": {
         "category": "vision",
-        "description": "Sub-5ms CDP text search. Zero token waste. Best for locating specific keywords/text on page without a full DOM walk.",
+        "description": "Fast in-page text search via a leaf-optimized TreeWalker. Best for locating specific keywords/text on page without a full DOM map.",
         "features": [
-          "Native CDP search (zero DOM walk overhead)",
-          "Sub-5ms execution latency",
+          "Leaf-optimized TreeWalker text search",
+          "Low-overhead in-page matching",
           "Exact keyword matching and match indexing"
         ]
       },
@@ -309,7 +309,7 @@
       },
       "browser_scrape": {
         "category": "vision",
-        "description": "Sub-5ms latency, zero waste extraction via CSS or XPath selectors in a single CDP evaluation step. Returns structured text/attribute arrays.",
+        "description": "Structured data extraction via CSS or XPath selectors in a single CDP evaluation step. Returns structured text/attribute arrays.",
         "features": [
           "CSS and XPath query evaluation",
           "Targeted attribute extraction",
@@ -780,9 +780,9 @@
   "metadata": {
     "total_tools": 41,
     "tool_categories": 15,
-    "latency": "3-8ms mean",
+    "latency": "Direct local WebSocket",
     "token_efficiency": "Up to 97% reduction via semantic delta engine + DOM pruner",
-    "architecture": "Direct CDP WebSocket (Layer 0) — zero WebDriver, Playwright, or Puppeteer wrapper overhead",
+    "architecture": "Direct CDP WebSocket — zero WebDriver, Playwright, or Puppeteer wrapper overhead",
     "security": "Domain blacklist + RBAC (5 roles) + rate limiting + Blind Injection (secrets.json)",
     "session_memory": "Persistent per-domain profiles with framework detection and strategy caching",
     "loop_detection": "Strike-based (50-action window), auto-recovery at 10+ strikes",

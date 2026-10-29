@@ -45,7 +45,7 @@ export interface ActionElement {
   y?: number;
   viewport?: string;
   structuralIdiom?: string; // Captured structural hints (e.g. "aria-controls")
-  containerContext?: string; // e.g. "Pro Plan ($29/mo)" or "User: Anas (Admin)"
+  containerContext?: string; // e.g. "Pro Plan ($29/mo)" or "User: fy2ne (Admin)"
   isModal?: boolean;         // true if inside an active dialog/modal
   modalTitle?: string;       // enclosing modal title
 }
@@ -1245,7 +1245,7 @@ export interface RecoveredRefResult {
 
 /**
  * Recovers a detached or invalidated w:NN ref on reactive SPAs.
- * When hydration or DOM re-renders detach an element, this helper executes a sub-5ms
+ * When hydration or DOM re-renders detach an element, this helper executes an in-memory
  * multi-tier recovery heuristic (connected node verification, stored CSS selector,
  * exact label/aria, placeholder/name match, and fuzzy substring) and re-stamps
  * data-wt-id="NN" onto the live DOM node so subsequent interaction succeeds.

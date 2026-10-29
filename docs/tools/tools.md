@@ -1,4 +1,4 @@
-﻿---
+---
 title: "MCP Tools (41 Tools)"
 description: "Complete reference of all 41 production-grade Weavetab automation tools."
 product: mcp
@@ -9,7 +9,7 @@ slug: tools
 
 # MCP Tools Master Reference
 
-Weavetab exposes **41 production-grade MCP tools** engineered for sub-10ms browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
+Weavetab exposes **41 production-grade MCP tools** engineered for direct in-process CDP browser automation, visual inspection, desktop app orchestration, zero-API CAPTCHA solving, and human-like interaction.
 
 Every tool adheres to a strict contract:
 - **Zod schema validation** for all runtime arguments
@@ -25,7 +25,7 @@ Every tool adheres to a strict contract:
 | :--- | :--- | :--- | :--- |
 | 1 | `browser_map` | Vision & Reading | DOM snapshotter with volatile `w:NN` ref IDs, delta diffing, pruning, and AX tree fallback. Supports `app`. |
 | 2 | `browser_navigate` | Navigation & Environment | Navigates to a URL with blocklist checks, network idle wait, and desktop app connections. Supports `app`. |
-| 3 | `browser_click` | Input & Interaction | Physical click engine using BÃ©zier Ghost Cursor kinematics with 5-layer targeting fallback. Supports `app`. |
+| 3 | `browser_click` | Input & Interaction | Physical click engine using Bézier Ghost Cursor kinematics with 5-layer targeting fallback. Supports `app`. |
 | 4 | `browser_type` | Input & Interaction | Keystroke dispatch with humanized temporal jitter, stuck-input breaking, and clearFirst. Supports `app`. |
 | 5 | `browser_type_secret` | Input & Interaction | Blind credential injection from `secrets.json` without exposing values to LLM context. Supports `app`. |
 | 6 | `browser_key` | Input & Interaction | Presses native key combinations (Enter, Tab, Escape, Ctrl+C, Alt+F4, etc.). Supports `app`. |
@@ -41,7 +41,7 @@ Every tool adheres to a strict contract:
 | 16 | `browser_fill` | Input & Interaction | Smart multi-field form batch completion across text inputs, radios, checkboxes, and selects. Supports `app`. |
 | 17 | `browser_highlight` | Canvas & Visual Overlays | Zero-token visual CDP overlay highlights over target elements without DOM mutations. Supports `app`. |
 | 18 | `browser_upload` | Input & Interaction | File input attachment bypassing OS pickers via CDP `DOM.setFileInputFiles`. Supports `app`. |
-| 19 | `browser_find` | Vision & Reading | Sub-5ms in-page text search via a leaf-optimized TreeWalker returning clean CSS selectors. ~10Ã— cheaper than `browser_map`. Supports `app`. |
+| 19 | `browser_find` | Vision & Reading | Fast in-page text search via a leaf-optimized TreeWalker returning clean CSS selectors. ~10x cheaper than `browser_map`. Supports `app`. |
 | 20 | `browser_storage` | Storage & Cookies | Key-value store management for `localStorage` and `sessionStorage`. Supports `app`. |
 | 21 | `browser_network_intercept` | Network & Security | Request mocking, URL pattern blocking, and network timing/TLS diagnostic extraction. Supports `app`. |
 | 22 | `browser_console` | Vision & Reading | Reads and clears buffered console logs, warnings, exceptions, and network errors. Supports `app`. |
@@ -73,9 +73,9 @@ Every tool adheres to a strict contract:
 High-density DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational tool for reading and understanding page structure with zero prompt waste.
 
 **Core 3.0 Capabilities:**
-- **Entity & Container Binding**: Binds action buttons/inputs directly to parent cards, rows, or list items under `â”Œ [Container Header]` trees.
-- **Active Modal & Dialog Hoisting**: Automatically detects and isolates active dialogs/modals at the top of the map under `â•”â• ACTIVE DIALOG: "..." â•â•—`.
-- **Nav & Footer Cluster Collapsing**: Compresses cascades of repetitive navigation/footer links (4+ links) into compact `[w:5â€¦w:24] 20 links: "Home" â€¦ "Terms"` summaries.
+- **Entity & Container Binding**: Binds action buttons/inputs directly to parent cards, rows, or list items under `┌ [Container Header]` trees.
+- **Active Modal & Dialog Hoisting**: Automatically detects and isolates active dialogs/modals at the top of the map under `╔═ ACTIVE DIALOG: "..." ═╗`.
+- **Nav & Footer Cluster Collapsing**: Compresses cascades of repetitive navigation/footer links (4+ links) into compact `[w:5…w:24] 20 links: "Home" … "Terms"` summaries.
 - **High-Density Unified Grammar**: Single-line format distinguishing `val:"..."`, `ph:"..."`, `FOCUSED`, `checked`, and `disabled` states.
 
 **Parameters:**
@@ -85,7 +85,7 @@ High-density DOM tree snapshotter with volatile `w:NN` ref IDs. The foundational
 | `prune` | `boolean?` | One-shot semantic compression: collapses repetitive elements and strips non-interactable noise. |
 | `scope` | `string?` | Restricts extraction to a semantic landmark or selector: `"navigation"`, `"main_content"` (alias `"main"`), `"sidebar"`, `"form"`, `"modal"`, `"utility"`, or a CSS selector. |
 | `query` | `string?` | Filters elements by accessible name, ARIA role, or label substring. |
-| `visual` | `boolean \| "auto"?` | Set-of-Marks visual grounding. Injects numbered badges `[1]â€¦[N]` and returns an annotated screenshot. Use `"auto"` for canvas/WebGL pages with < 5 DOM elements. |
+| `visual` | `boolean \| "auto"?` | Set-of-Marks visual grounding. Injects numbered badges `[1]…[N]` and returns an annotated screenshot. Use `"auto"` for canvas/WebGL pages with < 5 DOM elements. |
 | `ax_tree` | `boolean?` | Uses Chromium Accessibility Tree directly (essential for closed Shadow DOM and canvas SPAs). |
 | `full` | `boolean?` | Return full markdown table format with bounding boxes instead of compact list. |
 | `force` | `boolean?` | Force full DOM map rebuild even if loop detection says nothing changed. Bypasses skip guard and resets loop strikes. |
@@ -110,7 +110,7 @@ browser_map({ delta: true })
 ---
 
 ### `browser_find`
-Sub-5ms in-page text search via a leaf-optimized, non-mutating TreeWalker shim returning clean CSS selectors. Approximately 10Ã— cheaper than `browser_map` when only checking for text presence or targeting elements by visible string. Channel/user prefixes (`#`, `@`) are stripped for token matching.
+Fast in-page text search via a leaf-optimized, non-mutating TreeWalker shim returning clean CSS selectors. Approximately 10x cheaper than `browser_map` when only checking for text presence or targeting elements by visible string. Channel/user prefixes (`#`, `@`) are stripped for token matching.
 
 **Parameters:**
 | Parameter | Type | Description |
@@ -175,12 +175,12 @@ browser_extract_design({
 ## 2. Input & Interaction
 
 ### `browser_click`
-Physical click engine using Ghost Cursor BÃ©zier curve trajectories. Resolves targets through a multi-layer cascade: `mark` (SoM visual grounding) â†’ `ref` â†’ `selector` â†’ `label` â†’ `intent` â†’ `coords`.
+Physical click engine using Ghost Cursor Bézier curve trajectories. Resolves targets through a multi-layer cascade: `mark` (SoM visual grounding) → `ref` → `selector` → `label` → `intent` → `coords`.
 
 **Parameters:**
 | Parameter | Type | Description |
 |---|---|---|
-| `mark` | `number?` | Numbered badge from `browser_map({ visual: true/\"auto\" })`. Zero DOM walk â€” instant hardware coordinate click. Ideal for canvas/WebGL/Figma. |
+| `mark` | `number?` | Numbered badge from `browser_map({ visual: true/\"auto\" })`. Zero DOM walk — instant hardware coordinate click. Ideal for canvas/WebGL/Figma. |
 | `id` | `string?` | Volatile `w:NN` ref ID from `browser_map` (preferred for DOM). |
 | `selector` | `string?` | CSS selector of target element. |
 | `label` | `string?` | Visible text label of the target element. |
@@ -201,7 +201,7 @@ browser_click({ id: "w:8", app: "discord" })
 ---
 
 ### `browser_type`
-Realistic humanized keystroke engine with temporal jitter (35â€“95ms), typing burst profiling, and stuck-input loop detection.
+Realistic humanized keystroke engine with temporal jitter (35–95ms), typing burst profiling, and stuck-input loop detection.
 
 **Key Upgrades:**
 - **Zero-Target ActiveElement Typing**: If no `id`/`selector` is passed, automatically detects and types directly into the currently focused `document.activeElement` without throwing errors or requiring prior clicks.
@@ -286,9 +286,9 @@ browser_fill({ scan: true })
 // 2. Batch fill form fields by ref, name, or label
 browser_fill({
   fields: [
-    { ref: "w:12", value: "Anas" },
-    { name: "email", value: "anas@example.com" },
-    { label: "Country", value: "Morocco" }
+    { ref: "w:12", value: "fy2ne" },
+    { name: "email", value: "hello@fy2ne.me" },
+    { label: "Role", value: "Maintainer" }
   ],
   submit: "w:18"
 })
@@ -300,7 +300,7 @@ browser_fill({
 Precision mouse control for hover flyouts, clicks, double-clicks, and drag-and-drop.
 
 **Key Upgrades:**
-- **Multi-Level `hover_chain`**: Traverse complex multi-level nested menus (e.g. Photoshop/Photopea `"File" â†’ "Export As" â†’ "PNG"`, Figma, or enterprise dashboards) in a single tool call without custom eval scripts.
+- **Multi-Level `hover_chain`**: Traverse complex multi-level nested menus (e.g. Photoshop/Photopea `"File" → "Export As" → "PNG"`, Figma, or enterprise dashboards) in a single tool call without custom eval scripts.
 
 **Parameters:**
 | Parameter | Type | Description |
@@ -365,7 +365,7 @@ Emulate environmental conditions over CDP: network throttling (Slow 3G, Fast 3G,
 | Parameter | Type | Description |
 |---|---|---|
 | `network` | `string \| object?` | Throttling profile (`"offline" \| "slow3g" \| "fast3g" \| "4g" \| "online"`) or custom `{ latency, downloadThroughput, uploadThroughput }`. |
-| `cpuThrottlingRate` | `number?` | CPU slowdown multiplier (e.g. `2` = 2Ã— slowdown, `4` = 4Ã— slowdown, `1` = normal). |
+| `cpuThrottlingRate` | `number?` | CPU slowdown multiplier (e.g. `2` = 2× slowdown, `4` = 4× slowdown, `1` = normal). |
 | `geolocation` | `object?` | Override coordinates `{ latitude: number, longitude: number, accuracy?: number }`. |
 | `timezoneId` | `string?` | Override browser timezone (e.g. `'America/New_York'`). |
 | `colorScheme` | `"light" \| "dark" \| "no-preference"?` | Emulate `prefers-color-scheme` (dark/light mode). |
@@ -418,7 +418,7 @@ browser_burst({ compile_from_history: true })
 ## 4. Autonomous CAPTCHA Solving
 
 ### `browser_captcha`
-Autonomous zero-API challenge detection and solving. Solves Cloudflare Turnstile, Google reCAPTCHA v2/v3, GeeTest sliders, Arkose Labs, and hCaptcha locally using real CDP mouse physics and arithmetic heuristics â€” requiring **zero external API keys or third-party solver services**.
+Autonomous zero-API challenge detection and solving. Solves Cloudflare Turnstile, Google reCAPTCHA v2/v3, GeeTest sliders, Arkose Labs, and hCaptcha locally using real CDP mouse physics and arithmetic heuristics — requiring **zero external API keys or third-party solver services**.
 
 **Parameters:**
 | Parameter | Type | Description |
@@ -532,7 +532,7 @@ browser_tabs({ action: "open", url: "https://github.com" })
 ## 8. Memory, Learning & Profiles
 
 ### `browser_pattern_learn`
-Read, register, update, and record execution outcomes for named workflow patterns and site quirks. Use `action: "get"` at session start to inspect a site profile and decide between fast-path replay (reliability â‰¥ 0.8) or exploratory navigation.
+Read, register, update, and record execution outcomes for named workflow patterns and site quirks. Use `action: "get"` at session start to inspect a site profile and decide between fast-path replay (reliability ≥ 0.8) or exploratory navigation.
 
 **Parameters:**
 | Parameter | Type | Description |

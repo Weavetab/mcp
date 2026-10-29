@@ -1,6 +1,6 @@
 # Weavetab MCP Security Policy
 
-> **Version:** 2.5.1 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.5.2 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 ---
 
@@ -17,7 +17,7 @@ Only the latest major release of Weavetab receives security updates. Users are s
 
 ## Architecture Context
 
-Weavetab interacts directly with the local Chromium browser instance via the Chrome DevTools Protocol (CDP). Because it can control the browser at the operating system level, Weavetab operates at a highly privileged layer (Layer 0).
+Weavetab interacts directly with the local Chromium browser instance via the Chrome DevTools Protocol (CDP). Because it controls the browser and desktop apps locally, Weavetab operates with privileged local access.
 
 ### Security Mechanisms
 
@@ -118,7 +118,7 @@ Weavetab defaults to the **`operator`** role. Users who want strict read-only in
 
 ### High-Privilege Tool Protections (`browser_eval`, `browser_cookies`, `browser_storage`, `browser_clipboard`)
 
-Because Weavetab is a Layer 0 browser and desktop automation engine, tools like `browser_eval`, `browser_cookies`, `browser_storage`, and `browser_clipboard` are core primitives rather than accidental exposures. To protect against indirect prompt injection from untrusted web content:
+Because Weavetab is a direct browser and desktop automation engine, tools like `browser_eval`, `browser_cookies`, `browser_storage`, and `browser_clipboard` are core primitives rather than accidental exposures. To protect against indirect prompt injection from untrusted web content:
 1. **Pre-Execution Domain Gate**: Every tool call passes through `checkDomain()` before touching CDP. High-risk domains and user-configured `deny` or `read-only` policies block execution immediately.
 2. **Structured Audit Trail**: High-privilege invocations (`browser_eval`, `browser_cookies`, `browser_storage`, `browser_network_intercept`, `browser_type_secret`) are recorded via `logActionStructured()` in `~/.weavetab-system/logs/`.
 3. **Secret Redaction**: `SessionSecretTracker` strips and masks any blind-injected credentials (`[REDACTED]`) from `browser_eval`, `browser_scrape`, `browser_map`, and snapshot outputs so injected secrets cannot be exfiltrated via script evaluation.

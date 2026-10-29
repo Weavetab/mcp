@@ -1,5 +1,5 @@
 // src/tools/click.ts
-// Priority 2: Sub-10ms Click Path & Predictive Action Queue
+// click dispatch and actionability checks
 
 import CDP from "chrome-remote-interface";
 import { buildActionMap, findAllMatches, safeSelector, toMarkdownTable, resolveByAria, recoverDetachedRef, type ActionElement } from "../cdp/walker.js";

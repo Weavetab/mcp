@@ -33,12 +33,11 @@ If you encountered unexpected behavior or a bug in Weavetab:
 1. **Check Existing Issues**: Search the [Issue Tracker](https://github.com/weavetab/mcp/issues) to see if the issue has already been reported.
 2. **Include Environment Details**:
    - OS & version (Windows, macOS, Linux)
-   - Node.js version (
-ode -v)
-   - Weavetab version (weavetab --version)
+   - Node.js version (`node -v`)
+   - Weavetab version (`weavetab --version`)
    - MCP Client (Claude Desktop, Cursor, Antigravity, Copilot Workspace, custom client)
    - Minimal reproduction script or MCP tool call sequence
-3. **Include Debug Logs**: Run with DEBUG=weavetab:* or check ~/.weavetab-system/logs/.
+3. **Include Debug Logs**: Run with `DEBUG=weavetab:*` or check `~/.weavetab-system/logs/`.
 
 👉 **[Open a Bug Report](https://github.com/weavetab/mcp/issues/new?template=bug_report.md)**
 
@@ -57,7 +56,7 @@ Consult our **[Security Policy](SECURITY.md)** and report sensitive security iss
 
 Need dedicated support, custom MCP tool development, enterprise security auditing, or on-premise multi-agent orchestration?
 
-* **Founder & Lead Maintainer**: fy2ne (y2ne)
+* **Founder & Lead Maintainer**: [fy2ne](https://github.com/fy2ne)
 * **Contact**: [hello@fy2ne.me](mailto:hello@fy2ne.me)
 * **Website**: [https://fy2ne.me](https://fy2ne.me)
 
@@ -65,8 +64,8 @@ Need dedicated support, custom MCP tool development, enterprise security auditin
 
 ## 6. Sponsoring & Financial Support
 
-Weavetab is an open-source, AGPL-licensed Layer 0 automation engine. If Weavetab powers your production agents or saves your team engineering hours, consider supporting ongoing development:
+Weavetab is an open-source, AGPL-licensed browser and desktop automation engine. If Weavetab powers your production agents or saves your team engineering hours, consider supporting ongoing development:
 
 * **[GitHub Sponsors](https://github.com/sponsors/fy2ne)** — Monthly or one-time developer sponsorship.
 
-Your sponsorship funds continuous CDP compatibility updates, zero-API anti-bot heuristic research, and enterprise plugin development.
+Your sponsorship funds continuous CDP compatibility updates, zero-API anti-bot heuristic research, and plugin development.
