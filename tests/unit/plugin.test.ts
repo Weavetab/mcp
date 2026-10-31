@@ -172,6 +172,29 @@ describe("Plugin Isolated Storage", () => {
   it("rejects path traversal attempts", () => {
     assert.throws(() => storage.getPath("../../outside.txt"), /Security Violation/i);
   });
+
+  it("handles setWithExpiry, getWithExpiry, and remember cache-aside", async () => {
+    let computed = 0;
+    const fetchValue = async () => {
+      computed++;
+      return "expensive_result";
+    };
+    const res1 = await storage.remember("cache_test", 50, fetchValue);
+    assert.strictEqual(res1, "expensive_result");
+    assert.strictEqual(computed, 1);
+    const res2 = await storage.remember("cache_test", 50, fetchValue);
+    assert.strictEqual(res2, "expensive_result");
+    assert.strictEqual(computed, 1);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.strictEqual(await storage.getWithExpiry("cache_test"), null);
+    const res3 = await storage.remember("cache_test", 50, fetchValue);
+    assert.strictEqual(res3, "expensive_result");
+    assert.strictEqual(computed, 2);
+    await storage.setWithExpiry("stale1", "val", 1);
+    await new Promise((r) => setTimeout(r, 10));
+    const pruned = await storage.pruneExpired();
+    assert.ok(pruned >= 1);
+  });
 });
 
 // ─── Extension Bridge ─────────────────────────────────────────────────────────

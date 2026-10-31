@@ -13,7 +13,7 @@ export interface WeavetabToolDefinition {
    * invoking this tool. Use for API-only tools. Defaults to `true`.
    */
   requiresSession?: boolean;
-  handler: (args: Record<string, any>, session: CDP.Client, config: Config) => Promise<Record<string, any>>;
+  handler: (args: Record<string, any>, sessionOrContext: any, config?: Config) => Promise<any>;
 }
 
 export interface WeavetabToolOverride {
@@ -42,6 +42,10 @@ export interface WeavetabManifestTool {
 }
 
 export interface WeavetabPermissions {
+  desktop?: {
+    apps?: string[];
+    reason?: string;
+  };
   config?: {
     read?: boolean;
     write?: boolean;
@@ -250,6 +254,8 @@ export interface PluginContext {
   pluginDir: string;
   config: Record<string, any>;
   storage: IPluginStorage;
+  tab?: any;
+  desktop?: any;
   extension: IPluginExtensionBridge;
   mcp: PluginMcpContext;
   hooks: PluginHooksContext;

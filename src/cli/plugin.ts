@@ -177,10 +177,15 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
       selectedPkg = choice as string;
       selectedCandidate = candidates.find((c) => c.packageName === selectedPkg);
     } else {
-      // Non-interactive fallback: Prefer official shortcut if available
-      selectedCandidate = candidates.find((c) => c.isOfficialShortcut) || candidates[0];
-      selectedPkg = selectedCandidate.packageName;
-      console.log(pc.dim(`[AUTO] Selected candidate: ${selectedPkg}`));
+      console.error(pc.red(`[ERROR] Ambiguous plugin name "${inputName}".`));
+      console.error(pc.dim('Multiple packages match on npm:'));
+      for (const c of candidates) {
+        console.error(`  - ${c.packageName} (${c.label})`);
+      }
+      console.error(pc.yellow(`\nIn non-interactive environments, specify the package explicitly:`));
+      console.error(`  weavetab plugin add ${candidates[0].packageName}`);
+      console.error(`  weavetab plugin add ${inputName} --official (or --community)\n`);
+      process.exit(1);
     }
   } else if (candidates.length === 1) {
     selectedCandidate = candidates[0];

@@ -14,6 +14,11 @@ export interface IPluginStorage {
   setJSON<T = any>(filename: string, data: T): Promise<void>;
   getPath(subpath?: string): string;
   list(subpath?: string): Promise<string[]>;
+  setWithExpiry<T = any>(key: string, value: T, ttlMs: number): Promise<void>;
+  getWithExpiry<T = any>(key: string): Promise<T | null>;
+  remember<T = any>(key: string, ttlMs: number, resolver: () => Promise<T>): Promise<T>;
+  clear(): Promise<void>;
+  pruneExpired(): Promise<number>;
 }
 
 /**
@@ -145,7 +150,8 @@ export class PluginStorageManager implements IPluginStorage {
   public getPath(subpath: string = ""): string {
     const resolved = path.resolve(this.pluginDir, subpath);
     // Security check: ensure subpath does not escape the plugin directory
-    if (!resolved.startsWith(this.pluginDir)) {
+    const baseWithSep = this.pluginDir.endsWith(path.sep) ? this.pluginDir : this.pluginDir + path.sep;
+    if (resolved !== this.pluginDir && !resolved.startsWith(baseWithSep)) {
       throw new Error(`Security Violation: Path "${subpath}" attempts to escape plugin directory.`);
     }
     return resolved;
@@ -168,6 +174,48 @@ export class PluginStorageManager implements IPluginStorage {
     const parent = path.dirname(filePath);
     this.ensureDir(parent);
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  }
+
+  public async setWithExpiry<T = any>(key: string, value: T, ttlMs: number): Promise<void> {
+    const record = { val: value, exp: Date.now() + ttlMs };
+    await this.set(`__ttl_${key}`, record);
+  }
+
+  public async getWithExpiry<T = any>(key: string): Promise<T | null> {
+    const record = await this.get<{ val: T; exp: number }>(`__ttl_${key}`);
+    if (!record) return null;
+    if (Date.now() > record.exp) {
+      await this.delete(`__ttl_${key}`);
+      return null;
+    }
+    return record.val;
+  }
+
+  public async remember<T = any>(key: string, ttlMs: number, resolver: () => Promise<T>): Promise<T> {
+    const cached = await this.getWithExpiry<T>(key);
+    if (cached !== null) return cached;
+    const fresh = await resolver();
+    await this.setWithExpiry(key, fresh, ttlMs);
+    return fresh;
+  }
+
+  public async clear(): Promise<void> {
+    this.inMemoryKV = {};
+    this.persistKV();
+  }
+
+  public async pruneExpired(): Promise<number> {
+    const kv = this.loadKV();
+    let pruned = 0;
+    const now = Date.now();
+    for (const k of Object.keys(kv)) {
+      if (k.startsWith('__ttl_') && kv[k]?.exp && now > kv[k].exp) {
+        delete kv[k];
+        pruned++;
+      }
+    }
+    if (pruned > 0) this.persistKV();
+    return pruned;
   }
 
   public async list(subpath: string = ""): Promise<string[]> {

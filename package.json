@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.5.2",
+  "version": "2.6.0",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "author": {
     "name": "fy2ne",

@@ -1945,6 +1945,49 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
 
   const loadedPluginNames = new Set<string>();
 
+function createTabProxy(session: any) {
+  if (!session?.Runtime) return undefined;
+  return {
+    isAvailable: () => Boolean(session?.Runtime),
+    url: async () => {
+      const res = await session.Runtime.evaluate({ expression: 'window.location.href', returnByValue: true });
+      return String(res.result?.value || '');
+    },
+    title: async () => {
+      const res = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
+      return String(res.result?.value || '');
+    },
+    evaluate: async (fn: any, ...evalArgs: any[]) => {
+      const expr = typeof fn === 'function' ? `(${fn.toString()})(${evalArgs.map((a: any) => JSON.stringify(a)).join(',')})` : fn;
+      const res = await session.Runtime.evaluate({ expression: expr, returnByValue: true, awaitPromise: true });
+      if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description || 'eval failed');
+      return res.result?.value;
+    },
+    waitForSelector: async (selector: string, opts: any = {}) => {
+      const timeout = opts.timeoutMs ?? 5000;
+      const start = Date.now();
+      while (Date.now() - start < timeout) {
+        const res = await session.Runtime.evaluate({ expression: `Boolean(document.querySelector(${JSON.stringify(selector)}))`, returnByValue: true });
+        if (res.result?.value) return true;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return false;
+    }
+  };
+}
+function normalizeToolResult(result: any) {
+  if (result && Array.isArray(result.content)) return result;
+  if (typeof result === 'string') return { content: [{ type: 'text' as const, text: result }] };
+  if (result && result.isError) {
+    return {
+      isError: true,
+      content: [{ type: 'text' as const, text: result.error || result.message || 'Execution error' }],
+    };
+  }
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }],
+  };
+}
   const registerPluginTools = async (plugin: WeavetabPlugin) => {
     if (loadedPluginNames.has(plugin.name)) return;
     
@@ -2053,8 +2096,14 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
               config,
               td.name,
               async (session, liveConfig) => {
-                const result = await td.handler(args, session, liveConfig);
-                return result;
+                const tab = createTabProxy(session);
+let result: any;
+if (td.handler.length <= 2) {
+  result = await (td.handler as any)(args, { tab, desktop: (plugin as any)._context?.desktop, storage: plugin.storage, config: liveConfig, session });
+} else {
+  result = await td.handler(args, session, liveConfig);
+}
+return normalizeToolResult(result);
               },
               isOfficial,
               undefined,
@@ -2085,8 +2134,14 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
             config,
             tool.name,
             async (session, liveConfig) => {
-              const result = await tool.handler(args, session, liveConfig);
-              return result;
+              const tab = createTabProxy(session);
+              let result: any;
+              if (tool.handler.length <= 2) {
+                result = await (tool.handler as any)(args, { tab, desktop: (plugin as any)._context?.desktop, storage: plugin.storage, config: liveConfig, session });
+              } else {
+                result = await tool.handler(args, session, liveConfig);
+              }
+              return normalizeToolResult(result);
             },
             isOfficial,
             undefined,

@@ -1,5 +1,1 @@
-/**
- * Weavetab Version Constant
- * Single source of truth for runtime versioning.
- */
-export const WEAVETAB_VERSION = "2.5.2";
+export const WEAVETAB_VERSION = "2.6.0";

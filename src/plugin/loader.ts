@@ -214,6 +214,21 @@ export function buildPluginContext(
     pluginDir: storageManager.getDirectory(),
     config: pluginConfig,
     storage: storageManager,
+    desktop: {
+      listApps: async () => {
+        const { discoverElectronApps } = await import('../desktop/discovery.js');
+        return await discoverElectronApps();
+      },
+      getApp: async (name: string) => {
+        const { discoverElectronApps } = await import('../desktop/discovery.js');
+        const apps = await discoverElectronApps();
+        return apps.find((a: any) => a.name.toLowerCase() === name.toLowerCase()) || null;
+      },
+      getTargets: async (port: number) => {
+        const { fetchTargets } = await import('../desktop/discovery.js');
+        return await fetchTargets(port);
+      }
+    },
     extension: extensionBridge,
     mcp: {
       registerTool: (tool: any) => {
