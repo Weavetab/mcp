@@ -1,6 +1,6 @@
 # Weavetab Plugin System & SDK Specification
 
-> **Version:** 2.5.2 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
+> **Version:** 2.6.0 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
 
 The **Weavetab Plugin System** allows developers to extend the MCP runtime with custom tools, visual HUD overlays, thought bubbles, lifecycle hooks, and tool overrides.
 
@@ -87,7 +87,7 @@ Plugins require a `weavetab.json` manifest in their package root:
   "version": "1.0.0",
   "entry": "dist/index.js",
   "engines": {
-    "weavetab": "^2.5.2",
+    "weavetab": ">=2.6.0",
     "node": ">=18.0.0"
   },
   "permissions": {
@@ -122,18 +122,34 @@ Plugins require a `weavetab.json` manifest in their package root:
 
 ## 5. Installing Plugins
 
+Plugins are installed directly from npm into `~/.weavetab/plugins/` using the Weavetab CLI:
+
 ```bash
-# Install a plugin by npm package name
-weavetab plugin add my-custom-plugin
+# Install a plugin by package name (or official short alias):
+weavetab plugin add <plugin-name>
 
-# Install from a local path
-weavetab plugin add ./my-plugin
+# Install from a local directory during plugin development:
+weavetab plugin add ./path/to/plugin
 
-# List installed plugins
+# List all active installed plugins:
 weavetab plugin list
 
-# Remove a plugin
-weavetab plugin rm my-custom-plugin
+# Remove an installed plugin:
+weavetab plugin rm <plugin-name>
 ```
 
-Restart Weavetab to load the newly installed plugin tools into the MCP server.
+---
+
+## 6. Preflight & Testing
+
+Before publishing to npm, verify your plugin with the official SDK preflight audit and testing harness:
+
+```bash
+# Run SDK preflight audit (manifest, licenses, permissions, naming anti-squatting):
+npx @weavetab/sdk preflight
+
+# Offline unit testing without launching Chrome:
+npm test
+```
+
+Installed plugins mount automatically on server startup. Tool results returned as strings, markdown, or JSON objects are normalized directly into MCP standard content format.

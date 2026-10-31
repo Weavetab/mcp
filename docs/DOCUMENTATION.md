@@ -1,6 +1,6 @@
 # Weavetab MCP Documentation
 
-> **Package:** `@weavetab/mcp` | **Version:** 2.5.2 | **License:** AGPLv3 | **Author:** fy2ne
+> **Package:** `@weavetab/mcp` | **Version:** 2.6.0 | **License:** AGPLv3 | **Author:** fy2ne
 
 ---
 
