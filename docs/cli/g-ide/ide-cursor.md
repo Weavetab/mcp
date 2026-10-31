@@ -4,7 +4,6 @@ description: "Configure Weavetab as an MCP server for Cursor IDE."
 product: mcp
 section: cli
 group: g-ide
-icon: MousePointer2
 slug: ide-cursor
 ---
 

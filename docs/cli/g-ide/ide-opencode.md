@@ -4,7 +4,6 @@ description: "Configure Weavetab for OpenCode CLI agent."
 product: mcp
 section: cli
 group: g-ide
-icon: Terminal
 slug: ide-opencode
 ---
 

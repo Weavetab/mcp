@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@weavetab/mcp",
-      "version": "2.5.2",
+      "version": "2.6.0",
       "transport": {
         "type": "stdio"
       },

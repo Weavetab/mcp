@@ -4,7 +4,6 @@ description: "Configure Weavetab for Claude Code CLI agent."
 product: mcp
 section: cli
 group: g-ide
-icon: MessageSquare
 slug: ide-claude-code
 ---
 

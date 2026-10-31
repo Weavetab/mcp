@@ -1,6 +1,6 @@
 # Weavetab Architecture
 
-> **Version:** 2.5.2 | **Last Updated:** October 2026
+> **Version:** 2.6.0 | **Last Updated:** October 2026
 
 ---
 

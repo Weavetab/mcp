@@ -4,7 +4,6 @@ description: "Configure Weavetab for Google Antigravity IDE."
 product: mcp
 section: cli
 group: g-ide
-icon: Rocket
 slug: ide-antigravity
 ---
 

@@ -4,7 +4,6 @@ description: "Configure Weavetab as an MCP server for Claude Desktop."
 product: mcp
 section: cli
 group: g-ide
-icon: Bot
 slug: ide-claude-desktop
 ---
 

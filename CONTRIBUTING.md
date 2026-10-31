@@ -1,6 +1,6 @@
 # Contributing to Weavetab MCP
 
-> **Version:** 2.5.2 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.6.0 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 Thank you for your interest in contributing to Weavetab, the production-grade MCP server for AI-driven browser automation.
 
@@ -51,7 +51,7 @@ If applicable, add screenshots to help explain your problem.
 **Environment:**
  - OS: [e.g. Windows 11, macOS 14, Ubuntu 22.04]
  - Node Version: [e.g. 18.17.0]
- - Weavetab Version: [e.g. 2.5.2]
+ - Weavetab Version: [e.g. 2.6.0]
  - Browser: [e.g. Chrome 126, Edge 126]
 
 **Additional Context**
@@ -493,8 +493,8 @@ WHAT: <description> | WHEN: <usage guidance> | CANNOT: <limitations> | EXAMPLE: 
 
 1. Update version in `package.json`
 2. Update CHANGELOG.md
-3. Create git tag: `git tag v2.5.2`
-4. Push tag: `git push origin v2.5.2`
+3. Create git tag: `git tag v2.6.0`
+4. Push tag: `git push origin v2.6.0`
 5. Publish to NPM: `npm publish`
 6. Create GitHub release
 

@@ -4,7 +4,6 @@ description: "Configure Weavetab for VS Code with GitHub Copilot."
 product: mcp
 section: cli
 group: g-ide
-icon: Code
 slug: ide-vscode-copilot
 ---
 
