@@ -5,10 +5,12 @@ import {
   getVerifiedPackages,
   invalidateRegistryCache,
 } from "../../src/plugin/registry.js";
-import { inspectInstalledPackage } from "../../src/plugin/loader.js";
+import { inspectInstalledPackage, buildPluginContext, normalizePermissions } from "../../src/plugin/loader.js";
 import { PluginStorageManager } from "../../src/plugin/storage.js";
 import { PluginExtensionBridge } from "../../src/plugin/extension_bridge.js";
-import { toPluginInputShape } from "../../src/plugin/schema.js";
+import { toPluginInputShape, toPromptShape } from "../../src/plugin/schema.js";
+import { createSurface } from "../../src/plugin/surface.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
@@ -249,5 +251,91 @@ describe("toPluginInputShape", () => {
     assert.deepStrictEqual(toPluginInputShape(undefined), {});
     assert.deepStrictEqual(toPluginInputShape({}), {});
     assert.deepStrictEqual(toPluginInputShape({ foo: "bar" }), {});
+  });
+});
+
+// ─── Plugin Prompts (/) and Resources (@) Surface ─────────────────────────────
+
+describe("Plugin Prompts and Resources Surface", () => {
+  it("enforces permissions.prompts.add and permissions.resources.add in buildPluginContext", () => {
+    const storage = new PluginStorageManager("unit-test-surface-perms");
+    const bridge = new PluginExtensionBridge("unit-test-surface-perms", {});
+    const hooks = { beforeToolCall: [], afterToolCall: [], onPageNavigate: [] };
+
+    const lockedPlugin: any = { name: "locked", version: "1.0.0", manifest: { permissions: {} } };
+    const lockedCtx = buildPluginContext(lockedPlugin, storage, bridge, {}, hooks);
+    lockedCtx.mcp.registerPrompt({ name: "cmd", handler: () => "hi" });
+    lockedCtx.mcp.registerResource({ name: "res", uri: "custom://a", read: () => "x" });
+    assert.strictEqual(lockedPlugin.prompts, undefined);
+    assert.strictEqual(lockedPlugin.resources, undefined);
+
+    const openPerms = normalizePermissions(["prompts.add", "resources.add"]);
+    const openPlugin: any = { name: "open", version: "1.0.0", manifest: { permissions: openPerms } };
+    const openCtx = buildPluginContext(openPlugin, storage, bridge, {}, hooks);
+    openCtx.mcp.registerPrompt({ name: "cmd", handler: () => "hi" });
+    openCtx.mcp.registerResource({ name: "res", uri: "custom://a", read: () => "x" });
+    assert.strictEqual(openPlugin.prompts.length, 1);
+    assert.strictEqual(openPlugin.resources.length, 1);
+  });
+
+  it("registers prompts, fixed resources, and URI template resources with autocomplete, and removes them cleanly", async () => {
+    const mcp = new McpServer({ name: "test", version: "1.0.0" });
+    const warnings: string[] = [];
+    const storage = new PluginStorageManager("unit-test-surface");
+    const surface = createSurface(
+      mcp,
+      () => ({ storage, config: { env: "test" }, logger: { info() {}, warn() {}, error() {}, debug() {} } }),
+      (w) => warnings.push(w)
+    );
+
+    const okPrompt = surface.addPrompt("plug-a", {
+      name: "quick_scan",
+      description: "Run a quick scan",
+      arguments: toPromptShape({ type: "object", properties: { target: { type: "string" } }, required: ["target"] }),
+      handler: async (args) => `Scanning ${args.target}`,
+    });
+    assert.strictEqual(okPrompt, true);
+    assert.strictEqual(surface.addPrompt("plug-b", { name: "quick_scan", handler: () => "dup" }), false);
+    assert.strictEqual(surface.addPrompt("plug-a", { name: "BAD NAME!", handler: () => "x" }), false);
+
+    const okFixed = surface.addResource("plug-a", {
+      name: "realtime-state",
+      uri: "realtime://state",
+      mimeType: "application/json",
+      read: async () => JSON.stringify({ active: true }),
+    });
+    assert.strictEqual(okFixed, true);
+    assert.strictEqual(
+      surface.addResource("plug-a", { name: "stolen", uri: "weavetab://active-tab", read: () => "no" }),
+      false
+    );
+
+    const okTpl = surface.addResource("plug-a", {
+      name: "reflex-by-id",
+      uriTemplate: "realtime://reflex/{id}",
+      list: async () => [{ uri: "realtime://reflex/r1", name: "r1" }],
+      complete: { id: async (prefix) => ["r1", "r2"].filter((x) => x.startsWith(prefix)) },
+      read: async (uri, vars) => ({ text: `reflex=${vars.id}@${uri}` }),
+    });
+    assert.strictEqual(okTpl, true);
+    assert.deepStrictEqual(surface.count(), { prompts: 1, resources: 2 });
+
+    const promptEntry = (mcp as any)._registeredPrompts["quick_scan"];
+    const promptOut = await promptEntry.callback({ target: "login" });
+    assert.strictEqual(promptOut.messages[0].content.text, "Scanning login");
+
+    const resEntry = (mcp as any)._registeredResources["realtime://state"];
+    const resOut = await resEntry.readCallback(new URL("realtime://state"));
+    assert.strictEqual(resOut.contents[0].text, JSON.stringify({ active: true }));
+
+    const tplEntry = (mcp as any)._registeredResourceTemplates["reflex-by-id"];
+    const completeFn = tplEntry.resourceTemplate.completeCallback("id");
+    assert.deepStrictEqual(await completeFn("r"), ["r1", "r2"]);
+    const tplOut = await tplEntry.readCallback(new URL("realtime://reflex/r1"), { id: "r1" });
+    assert.strictEqual(tplOut.contents[0].text, "reflex=r1@realtime://reflex/r1");
+
+    assert.strictEqual(surface.dropAll("plug-a"), true);
+    assert.deepStrictEqual(surface.count(), { prompts: 0, resources: 0 });
+    assert.ok(warnings.length >= 3);
   });
 });

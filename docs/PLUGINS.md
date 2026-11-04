@@ -1,6 +1,6 @@
 # Weavetab Plugin System & SDK Specification
 
-> **Version:** 2.6.0 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
+> **Version:** 2.6.1 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
 
 The **Weavetab Plugin System** allows developers to extend the MCP runtime with custom tools, visual HUD overlays, thought bubbles, lifecycle hooks, and tool overrides.
 
@@ -104,7 +104,49 @@ Plugins require a `weavetab.json` manifest in their package root:
 }
 ```
 
-> Registering tools at runtime via `ctx.mcp.registerTool()` requires the `permissions.tools.add` permission.
+> Registering tools at runtime via `ctx.mcp.registerTool()` requires `permissions.tools.add`. Registering `/` commands via `ctx.mcp.registerPrompt()` requires `permissions.prompts.add`, and registering `@` mentions via `ctx.mcp.registerResource()` requires `permissions.resources.add`.
+
+### Registering `/` Commands (MCP Prompts) & `@` Mentions (MCP Resources)
+
+MCP clients surface **prompts** as `/` slash commands and **resources** as `@` context mentions. Plugins can register both statically on `definePlugin({ prompts, resources })` or dynamically in `onLoad`:
+
+```typescript
+import { definePlugin, definePrompt, defineResource, z } from "@weavetab/sdk";
+
+export default definePlugin({
+  name: "@weavetab/plugin-sample",
+  version: "1.0.0",
+  async onLoad(ctx) {
+    // `/` command
+    ctx.mcp.registerPrompt(
+      definePrompt({
+        name: "audit_form",
+        description: "Inject a checklist to audit the active page's forms",
+        arguments: { focus: z.string().optional().describe("Optional form selector") },
+        handler: async ({ focus }, { tab }) => {
+          const url = (await tab?.url()) || "detached";
+          return `Audit forms on ${url}${focus ? ` matching ${focus}` : ""}.`;
+        },
+      })
+    );
+
+    // `@` mention (fixed URI or RFC 6570 uriTemplate with autocomplete)
+    ctx.mcp.registerResource(
+      defineResource({
+        name: "rule-by-id",
+        uriTemplate: "sample://rule/{id}",
+        description: "Inspect an active rule by id",
+        mimeType: "application/json",
+        list: async () => [{ uri: "sample://rule/default", name: "default" }],
+        complete: { id: (prefix) => ["default", "strict"].filter((k) => k.startsWith(prefix)) },
+        read: async (uri, { id }) => JSON.stringify({ uri, id, active: true }, null, 2),
+      })
+    );
+  },
+});
+```
+
+Reserved URI schemes (`weavetab://`, `file://`, `http://`, `https://`, `data://`, `javascript://`) and prompt names colliding with core (`/page_context`, `/agent`) are rejected automatically. All prompt and resource outputs pass through `SessionSecretTracker.redactAll()` before leaving the server.
 
 ---
 
@@ -116,6 +158,8 @@ Plugins require a `weavetab.json` manifest in their package root:
 | **Thought Bubbles** | `ctx.extension.showThought(session, text)` | Floating green thoughts on the live browser tab. |
 | **HUD Badges** | `ctx.extension.setHudState(session, state)` | Real-time status in the Weavetab overlay. |
 | **Tool Overrides** | `ctx.mcp.overrideTool(name, wrapperFn)` | Wrap or intercept built-in MCP tools with custom pre/post logic. |
+| **`/` Commands (Prompts)** | `ctx.mcp.registerPrompt(prompt)` | Register slash commands in MCP clients (`permissions.prompts.add`). |
+| **`@` Mentions (Resources)** | `ctx.mcp.registerResource(resource)` | Register fixed-URI or RFC 6570 URI-template mentions with autocomplete (`permissions.resources.add`). |
 | **Lifecycle Hooks** | `ctx.hooks.beforeToolCall`, `ctx.hooks.afterToolCall` | Global auditing and security filters. |
 
 ---

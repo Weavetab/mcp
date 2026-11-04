@@ -1,6 +1,6 @@
 # Weavetab MCP Documentation
 
-> **Package:** `@weavetab/mcp` | **Version:** 2.6.0 | **License:** AGPLv3 | **Author:** fy2ne
+> **Package:** `@weavetab/mcp` | **Version:** 2.6.1 | **License:** AGPLv3 | **Author:** fy2ne
 
 ---
 
@@ -19,7 +19,8 @@ Weavetab is a production-grade, in-process MCP (Model Context Protocol) server p
 - **Self-Learning** — per-domain session memory, knowledge hints, automatic framework detection
 - **Security Stack** — domain blacklist, RBAC (5 roles), rate limiter, loop detection, input filter, root guard
 - **Burst Mode** — chain N actions in 1 MCP call via `browser_burst`
-- **Plugin System** — Extensible plugin ecosystem supporting tool additions, overrides (with originalHandler wrapping), and tool removals across 3 trust tiers (Official, Verified, Unverified)
+- **Plugin System** — Extensible plugin ecosystem supporting tool additions, `/` commands (MCP prompts), `@` mentions (MCP resources & URI templates), overrides (with originalHandler wrapping), and tool removals across 3 trust tiers (Official, Verified, Unverified)
+- **Built-in `/` Commands & `@` Mentions** — `/page_context`, `/agent`, and `@active-tab` (`weavetab://active-tab`) for zero-tool-call context injection
 - **GitHub Automation (Plugin)** — Repo analysis, file reading, issues, and PRs are provided by the official `@weavetab/plugin-github` plugin, not built in
 
 ### Weavetab Skills

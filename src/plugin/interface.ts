@@ -41,7 +41,31 @@ export interface WeavetabManifestTool {
   parameters?: Record<string, any>;
 }
 
+export interface WeavetabManifestPrompt {
+  name: string;
+  description?: string;
+  arguments?: Record<string, any>;
+}
+
+export interface WeavetabManifestResource {
+  name: string;
+  uri?: string;
+  uriTemplate?: string;
+  description?: string;
+  mimeType?: string;
+}
+
 export interface WeavetabPermissions {
+  /** `/` commands (MCP prompts) */
+  prompts?: {
+    add?: boolean;
+    reason?: string;
+  };
+  /** `@` mentions (MCP resources) */
+  resources?: {
+    add?: boolean;
+    reason?: string;
+  };
   desktop?: {
     apps?: string[];
     reason?: string;
@@ -154,6 +178,10 @@ export interface WeavetabManifest {
   environments?: string[];
   /** Tools exposed by this plugin to the MCP server */
   tools?: WeavetabManifestTool[];
+  /** `/` commands this plugin registers (shown on the marketplace page) */
+  prompts?: WeavetabManifestPrompt[];
+  /** `@` mentions this plugin registers (shown on the marketplace page) */
+  resources?: WeavetabManifestResource[];
   /** Default configuration template */
   defaultConfig?: Record<string, any>;
   /** Required permissions with security rationale */
@@ -232,7 +260,61 @@ export interface PluginHooksContext {
   onPageNavigate?: (handler: (url: string, session?: any) => Promise<void> | void) => void;
 }
 
+export interface PluginSurfaceContext {
+  /** live tab helper, undefined when no browser session is open yet */
+  tab?: any;
+  storage: IPluginStorage;
+  config: Record<string, any>;
+  logger: PluginContext["logger"];
+}
+
+export type PromptReturn =
+  | string
+  | {
+      description?: string;
+      messages: Array<{ role: "user" | "assistant"; content: string | { type: "text"; text: string } }>;
+    };
+
+export type ResourceReturn =
+  | string
+  | { text: string; mimeType?: string }
+  | { blob: string; mimeType?: string }
+  | { contents: Array<{ uri?: string; text?: string; blob?: string; mimeType?: string }> };
+
+type ListedResource = { uri: string; name: string; description?: string; mimeType?: string };
+
+export interface WeavetabPluginPrompt {
+  name: string;
+  title?: string;
+  description?: string;
+  /** Zod raw shape (string fields) or JSON Schema. MCP prompt arguments are always strings. */
+  arguments?: Record<string, any>;
+  handler: (args: Record<string, string>, ctx: PluginSurfaceContext) => Promise<PromptReturn> | PromptReturn;
+}
+
+export interface WeavetabPluginResource {
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+  /** Fixed URI, e.g. `realtime://state`. Exactly one of uri / uriTemplate. */
+  uri?: string;
+  /** RFC 6570 template, e.g. `realtime://reflex/{id}`. */
+  uriTemplate?: string;
+  /** Template only: entries offered in the `@` picker. */
+  list?: (ctx: PluginSurfaceContext) => Promise<ListedResource[]> | ListedResource[];
+  /** Template only: autocomplete per `{variable}`. */
+  complete?: Record<string, (value: string) => Promise<string[]> | string[]>;
+  /** `vars` is empty for fixed URIs. */
+  read: (uri: string, vars: Record<string, string | string[]>, ctx: PluginSurfaceContext) => Promise<ResourceReturn> | ResourceReturn;
+}
+
 export interface PluginMcpContext {
+  registerPrompt: (prompt: WeavetabPluginPrompt) => void;
+  registerResource: (resource: WeavetabPluginResource) => void;
+  unregisterPrompt?: (name: string) => void;
+  /** by fixed uri, or by name for templates */
+  unregisterResource?: (uriOrName: string) => void;
   registerTool: (tool: WeavetabPluginTool | any) => void;
   overrideTool?: (toolName: string, overrideHandler: any) => void;
   removeTool?: (toolName: string) => void;
@@ -274,6 +356,8 @@ export interface WeavetabPluginDefinition {
   version?: string;
   description?: string;
   tools?: WeavetabPluginTool[];
+  prompts?: WeavetabPluginPrompt[];
+  resources?: WeavetabPluginResource[];
   overrides?: WeavetabToolOverride[];
   removeTools?: string[];
   defaultConfig?: Record<string, any>;
@@ -292,6 +376,10 @@ export interface WeavetabPlugin {
   permissions?: WeavetabPermissions;
   /** Add new tools */
   tools?: WeavetabToolDefinition[] | WeavetabPluginTool[];
+  /** Add `/` commands */
+  prompts?: WeavetabPluginPrompt[];
+  /** Add `@` mentions */
+  resources?: WeavetabPluginResource[];
   /** Override or wrap existing tools */
   overrides?: WeavetabToolOverride[];
   /** Built-in tools to remove or disable */

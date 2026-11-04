@@ -64,6 +64,7 @@ import { discoverPlugins } from "./plugin/loader.js";
 import type { WeavetabPlugin } from "./plugin/interface.js";
 import { hookPipeline } from "./plugin/pipeline.js";
 import { toPluginInputShape } from "./plugin/schema.js";
+import { createSurface } from "./plugin/surface.js";
 import { agentAction } from "./sensors/pacing.js";
 import { getCachedConfig, getElectronApps } from "./config/loader.js";
 import { agentState } from "./state/agent.js";
@@ -74,6 +75,7 @@ import { sessionRegistry } from "./state/session.js";
 import { browserOfficeParse, browserOfficeList } from "./tools/office/index.js";
 
 const activeLoadedPlugins = new Map<string, WeavetabPlugin>();
+let surfaceRef: ReturnType<typeof createSurface> | null = null;
 
 type ToolHandler<T> = (session: any, config: Config) => Promise<T>;
 
@@ -1811,6 +1813,27 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
   );
 
 
+  // active-tab: the one built-in `@` mention. Also guarantees the server advertises the
+  // resources capability before connect, which plugins can't add afterwards.
+  server.registerResource(
+    "active-tab",
+    "weavetab://active-tab",
+    {
+      title: "Active tab",
+      description: "URL, title and target id of the tab Weavetab is attached to. Mention it to hand the agent the current page without a tool call.",
+      mimeType: "application/json",
+    },
+    async (u: URL) => {
+      const active = sessionRegistry.getActive(getCachedConfig().agentId);
+      const body = active
+        ? { attached: true, url: active.url, title: active.title, targetId: active.targetId }
+        : { attached: false };
+      return {
+        contents: [{ uri: u.href, mimeType: "application/json", text: SessionSecretTracker.redactAll(JSON.stringify(body, null, 2)) }],
+      };
+    }
+  );
+
   // page_context: zero-shot context injection. Invoke with /page_context
   // in any MCP client that supports prompts (Claude Desktop, etc.).
   server.prompt(
@@ -1988,6 +2011,21 @@ function normalizeToolResult(result: any) {
     content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }],
   };
 }
+  const surface = (surfaceRef = createSurface(
+    server,
+    (owner) => {
+      const pl: any = activeLoadedPlugins.get(owner);
+      const sess = sessionRegistry.getActive(getCachedConfig().agentId)?.session;
+      return {
+        tab: createTabProxy(sess),
+        storage: pl?.storage,
+        config: pl?._context?.config ?? {},
+        logger: pl?._context?.logger,
+      };
+    },
+    (msg) => process.stderr.write(`  \x1b[33m[!] ${msg}\x1b[0m\n`)
+  ));
+
   const registerPluginTools = async (plugin: WeavetabPlugin) => {
     if (loadedPluginNames.has(plugin.name)) return;
     
@@ -2117,6 +2155,24 @@ return normalizeToolResult(result);
       addedNames.push(td.name);
     }
 
+    // 4. `/` commands (prompts) and `@` mentions (resources)
+    const canPrompt = !Array.isArray(manifestPerms) && manifestPerms?.prompts?.add === true;
+    const canResource = !Array.isArray(manifestPerms) && manifestPerms?.resources?.add === true;
+    for (const pd of plugin.prompts || []) {
+      if (!canPrompt) {
+        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to add prompt "${pd?.name}" but permissions.prompts.add is not declared — skipped.\x1b[0m\n`);
+        continue;
+      }
+      surface.addPrompt(plugin.name, pd);
+    }
+    for (const rd of plugin.resources || []) {
+      if (!canResource) {
+        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to add resource "${rd?.name}" but permissions.resources.add is not declared — skipped.\x1b[0m\n`);
+        continue;
+      }
+      surface.addResource(plugin.name, rd);
+    }
+
     // Pass the rich SDK context so dynamic tool registrations receive full security & session
     const fullPluginCtx = (plugin as any)._context;
     if (fullPluginCtx && fullPluginCtx.mcp) {
@@ -2149,6 +2205,23 @@ return normalizeToolResult(result);
           );
         });
       };
+
+      fullPluginCtx.mcp.registerPrompt = (prompt: any) => {
+        if (!canPrompt) {
+          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic registerPrompt("${prompt?.name}"): permissions.prompts.add not declared — skipped.\x1b[0m\n`);
+          return;
+        }
+        surface.addPrompt(plugin.name, prompt);
+      };
+      fullPluginCtx.mcp.registerResource = (resource: any) => {
+        if (!canResource) {
+          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic registerResource("${resource?.name}"): permissions.resources.add not declared — skipped.\x1b[0m\n`);
+          return;
+        }
+        surface.addResource(plugin.name, resource);
+      };
+      fullPluginCtx.mcp.unregisterPrompt = (name: string) => { surface.removePrompt(plugin.name, name); };
+      fullPluginCtx.mcp.unregisterResource = (key: string) => { surface.removeResource(plugin.name, key); };
 
       fullPluginCtx.mcp.overrideTool = (toolName: string, overrideHandler: any) => {
         if (!declaredOverride.includes(toolName)) {
@@ -2240,7 +2313,7 @@ return normalizeToolResult(result);
   }
   await server.connect(transport);
   const totalTools = Object.keys((server as any)._registeredTools || {}).length;
-  process.stderr.write(`[OK] Weavetab Server Ready — ${totalTools} tools + 2 prompts loaded. (Transport: ${transportMode})\n`);
+  process.stderr.write(`[OK] Weavetab Server Ready — ${totalTools} tools, ${surface.count().prompts} prompts, ${surface.count().resources} resources loaded. (Transport: ${transportMode})\n`);
 
   // Handle transport close gracefully to prevent zombie processes.
   // The MCP SDK's StdioServerTransport only invokes onclose() from an explicit
@@ -2289,6 +2362,7 @@ async function cleanup() {
         }
       }
     }
+    for (const name of activeLoadedPlugins.keys()) surfaceRef?.dropAll(name);
     activeLoadedPlugins.clear();
     hookPipeline.clearAllHooks();
   } catch { /* non-fatal */ }

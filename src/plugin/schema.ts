@@ -59,3 +59,19 @@ export function toPluginInputShape(schema: any): Record<string, any> {
 
   return {};
 }
+
+// MCP prompt arguments travel as strings, so JSON Schema types are coerced to z.string()
+export function toPromptShape(schema: any): Record<string, any> {
+  if (!schema || typeof schema !== "object") return {};
+  if (schema.properties && typeof schema.properties === "object" && !schema._def) {
+    const required: string[] = Array.isArray(schema.required) ? schema.required : [];
+    const shape: Record<string, any> = {};
+    for (const [key, prop] of Object.entries<any>(schema.properties)) {
+      let field: any = z.string();
+      if (typeof prop?.description === "string") field = field.describe(prop.description);
+      shape[key] = required.includes(key) ? field : field.optional();
+    }
+    return shape;
+  }
+  return toPluginInputShape(schema);
+}

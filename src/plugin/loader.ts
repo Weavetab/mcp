@@ -51,6 +51,9 @@ export function normalizePermissions(perms?: any): WeavetabPermissions {
         (normalized.filesystem as any)[sub || "read"] = ["*"];
       } else if (cat === "extension" || cat === "hud") {
         (normalized.extension as any)[sub || "hud"] = true;
+      } else if (cat === "prompts" || cat === "resources") {
+        // "prompts" and "prompts.add" both mean add; no other verbs exist for these
+        normalized[cat] = { add: true };
       } else if (cat === "tools") {
         normalized.tools = normalized.tools || {};
         if (!sub || sub === "add") {
@@ -231,6 +234,26 @@ export function buildPluginContext(
     },
     extension: extensionBridge,
     mcp: {
+      registerPrompt: (prompt: any) => {
+        if (!perms.prompts?.add) {
+          console.error(`[Plugin: ${pname}] blocked registerPrompt("${prompt?.name}"): permissions.prompts.add not declared`);
+          return;
+        }
+        plugin.prompts = plugin.prompts || [];
+        const idx = plugin.prompts.findIndex((p: any) => p.name === prompt.name);
+        if (idx >= 0) plugin.prompts[idx] = prompt;
+        else plugin.prompts.push(prompt);
+      },
+      registerResource: (resource: any) => {
+        if (!perms.resources?.add) {
+          console.error(`[Plugin: ${pname}] blocked registerResource("${resource?.name}"): permissions.resources.add not declared`);
+          return;
+        }
+        plugin.resources = plugin.resources || [];
+        const idx = plugin.resources.findIndex((r: any) => r.name === resource.name);
+        if (idx >= 0) plugin.resources[idx] = resource;
+        else plugin.resources.push(resource);
+      },
       registerTool: (tool: any) => {
         if (!perms.tools?.add) {
           console.error(`[Plugin: ${pname}] blocked registerTool("${tool?.name}"): permissions.tools.add not declared`);
@@ -392,12 +415,16 @@ function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
     if (
       plugin &&
       (Array.isArray(plugin.tools) ||
+        Array.isArray(plugin.prompts) ||
+        Array.isArray(plugin.resources) ||
         Array.isArray(plugin.overrides) ||
         Array.isArray(plugin.removeTools) ||
         typeof plugin.onBeforeAction === "function" ||
         typeof plugin.onAfterAction === "function" ||
         typeof plugin.onDOMMutation === "function" ||
         Boolean(normalizedPerms?.tools) ||
+        Boolean(normalizedPerms?.prompts) ||
+        Boolean(normalizedPerms?.resources) ||
         typeof plugin.onLoad === "function")
     ) {
       plugin.name = plugin.name || manifest.name || pkg.name || basename(pkgDir);
@@ -407,6 +434,8 @@ function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
       plugin.permissions = normalizedPerms;
       plugin.manifest.permissions = normalizedPerms;
       plugin.tools = Array.isArray(plugin.tools) ? plugin.tools : [];
+      plugin.prompts = Array.isArray(plugin.prompts) ? plugin.prompts : [];
+      plugin.resources = Array.isArray(plugin.resources) ? plugin.resources : [];
       plugin.overrides = Array.isArray(plugin.overrides) ? plugin.overrides : [];
 
       plugin.removeTools = Array.isArray(plugin.removeTools)
