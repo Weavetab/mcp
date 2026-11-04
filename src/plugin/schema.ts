@@ -60,7 +60,7 @@ export function toPluginInputShape(schema: any): Record<string, any> {
   return {};
 }
 
-// MCP prompt arguments travel as strings, so JSON Schema types are coerced to z.string()
+// MCP prompt arguments travel as strings, so JSON Schema and descriptor maps are coerced to z.string()
 export function toPromptShape(schema: any): Record<string, any> {
   if (!schema || typeof schema !== "object") return {};
   if (schema.properties && typeof schema.properties === "object" && !schema._def) {
@@ -70,6 +70,21 @@ export function toPromptShape(schema: any): Record<string, any> {
       let field: any = z.string();
       if (typeof prop?.description === "string") field = field.describe(prop.description);
       shape[key] = required.includes(key) ? field : field.optional();
+    }
+    return shape;
+  }
+  const vals = Object.values(schema);
+  if (
+    vals.length &&
+    vals.every(
+      (v: any) => v && typeof v === "object" && !v._def && !v._zod && typeof v.parse !== "function"
+    )
+  ) {
+    const shape: Record<string, any> = {};
+    for (const [key, prop] of Object.entries<any>(schema)) {
+      let field: any = z.string();
+      if (typeof prop?.description === "string") field = field.describe(prop.description);
+      shape[key] = prop?.required ? field : field.optional();
     }
     return shape;
   }
