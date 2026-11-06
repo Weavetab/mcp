@@ -1,11 +1,11 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "author": {
-    "name": "fy2ne",
-    "email": "hello@fy2ne.me",
-    "url": "https://fy2ne.me"
+    "name": "Weavetab",
+    "email": "hello@weavetab.dev",
+    "url": "https://weavetab.dev"
   },
   "license": "AGPL-3.0-only",
   "homepage": "https://github.com/Weavetab/mcp",
@@ -79,7 +79,7 @@
     "start": "node dist/index.js",
     "prepublishOnly": "npm run verify && npm run build",
     "test": "npm run test:unit",
-    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/site_memory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/plugin_lifecycle.test.ts\" \"tests/unit/plugin_interceptors.test.ts\" \"tests/unit/electron.test.ts\" \"tests/unit/stale_ref_recovery.test.ts\" \"tests/unit/secret_containment.test.ts\" \"tests/unit/checkpoint.test.ts\" \"tests/unit/marks.test.ts\" \"tests/unit/highlight.test.ts\"",
+    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/site_memory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/plugin_lifecycle.test.ts\" \"tests/unit/plugin_interceptors.test.ts\" \"tests/unit/plugin_hotswap.test.ts\" \"tests/unit/electron.test.ts\" \"tests/unit/stale_ref_recovery.test.ts\" \"tests/unit/secret_containment.test.ts\" \"tests/unit/checkpoint.test.ts\" \"tests/unit/marks.test.ts\" \"tests/unit/highlight.test.ts\" \"tests/unit/tools_resilience.test.ts\"",
     "test:e2e": "tsx tests/e2e/smoke_test.ts"
   },
   "dependencies": {

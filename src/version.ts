@@ -1,1 +1,1 @@
-export const WEAVETAB_VERSION = "2.6.1";
+export const WEAVETAB_VERSION = "2.6.2";

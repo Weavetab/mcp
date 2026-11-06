@@ -19,6 +19,12 @@ This document is the universal specification for AI agents (Cursor, Antigravity,
    * **Blind Injection**: Never leak credentials into LLM context. `browser_type_secret` must sanitize inputs to `[REDACTED]`.
    * Enforce domain policy checks (top-level `policies` array in `~/.weavetab/config.json`) and RBAC permissions (`admin`, `operator`, `viewer`, `automation`, `system`).
 
+4. **Plugin Surface Taxonomy (Tools, Commands, Utilities & `AGENTS.md`)**:
+   * **MCP Tools (`tools`)**: Registered via `defineTool()` / `ctx.mcp.registerTool()`, gated by `permissions.tools.add`.
+   * **CLI Commands (`commands`)**: Registered via `defineCommand()` / `ctx.cli.registerCommand()`, gated by `permissions.commands.add`. Executed from the terminal via `weavetab plugin use <pkg_or_alias> <command_or_tool_name> [--flags]` (or `weavetab use <pkg> <cmd>`).
+   * **Utilities (`prompts` & `resources`)**: `/` **Prompts** (`definePrompt()`, gated by `permissions.prompts.add`) and `@` **Resources** (`defineResource()`, gated by `permissions.resources.add`) are grouped under **Utilities** on `/discover`.
+   * **Bounded `AGENTS.md` Playbook**: Every plugin ships an `AGENTS.md` file at its package root (`<= 80` lines, `<= 3200` chars, enforced by `@weavetab/sdk` build/validate/preflight/publish). Connected AI agents can inspect installed plugins via the `weavetab://plugins` and `weavetab://plugins/<slug>/agents` MCP resources or `weavetab plugin agents [pkg]`.
+
 ---
 
 ## Build & Test Commands

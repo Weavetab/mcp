@@ -13,6 +13,7 @@ import { buildActionMap } from "../cdp/walker.js";
 export interface InspectOptions {
   nodeId?: number;
   selector?: string;
+  query?: string;
   ref?: string;
 }
 
@@ -21,7 +22,8 @@ export async function browserInspect(
   options: InspectOptions,
   _config: Config
 ): Promise<{ success: boolean; data: any; message: string }> {
-  let { nodeId, selector, ref } = options;
+  let { nodeId, selector, ref, query } = options;
+  if (!selector && query) selector = query;
 
   if (!nodeId && !selector && !ref) {
     throw new Error("browser_inspect requires nodeId, selector, or ref");
@@ -62,6 +64,7 @@ export async function browserInspect(
     }
   }
 
+  let elementObjectId: string | null = null;
   if (!resolvedNodeId && selector) {
     const res = await session.Runtime.evaluate({
       expression: `(function(sel) {
@@ -75,17 +78,49 @@ export async function browserInspect(
       })(${JSON.stringify(selector)})`,
     });
     if (res.result?.objectId) {
+      elementObjectId = res.result.objectId;
       const nodeRes = await DOM.requestNode({ objectId: res.result.objectId }).catch(() => null);
       if (nodeRes?.nodeId) resolvedNodeId = nodeRes.nodeId;
     }
   }
 
-  if (!resolvedNodeId) {
+  if (!resolvedNodeId && !elementObjectId) {
+    if (selector) throw new Error(`Element not found for selector: "${selector}"`);
+    if (ref) throw new Error(`Element not found for ref: "${ref}"`);
     throw new Error("Could not resolve element to a node ID");
   }
 
   // Step 2: Fetch box model, computed styles, and event listeners in parallel
-  const boxModel = await DOM.getBoxModel({ nodeId: resolvedNodeId }).catch(() => null);
+  let boxModelData: any = null;
+  if (resolvedNodeId) {
+    const boxModel = await DOM.getBoxModel({ nodeId: resolvedNodeId }).catch(() => null);
+    if (boxModel?.model) {
+      boxModelData = {
+        width: boxModel.model.width,
+        height: boxModel.model.height,
+        content: boxModel.model.content,
+      };
+    }
+  }
+
+  if (!boxModelData && selector) {
+    const { result: rectRes } = await session.Runtime.evaluate({
+      expression: `(function(sel) {
+        var el = document.querySelector(sel);
+        if (!el) return null;
+        var r = el.getBoundingClientRect();
+        return JSON.stringify({
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+          content: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.top), Math.round(r.right), Math.round(r.bottom), Math.round(r.left), Math.round(r.bottom)]
+        });
+      })(${JSON.stringify(selector)})`,
+      returnByValue: true,
+    }).catch(() => ({ result: { value: null } }));
+    if (rectRes?.value) {
+      try { boxModelData = JSON.parse(rectRes.value); } catch {}
+    }
+  }
 
   function reconstructShorthand(prefix: 'margin' | 'padding', styles: Record<string, string>): string | undefined {
     const t = styles[`${prefix}-top`];
@@ -100,7 +135,7 @@ export async function browserInspect(
 
   // Try CSS.getComputedStyleForNode first (CDP-native), fall back to Runtime.evaluate
   let computedStylesData: Record<string, string> | null = null;
-  const cssResult = await CSS.getComputedStyleForNode({ nodeId: resolvedNodeId }).catch(() => null);
+  const cssResult = resolvedNodeId ? await CSS.getComputedStyleForNode({ nodeId: resolvedNodeId }).catch(() => null) : null;
   if (cssResult?.computedStyle) {
     const INTERESTING = [
       'display','position','width','height','color','background-color','font-size','visibility','opacity','z-index','pointer-events',
@@ -150,9 +185,9 @@ export async function browserInspect(
 
   let listeners: any[] = [];
   try {
-    const resolved = await DOM.resolveNode({ nodeId: resolvedNodeId });
-    if (resolved.object?.objectId) {
-      const evtRes = await DOMDebugger.getEventListeners({ objectId: resolved.object.objectId, depth: 1, pierce: true }).catch(() => null);
+    const targetObjId = elementObjectId || (resolvedNodeId ? (await DOM.resolveNode({ nodeId: resolvedNodeId })).object?.objectId : null);
+    if (targetObjId) {
+      const evtRes = await DOMDebugger.getEventListeners({ objectId: targetObjId, depth: 1, pierce: true }).catch(() => null);
       if (evtRes?.listeners) {
         listeners = evtRes.listeners.map(l => ({ type: l.type, useCapture: l.useCapture, passive: l.passive }));
       }
@@ -162,11 +197,7 @@ export async function browserInspect(
   }
 
   const data = {
-    boxModel: boxModel?.model ? {
-      width: boxModel.model.width,
-      height: boxModel.model.height,
-      content: boxModel.model.content,
-    } : null,
+    boxModel: boxModelData,
     computedStyles: computedStylesData,
     eventListeners: listeners
   };

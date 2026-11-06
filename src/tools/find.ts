@@ -55,6 +55,7 @@ export async function browserFind(
       var matchedNodes = [];
       var seenElements = new Set();
 
+      var ignoredTags = new Set(['style', 'script', 'noscript', 'template']);
       while (walker.nextNode()) {
         var node = walker.currentNode;
         if (node.nodeType === Node.TEXT_NODE) {
@@ -62,6 +63,9 @@ export async function browserFind(
           if (t && t.includes(qLow)) {
             var p = node.parentElement;
             if (p && !seenElements.has(p)) {
+              var pTag = p.tagName ? p.tagName.toLowerCase() : '';
+              if (ignoredTags.has(pTag)) continue;
+              if (p.closest && p.closest('#wt-shadow-host, [data-wt-ignore], weavetab-host')) continue;
               seenElements.add(p);
               matchedNodes.push(p);
               if (!returnAll && matchedNodes.length >= 1) break;
@@ -71,6 +75,9 @@ export async function browserFind(
         } else if (node.nodeType === Node.ELEMENT_NODE) {
           var el = node;
           if (seenElements.has(el)) continue;
+          var elTag = el.tagName ? el.tagName.toLowerCase() : '';
+          if (ignoredTags.has(elTag)) continue;
+          if (el.closest && el.closest('#wt-shadow-host, [data-wt-ignore], weavetab-host')) continue;
           var aria = norm(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '');
           if (aria && aria.includes(qLow)) {
             seenElements.add(el);

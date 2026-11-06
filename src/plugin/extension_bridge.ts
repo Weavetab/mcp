@@ -9,6 +9,7 @@ export interface IPluginExtensionBridge {
   showThought(session: CDP.Client, text: string, options?: { durationMs?: number }): Promise<void>;
   clearThought(session: CDP.Client): Promise<void>;
   injectStyles(session: CDP.Client, css: string): Promise<void>;
+  injectCss(session: CDP.Client, css: string): Promise<void>;
   injectScript<T = any>(session: CDP.Client, js: string): Promise<T>;
   hideOverlay(session: CDP.Client): Promise<void>;
   restoreOverlay(session: CDP.Client): Promise<void>;
@@ -128,6 +129,10 @@ export class PluginExtensionBridge implements IPluginExtensionBridge {
         returnByValue: false,
       });
     } catch { /* ignore */ }
+  }
+
+  public async injectCss(session: CDP.Client, css: string): Promise<void> {
+    return this.injectStyles(session, css);
   }
 
   public async injectStyles(session: CDP.Client, css: string): Promise<void> {

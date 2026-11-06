@@ -187,6 +187,11 @@ async function main(): Promise<void> {
       await runPluginCli(args.slice(1));
       process.exit(0);
     }
+    if (cmd === "use") {
+      const { runPluginCli } = await import("./cli/plugin.js");
+      await runPluginCli(["use", ...args.slice(1)]);
+      process.exit(0);
+    }
     if (cmd === "skills") {
       const { spawnSync } = await import("node:child_process");
       const npxBin = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -1281,13 +1286,15 @@ async function main(): Promise<void> {
     console.log(`  ${pc.dim("Via CLI:")}               ${pc.cyan("weavetab skills [options]")}`);
     console.log();
 
-    console.log(pc.bold("PLUGIN COMMANDS (User)"));
+    console.log(pc.bold("PLUGIN COMMANDS (User & AI Agent)"));
+    console.log(`  ${pc.cyan("weavetab plugin use <pkg> <cmd>")}   Run a plugin CLI command or MCP tool (e.g. weavetab plugin use github repo-summary)`);
+    console.log(`  ${pc.cyan("weavetab plugin agents [pkg]")}      Print the context-safe AGENTS.md playbook for a plugin`);
     console.log(`  ${pc.cyan("weavetab plugin add <pkg>")}         Install a plugin from npm (or a local path: ./my-plugin)`);
     console.log(`  ${pc.cyan("weavetab plugin browse")}            Interactive terminal explorer to browse & 1-click install`);
     console.log(`  ${pc.cyan("weavetab plugin search <query>")}    Search plugins across registry & npm`);
-    console.log(`  ${pc.cyan("weavetab plugin list")}              List all installed Weavetab plugins and tools`);
+    console.log(`  ${pc.cyan("weavetab plugin list")}              List all installed Weavetab plugins, CLI commands, tools, and utilities`);
     console.log(`  ${pc.cyan("weavetab plugin remove <pkg>")}      Uninstall a plugin`);
-    console.log(`  ${pc.cyan("weavetab plugin verify <pkg>")}      Check trust tier against Weavetab registry`);
+    console.log(`  ${pc.cyan("weavetab plugin verify <pkg>")}      Check trust tier and AGENTS.md compliance`);
     console.log();
 
     console.log(pc.bold("PLUGIN DEVELOPER SDK (@weavetab/sdk)"));

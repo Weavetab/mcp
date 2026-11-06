@@ -5,7 +5,7 @@
 <p>The open automation engine for AI agents.<br />Control live browsers and desktop apps locally with instant execution.</p>
 
 <p>
-  <a href="https://github.com/weavetab/mcp/releases"><img src="https://img.shields.io/github/v/release/weavetab/mcp?label=version&style=flat-square&color=3b82f6" alt="version" /></a>
+  <a href="https://github.com/Weavetab/mcp/releases"><img src="https://img.shields.io/github/v/release/weavetab/mcp?label=version&style=flat-square&color=3b82f6" alt="version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6?style=flat-square" alt="license" /></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square" alt="Node" />
@@ -29,7 +29,7 @@ Weavetab is the open automation engine for AI agents. It connects models directl
 
 Actions execute directly over local CDP sockets without external driver overhead. Web pages are translated into agent-readable semantic maps with turn-by-turn diffing that reduces token usage by **up to 95%**. Built-in security enforces local domain policies, role-based access control, and client-side credential injection.
 
-Built and architected by [fy2ne](https://github.com/fy2ne).
+Built by [Weavetab](https://weavetab.dev), architected by [fy2ne](https://github.com/fy2ne).
 
 ---
 
@@ -216,7 +216,7 @@ Weavetab auto-attaches via CDP to the registered process. No code changes requir
 - **Loop Breaker**: Strike-based stuck-loop detector halts runaway autonomous sequences
 - **Audit Log**: All tool invocations, policy decisions, and errors written to `~/.weavetab-system/logs/mission_<timestamp>.log`
 
-Security vulnerabilities: `security@fy2ne.me` (do not use public issues).
+Security vulnerabilities: `security@weavetab.dev` (do not use public issues).
 
 ---
 
@@ -267,4 +267,6 @@ See [`docs/PLUGINS.md`](docs/PLUGINS.md) for architecture, manifest spec, and SD
 
 AGPL-3.0-only. Client connections over stdio or WebSocket do not extend copyleft obligations to your client application or models.
 
-[Sponsor development](https://github.com/sponsors/fy2ne) &nbsp;&middot;&nbsp; [Discussions](https://github.com/weavetab/mcp/discussions) &nbsp;&middot;&nbsp; [SUPPORT.md](SUPPORT.md)
+For commercial embedding, closed-source SaaS, or proprietary enterprise licensing, see [COMMERCIAL.md](../COMMERCIAL.md) or contact license@weavetab.dev.
+
+[Sponsor development](https://github.com/sponsors/fy2ne) &nbsp;&middot;&nbsp; [Discussions](https://github.com/Weavetab/mcp/discussions) &nbsp;&middot;&nbsp; [SUPPORT.md](SUPPORT.md)

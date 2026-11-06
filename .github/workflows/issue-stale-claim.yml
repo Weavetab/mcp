@@ -1,0 +1,74 @@
+name: Stale Claim Sweeper
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Every midnight UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sweep-stale-claims:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sweep Inactive Claims
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'claimed'
+            });
+
+            for (const issue of issues) {
+              if (issue.pull_request) continue;
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number
+              });
+
+              // Find latest claim comment
+              const claimComment = [...comments].reverse().find(c =>
+                c.user && c.user.type === 'Bot' && c.body && c.body.includes('Issue Claimed')
+              );
+
+              if (!claimComment) continue;
+
+              const claimTime = new Date(claimComment.created_at).getTime();
+              if (now - claimTime >= sevenDaysMs) {
+                const assignees = (issue.assignees || []).map(a => a.login);
+                if (assignees.length > 0) {
+                  await github.rest.issues.removeAssignees({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    assignees
+                  });
+                }
+
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: 'claimed'
+                  });
+                } catch (e) {}
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `⏰ **Claim Expired**: This issue was claimed more than 7 days ago without an active linked PR. The claim has been released and the issue is once again open for anyone to \`/claim\`!`
+                });
+              }
+            }

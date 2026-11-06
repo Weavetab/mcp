@@ -66,7 +66,6 @@ export interface Config {
   actionabilityTimeoutMs: number; // Milliseconds, 50-15000 (default 300)
   maxTabs: number;              // 1-100 (default 10)
   maxActionsPerMinute: number;  // 1-600 (default 60)
-  githubCacheTtlMs: number;     // Milliseconds (default 1800000)
   refCacheTtlMs: number;        // Milliseconds (default 30000)
 
   // Output Directories

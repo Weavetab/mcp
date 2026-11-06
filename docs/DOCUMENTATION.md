@@ -1,6 +1,6 @@
 # Weavetab MCP Documentation
 
-> **Package:** `@weavetab/mcp` | **Version:** 2.6.1 | **License:** AGPLv3 | **Author:** fy2ne
+> **Package:** `@weavetab/mcp` | **Version:** 2.6.2 | **License:** AGPLv3 | **Author:** Weavetab (owned by fy2ne)
 
 ---
 
@@ -125,7 +125,7 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 
 | Tool | Description |
 |------|-------------|
-| `browser_wait` | Wait for element/text/URL/stable/network/auto — timeout configurable, optional loop counter reset (`reset_loop: true`) |
+| `browser_wait` | Wait for element/text/URL/stable/network/auto — timeout configurable, optional loop counter reset (`force: true`) |
 | `browser_captcha` | Autonomous zero-API detection and solving for Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha via CDP mouse physics |
 
 ### Storage & Cookies (2 tools)
@@ -133,7 +133,7 @@ All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting
 | Tool | Description |
 |------|-------------|
 | `browser_storage` | localStorage & sessionStorage get/set/clear |
-| `browser_cookies` | Cookies get/set/delete |
+| `browser_cookies` | Cookies get/list/set/delete |
 
 ### Device & Environment (2 tools)
 

@@ -1,6 +1,6 @@
 # Weavetab Architecture
 
-> **Version:** 2.6.0 | **Last Updated:** October 2026
+> **Version:** 2.6.2 | **Last Updated:** October 2026
 
 ---
 
@@ -129,7 +129,7 @@ Loop Detection Algorithm
 - Navigation events
 - Tab switches
 - Burst mode start
-- Manual override via `browser_map({ force: true })` or `browser_wait({ reset_loop: true })`
+- Manual override via `browser_map({ force: true })` or `browser_map({ force: true })`
 
 ### Knowledge Hints
 

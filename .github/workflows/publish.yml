@@ -3,6 +3,9 @@ name: Publish
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -50,7 +53,7 @@ jobs:
       - run: npm run verify
       - run: npm test
       - name: Guard - release tag matches package.json version
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           pkg="$(node -p "require('./package.json').version")"
@@ -108,7 +111,7 @@ jobs:
 
   docker:
     needs: publish
-    if: github.event_name == 'release' && github.event.inputs.dry_run != 'true'
+    if: (github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')) && github.event.inputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

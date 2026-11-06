@@ -1,6 +1,6 @@
 # Weavetab MCP Troubleshooting Guide
 
-> **Version:** 2.6.0 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.6.2 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 This guide covers common issues and their solutions when working with Weavetab's MCP tools.
 
@@ -41,9 +41,9 @@ browser_map({ force: true })
 
 **Symptom:** The tool fills the form perfectly, but the MCP tool response says the fields failed to apply.
 
-**Cause:** (Fixed in v2.6.0+) Previously, verification was backwards. If you see this in older versions, upgrade to the latest version.
+**Cause:** (Fixed in v2.6.2+) Previously, verification was backwards. If you see this in older versions, upgrade to the latest version.
 
-**Solution:** None needed on v2.6.0+. The verification logic correctly compares pre-mutation and post-mutation state.
+**Solution:** None needed on v2.6.2+. The verification logic correctly compares pre-mutation and post-mutation state.
 
 ---
 
@@ -53,7 +53,7 @@ browser_map({ force: true })
 
 **Cause:** The auto-clear logic relies on keyboard shortcuts (Ctrl+A, Delete) which can fail if the element loses focus during the split-second execution.
 
-**Solution:** (Fixed in v2.6.0+) Auto-clear now uses atomic JavaScript evaluation to clear fields securely before typing. For older versions, use `clearFirst: true` parameter.
+**Solution:** (Fixed in v2.6.2+) Auto-clear now uses atomic JavaScript evaluation to clear fields securely before typing. For older versions, use `clearFirst: true` parameter.
 
 **Example:**
 ```typescript
@@ -80,7 +80,7 @@ browser_type({ id: "w:1", text: "NEW VALUE", clearFirst: true })
 
 **Solutions:**
 - **Best Practice:** Always use `ref` IDs (`w:42`) from `browser_map` rather than text labels
-- **Fixed in v2.6.0+:** Label clicks now use an LRU cache, and post-navigation DOM mapping is deferred
+- **Fixed in v2.6.2+:** Label clicks now use an LRU cache, and post-navigation DOM mapping is deferred
 
 **Example:**
 ```typescript
@@ -108,7 +108,7 @@ browser_click({ id: "w:42" })
 
 **Cause:** The warning previously relied on strict text matching.
 
-**Solution:** `stuck_warning` now respects the underlying `delta` computation. If the DOM changed, the warning will not fire. If you still see false positives, use `browser_map({ force: true })` or `browser_wait({ reset_loop: true })` to manually reset.
+**Solution:** `stuck_warning` now respects the underlying `delta` computation. If the DOM changed, the warning will not fire. If you still see false positives, use `browser_map({ force: true })` or `browser_map({ force: true })` to manually reset.
 
 ---
 

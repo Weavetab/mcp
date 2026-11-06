@@ -1,13 +1,13 @@
 {
   "name": "@weavetab/mcp",
   "mcpName": "dev.weavetab/mcp",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "icon": "icon.png",
-  "author": "fy2ne",
+  "author": "weavetab",
   "license": "AGPL-3.0-only",
-  "homepage": "https://github.com/weavetab/mcp",
-  "repository": "https://github.com/weavetab/mcp",
+  "homepage": "https://github.com/Weavetab/mcp",
+  "repository": "https://github.com/Weavetab/mcp",
   "keywords": [
     "weavetab",
     "mcp",
@@ -292,9 +292,9 @@
       },
       "browser_cookies": {
         "category": "storage_and_cookies",
-        "description": "Manage browser cookies. Full CRUD management for HTTP and document cookies via CDP Network domain.",
+        "description": "Manage browser cookies. Full CRUD management for HTTP and document cookies via CDP Network domain ('get'/'list', 'set', 'delete').",
         "features": [
-          "Cookie property retrieval, setting, and deletion",
+          "Cookie property retrieval (get or list), setting, and deletion",
           "Domain and path attribute scoping"
         ]
       },
@@ -319,19 +319,20 @@
       },
       "browser_snapshot": {
         "category": "vision",
-        "description": "Capture or restore an MHTML snapshot (DOM + inline assets). Facilitates offline state serialization, replay verification, and compliance auditing.",
+        "description": "Capture or restore an MHTML snapshot (DOM + inline assets). Facilitates offline state serialization, replay verification, and compliance auditing. Omission of filePath auto-generates timestamped snapshot.",
         "features": [
           "Full DOM and asset stream serialization",
           "Atomic capture and restore operations",
+          "Automatic timestamped snapshot file persistence",
           "Offline state audit capability"
         ]
       },
       "browser_screenshot": {
         "category": "vision",
-        "description": "95-135ms capture latency via CDP Page.captureScreenshot. Supports PNG and JPEG formats, full-page rendering, and clip region bounding boxes.",
+        "description": "95-135ms capture latency via CDP Page.captureScreenshot. Supports PNG, JPEG, and Base64 format aliases, full-page rendering, and clip region bounding boxes.",
         "features": [
           "Full-page and viewport bounding box capture",
-          "PNG and JPEG format encoding",
+          "PNG, JPEG, and Base64 format encoding",
           "Custom clip region bounding box support",
           "In-memory Base64 data URL output (zero disk I/O)"
         ]
@@ -362,7 +363,7 @@
           "Computed CSS style property inspection",
           "Event listener type registration enumeration",
           "Box model geometry verification",
-          "Targeting via ref ID, selector, or nodeId"
+          "Targeting via ref ID, selector, query alias, or nodeId"
         ]
       },
       "browser_extract_design": {
@@ -388,10 +389,10 @@
       },
       "browser_recording": {
         "category": "output",
-        "description": "Record video screencasts of browser sessions. Automatically compiles captured frames into animated video files (.webp, .gif, .webm, .mp4) using native Node processing or system ffmpeg.",
+        "description": "Record video screencasts of browser sessions. Automatically compiles captured frames into animated video files (.webp, .gif, .webm, .mp4) using native Node processing or system ffmpeg. Supports 'status' inspection.",
         "features": [
           "Native WebP/GIF animation compilation in pure Node",
-          "Configurable FPS and frame limits",
+          "Configurable FPS, frame limits, and live status inspection",
           "FFmpeg fallback for WebM/MP4 encoding",
           "Automated raw frame cleanup"
         ]

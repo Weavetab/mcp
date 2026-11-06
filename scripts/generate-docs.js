@@ -21,7 +21,7 @@ const tools = mcp.capabilities?.tools || {};
 const toolEntries = Object.entries(tools);
 
 let markdown = `# Weavetab MCP Tool Reference\n\n`;
-markdown += `> **Version:** ${mcp.version || '2.6.0'} | **Total Tools:** ${toolEntries.length} | **Architecture:** Direct CDP WebSocket\n\n`;
+markdown += `> **Version:** ${mcp.version || '2.6.2'} | **Total Tools:** ${toolEntries.length} | **Architecture:** Direct CDP WebSocket\n\n`;
 markdown += `Weavetab provides ${toolEntries.length} production-grade MCP tools organized into functional categories.\n\n`;
 markdown += `| Tool Name | Category | Description | Key Features |\n`;
 markdown += `| :--- | :--- | :--- | :--- |\n`;

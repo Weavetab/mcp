@@ -41,6 +41,16 @@ export interface WeavetabManifestTool {
   parameters?: Record<string, any>;
 }
 
+export interface WeavetabManifestCommand {
+  name: string;
+  description: string;
+  usage?: string;
+  parameters?: Record<string, any>;
+  schema?: Record<string, any>;
+  examples?: string[];
+  requiresSession?: boolean;
+}
+
 export interface WeavetabManifestPrompt {
   name: string;
   description?: string;
@@ -56,12 +66,17 @@ export interface WeavetabManifestResource {
 }
 
 export interface WeavetabPermissions {
-  /** `/` commands (MCP prompts) */
+  /** CLI commands (`weavetab plugin use <plugin> <cmd>`) */
+  commands?: {
+    add?: boolean;
+    reason?: string;
+  };
+  /** `/` prompt utilities (MCP prompts) */
   prompts?: {
     add?: boolean;
     reason?: string;
   };
-  /** `@` mentions (MCP resources) */
+  /** `@` resource utilities (MCP resources) */
   resources?: {
     add?: boolean;
     reason?: string;
@@ -152,12 +167,18 @@ export interface WeavetabManifest {
   $schema?: string;
   /** Human-readable display name */
   name: string;
+  /** Optional display title */
+  displayName?: string;
   /** Semantic version string */
   version: string;
   /** Short summary of what this plugin provides */
   description?: string;
   /** Entry point file relative to the plugin root (e.g., 'dist/index.js') */
   entry?: string;
+  /** System instructions injected directly into AI agent MCP context (max 3200 characters) */
+  instructions?: string;
+  /** @deprecated use `instructions` declared directly in weavetab.json */
+  agentsMd?: string;
   /** Single author or multiple authors with roles */
   author?: string | WeavetabManifestAuthor | (string | WeavetabManifestAuthor)[];
   /** Array of authors */
@@ -178,9 +199,11 @@ export interface WeavetabManifest {
   environments?: string[];
   /** Tools exposed by this plugin to the MCP server */
   tools?: WeavetabManifestTool[];
-  /** `/` commands this plugin registers (shown on the marketplace page) */
+  /** CLI commands exposed by this plugin (`weavetab plugin use <plugin> <cmd>`) */
+  commands?: WeavetabManifestCommand[];
+  /** `/` prompt utilities this plugin registers */
   prompts?: WeavetabManifestPrompt[];
-  /** `@` mentions this plugin registers (shown on the marketplace page) */
+  /** `@` resource utilities this plugin registers */
   resources?: WeavetabManifestResource[];
   /** Default configuration template */
   defaultConfig?: Record<string, any>;
@@ -200,6 +223,31 @@ export interface WeavetabPluginTool<TArgs = any> {
   /** See {@link WeavetabToolDefinition.requiresSession}. Defaults to `true`. */
   requiresSession?: boolean;
   handler: (args: TArgs, session?: any, config?: any) => Promise<any>;
+}
+
+export interface PluginCommandContext {
+  args: string[];
+  flags: Record<string, any>;
+  tab?: any;
+  desktop?: any;
+  storage: IPluginStorage;
+  config: Record<string, any>;
+  logger: PluginContext["logger"];
+  session?: any;
+  getSession?: () => Promise<any>;
+  [key: string]: any;
+}
+
+export interface WeavetabPluginCommand<TArgs = any> {
+  name: string;
+  description: string;
+  usage?: string;
+  schema?: Record<string, any> | Record<string, z.ZodType<any>>;
+  parameters?: Record<string, any>;
+  examples?: string[];
+  /** When true, establishes a browser/CDP session before running the command. Defaults to false. */
+  requiresSession?: boolean;
+  handler: (args: TArgs, ctx: PluginCommandContext) => Promise<any> | any;
 }
 
 export interface DOMMutationDelta {
@@ -309,12 +357,19 @@ export interface WeavetabPluginResource {
   read: (uri: string, vars: Record<string, string | string[]>, ctx: PluginSurfaceContext) => Promise<ResourceReturn> | ResourceReturn;
 }
 
+export interface PluginCliContext {
+  registerCommand: (command: WeavetabPluginCommand) => void;
+  unregisterCommand?: (name: string) => void;
+}
+
 export interface PluginMcpContext {
   registerPrompt: (prompt: WeavetabPluginPrompt) => void;
   registerResource: (resource: WeavetabPluginResource) => void;
+  registerCommand?: (command: WeavetabPluginCommand) => void;
   unregisterPrompt?: (name: string) => void;
   /** by fixed uri, or by name for templates */
   unregisterResource?: (uriOrName: string) => void;
+  unregisterCommand?: (name: string) => void;
   registerTool: (tool: WeavetabPluginTool | any) => void;
   overrideTool?: (toolName: string, overrideHandler: any) => void;
   removeTool?: (toolName: string) => void;
@@ -340,6 +395,7 @@ export interface PluginContext {
   desktop?: any;
   extension: IPluginExtensionBridge;
   mcp: PluginMcpContext;
+  cli: PluginCliContext;
   hooks: PluginHooksContext;
   memory?: PluginMemoryContext;
   logger: {
@@ -356,8 +412,13 @@ export interface WeavetabPluginDefinition {
   version?: string;
   description?: string;
   tools?: WeavetabPluginTool[];
+  commands?: WeavetabPluginCommand[];
   prompts?: WeavetabPluginPrompt[];
   resources?: WeavetabPluginResource[];
+  /** System instructions injected directly into AI agent MCP context */
+  instructions?: string;
+  /** @deprecated use `instructions` */
+  agentsMd?: string;
   overrides?: WeavetabToolOverride[];
   removeTools?: string[];
   defaultConfig?: Record<string, any>;
@@ -376,10 +437,16 @@ export interface WeavetabPlugin {
   permissions?: WeavetabPermissions;
   /** Add new tools */
   tools?: WeavetabToolDefinition[] | WeavetabPluginTool[];
-  /** Add `/` commands */
+  /** Add CLI commands (`weavetab plugin use <plugin> <cmd>`) */
+  commands?: WeavetabPluginCommand[];
+  /** Add `/` prompt utilities */
   prompts?: WeavetabPluginPrompt[];
-  /** Add `@` mentions */
+  /** Add `@` resource utilities */
   resources?: WeavetabPluginResource[];
+  /** System instructions injected into AI agent context (from weavetab.json or legacy AGENTS.md) */
+  instructions?: string;
+  /** Loaded AGENTS.md playbook content (strictly bounded) */
+  agentsMdContent?: string;
   /** Override or wrap existing tools */
   overrides?: WeavetabToolOverride[];
   /** Built-in tools to remove or disable */

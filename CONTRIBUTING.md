@@ -1,6 +1,6 @@
 # Contributing to Weavetab MCP
 
-> **Version:** 2.6.0 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.6.2 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 Thank you for your interest in contributing to Weavetab, the production-grade MCP server for AI-driven browser automation.
 
@@ -10,7 +10,8 @@ Thank you for your interest in contributing to Weavetab, the production-grade MC
 
 - [Reporting Bugs](#reporting-bugs)
 - [Suggesting Enhancements](#suggesting-enhancements)
-- [Pull Request Process](#pull-request-process)
+- [Claiming Issues (`/claim`)](#claiming-issues-claim)
+- [Pull Request Process & Sizing Gate](#pull-request-process--sizing-gate)
 - [Local Development](#local-development)
 - [Adding New Tools](#adding-new-tools)
 - [Coding Standards](#coding-standards)
@@ -51,7 +52,7 @@ If applicable, add screenshots to help explain your problem.
 **Environment:**
  - OS: [e.g. Windows 11, macOS 14, Ubuntu 22.04]
  - Node Version: [e.g. 18.17.0]
- - Weavetab Version: [e.g. 2.6.0]
+ - Weavetab Version: [e.g. 2.6.2]
  - Browser: [e.g. Chrome 126, Edge 126]
 
 **Additional Context**
@@ -87,16 +88,41 @@ Add any other context or screenshots about the feature request here.
 
 ---
 
-## Pull Request Process
+## Claiming Issues (`/claim`)
 
-1. Fork the repository and create your branch from `main`
-2. Ensure tests pass: `npm run build` and any applicable test suites
-3. Update documentation for any API changes
-4. Verify code linting: `npm run build` (includes TypeScript compilation)
-5. Submit the pull request with a clear description of changes
+We prevent duplicate efforts and collisions by letting contributors claim open issues before coding:
 
-### Commit Style
+1. **Claiming**: Comment `/claim` on any open, unassigned issue.
+   - The bot immediately assigns the issue to you and attaches the `claimed` label.
+   - You receive an exclusive **7-day claim window** to implement the solution and open a pull request.
+2. **Releasing**: If you decide not to proceed or get busy, comment `/unclaim` to release the issue back to the community.
+3. **Stale Claims**: Claims without active linked pull requests automatically expire after **7 days** (swept nightly by GitHub Actions) so issues do not remain locked indefinitely.
 
+---
+
+## Pull Request Process & Sizing Gate
+
+1. Fork the repository and create your branch from `main`.
+2. Ensure tests and verification pass: `npm run verify` (runs `tsc`, `lint`, and the unit test suite).
+3. Follow the strict sizing and disclosure requirements below.
+4. Submit your pull request using our standard `.github/PULL_REQUEST_TEMPLATE.md`.
+
+### 1. Hard Line-Budget Gate (+500 Lines)
+All pull requests are monitored by our **Pull Request Guard** GitHub Action:
+- **Maximum additions**: **+500 lines** of functional code (excluding lockfiles, compiled outputs in `dist/`, and images).
+- PRs exceeding +500 lines fail automated CI checks with the `size/blocked-over-500` label.
+- **Why?** Small, focused diffs drastically improve code quality, reduce review latency, and eliminate regressions.
+- **Splitting large changes**: If your feature requires more than 500 lines, split it logically:
+  - PR 1: Core types and schemas.
+  - PR 2: Internal engine implementation.
+  - PR 3: Public MCP tool wrapper and tests.
+
+### 2. Mandatory AI Agent / Assistant Disclosure
+We welcome high-velocity engineering using modern AI tools (Antigravity, Claude Code, Cursor, Windsurf, Copilot, etc.) as well as 100% human-authored contributions. However, **transparency is mandatory**:
+- In the PR template, select which AI tool or workflow was utilized.
+- Ensure your submission adheres to our Anti-AI slop standards: no hallucinated APIs, no redundant or obvious comments, no empty `// TODO` stubs, and all code verified locally.
+
+### 3. Commit Style
 We follow conventional commits: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`. Each commit should represent a single logical change.
 
 **Examples:**
@@ -105,34 +131,6 @@ We follow conventional commits: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
 - `docs: update README with new tool categories`
 - `refactor: optimize delta engine for large DOM trees`
 - `test: add integration tests for browser_burst macro steps`
-
-### PR Description Template
-
-```markdown
-## Description
-Brief description of changes made in this PR.
-
-## Type of Change
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-
-## Testing
-Describe the tests you ran to verify your changes:
-- [ ] Unit tests pass
-- [ ] Integration tests pass
-- [ ] Manual testing performed
-
-## Checklist
-- [ ] My code follows the style guidelines of this project
-- [ ] I have performed a self-review of my own code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation
-- [ ] My changes generate no new warnings
-- [ ] I have added tests that prove my fix is effective or that my feature works
-- [ ] New and existing unit tests pass locally with my changes
-```
 
 ---
 
@@ -493,8 +491,8 @@ WHAT: <description> | WHEN: <usage guidance> | CANNOT: <limitations> | EXAMPLE: 
 
 1. Update version in `package.json`
 2. Update CHANGELOG.md
-3. Create git tag: `git tag v2.6.0`
-4. Push tag: `git push origin v2.6.0`
+3. Create git tag: `git tag v2.6.2`
+4. Push tag: `git push origin v2.6.2`
 5. Publish to NPM: `npm publish`
 6. Create GitHub release
 

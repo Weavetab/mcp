@@ -21,7 +21,7 @@ npm install -D @weavetab/sdk@latest
 
 # Verify installation
 weavetab --version
-# → @weavetab/mcp 2.6.0
+# → @weavetab/mcp 2.6.2
 ```
 
 ## System Requirements

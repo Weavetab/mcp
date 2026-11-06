@@ -63,7 +63,7 @@ export interface CookieSetOptions {
 export async function browserCookies(
   session: CDP.Client,
   args: {
-    action: "get" | "set" | "delete";
+    action: "get" | "set" | "delete" | "list";
     name?: string;
     value?: string;
     domain?: string;
@@ -76,7 +76,8 @@ export async function browserCookies(
   },
   _config: Config
 ): Promise<CookiesResult> {
-  if (args.action === "get") {
+  const action = args.action === "list" ? "get" : args.action;
+  if (action === "get") {
     // Get current page URL for scoping
     const { frameTree } = await session.Page.getFrameTree();
     const pageUrl = args.url ?? frameTree.frame.url;
@@ -116,7 +117,7 @@ export async function browserCookies(
     };
   }
 
-  if (args.action === "set") {
+  if (action === "set") {
     if (!args.name) throw new Error("browser_cookies set: 'name' is required");
     if (args.value === undefined) throw new Error("browser_cookies set: 'value' is required");
 
@@ -152,7 +153,7 @@ export async function browserCookies(
     return { success: true, action: "set", name: args.name };
   }
 
-  if (args.action === "delete") {
+  if (action === "delete") {
     if (!args.name) throw new Error("browser_cookies delete: 'name' is required");
 
     // Resolve the URL to scope the cookie lookup

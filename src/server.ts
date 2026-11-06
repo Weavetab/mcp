@@ -60,11 +60,16 @@ import { getActiveEngine } from "./cdp/connector.js";
 import { resetLoopCounter } from "./intelligence/trail.js";
 import { getSiteProfile, learnPattern, recordPatternExecution, recordQuirk, getPatternReliability, formatSiteProfileHint } from "./intelligence/patternCompiler.js";
 
-import { discoverPlugins } from "./plugin/loader.js";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+
+import { discoverPlugins, getPluginCommands, buildPluginInstructions } from "./plugin/loader.js";
 import type { WeavetabPlugin } from "./plugin/interface.js";
 import { hookPipeline } from "./plugin/pipeline.js";
 import { toPluginInputShape } from "./plugin/schema.js";
 import { createSurface } from "./plugin/surface.js";
+import { PluginRuntime } from "./plugin/runtime.js";
 import { agentAction } from "./sensors/pacing.js";
 import { getCachedConfig, getElectronApps } from "./config/loader.js";
 import { agentState } from "./state/agent.js";
@@ -74,8 +79,7 @@ import { sessionRegistry } from "./state/session.js";
 // Office document tools
 import { browserOfficeParse, browserOfficeList } from "./tools/office/index.js";
 
-const activeLoadedPlugins = new Map<string, WeavetabPlugin>();
-let surfaceRef: ReturnType<typeof createSurface> | null = null;
+let pluginRuntimeRef: PluginRuntime | null = null;
 
 type ToolHandler<T> = (session: any, config: Config) => Promise<T>;
 
@@ -501,7 +505,12 @@ function wrapError(err: unknown): { content: [{ type: "text"; text: string }]; i
 }
 
 export async function startServer(config: Config, transportMode: "stdio" | "ws" = "stdio", wsPort = 3000): Promise<void> {
-  const server = new McpServer({ name: "Weavetab MCP", version: WEAVETAB_VERSION });
+  const startupPlugins = discoverPlugins();
+  const initialInstructions = buildPluginInstructions(startupPlugins);
+  const server = new McpServer(
+    { name: "Weavetab MCP", version: WEAVETAB_VERSION },
+    initialInstructions ? { instructions: initialInstructions } : undefined
+  );
 
   // Intercept server.tool to inject global plugin middleware hooks (onBeforeAction, onAfterAction)
   const rawTool = server.tool.bind(server);
@@ -586,23 +595,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
 
           // Structural block — map after no-change click/type is a pure wasted round-trip
           // Skip the skip guard if the user explicitly requests force or delta diff
-          if (!args.force && !args.delta) {
-            // Get current URL to pass to detectMapAfterNoChange
-            const { getCachedActionMap } = await import("./state/cache.js");
-            const cachedUrl = getCachedActionMap(targetId)?.url ?? "";
-            
-            const mapGuard = { shouldSkip: false, allowed: true, lastTool: '', lastRef: '' };
-            if (mapGuard.shouldSkip) {
-              return {
-                content: [{ type: "text" as const, text: JSON.stringify({
-                  skipped: true,
-                  reason: `DOM did not change after last ${mapGuard.lastTool} on [${mapGuard.lastRef}]. browser_map would return identical refs. Use existing ref IDs or call browser_map only after navigation, a new URL, or a confirmed dom_changed:true interaction.`,
-                  last_tool: mapGuard.lastTool,
-                  last_ref: mapGuard.lastRef,
-                }) }],
-              };
-            }
-          }
+          // Skip guard evaluated directly inside browserMap
 
           const result = await agentAction(targetSession, 'reading', () => browserMap(targetSession, args, targetId, liveConfig), 'browser_map');
 
@@ -1055,6 +1048,7 @@ server.tool(
       hover_chain: z.array(z.string()).optional().describe("Array of element ref IDs, selectors, or labels to hover sequentially and click the last one (e.g. ['File', 'Export As', 'PNG']). Perfect for Photoshop/Photopea, Figma, Canva, and multi-level flyout submenus."),
       chain: z.array(z.any()).optional().describe("Advanced chain step array of { action, ref, label, selector, x, y, holdMs }."),
       clickFinal: z.boolean().optional().describe("Default true. Whether to click the final element in the hover chain."),
+      click_final: z.boolean().optional().describe("Alias for clickFinal."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1067,6 +1061,7 @@ server.tool(
           if (args.end_id && !normalizedArgs.end_ref) normalizedArgs.end_ref = args.end_id;
           if (args.end_selector && !normalizedArgs.end_ref) normalizedArgs.end_ref = args.end_selector;
           if (args.end_target && !normalizedArgs.end_ref) normalizedArgs.end_ref = args.end_target;
+          if ((args as any).click_final !== undefined && normalizedArgs.clickFinal === undefined) normalizedArgs.clickFinal = (args as any).click_final;
           return await browserPointer(session, normalizedArgs as any, liveConfig);
         }, false, args.app);
       } catch (e) { return wrapError(e); }
@@ -1114,6 +1109,10 @@ server.tool(
       scan: z.boolean().optional().describe("Set true to discover and return all fillable inputs on the page (with ref IDs, types, and values) in ~30 tokens without full browser_map."),
       inputs: z.boolean().optional().describe("Alias for scan."),
       scan_only: z.boolean().optional().describe("Validate field types without mutating DOM."),
+      grid_data: z.array(z.object({
+        cell: z.string().describe("Spreadsheet cell address in A1 notation (e.g. 'A1', 'B2')."),
+        value: z.string().describe("Value to write into the cell."),
+      })).optional().describe("Grid-fill mode for Google Sheets and canvas-rendered spreadsheets."),
       blast_mode: z.boolean().optional().describe("Fill all fields simultaneously in a single CDP eval round-trip."),
       submit: z.string().optional().describe("Optional ref ID (w:NN) of a submit button to click after filling all fields."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
@@ -1171,7 +1170,10 @@ server.tool(
     "browser_upload",
     "Upload files to a file input.",
     {
-      nodeId: z.number().describe("CDP backendNodeId of the target <input type='file'> element."),
+      ref: z.string().optional().describe("Element ref ID (w:NN) of the target file input from browser_map."),
+      selector: z.string().optional().describe("CSS selector of the target <input type='file'> element."),
+      label: z.string().optional().describe("Label or placeholder text of the file input."),
+      nodeId: z.number().optional().describe("CDP backendNodeId of the target <input type='file'> element (fallback)."),
       filePaths: z.array(z.string()).describe("List of absolute system file paths to upload."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -1320,7 +1322,7 @@ server.tool(
     "browser_cookies",
     "Manage browser cookies.",
     {
-      action: z.enum(["get", "set", "delete"]).describe("Action to perform on cookies."),
+      action: z.enum(["get", "set", "delete", "list"]).describe("Action to perform on cookies ('get' or 'list' to view, 'set' to update/inject, 'delete' to remove)."),
       name: z.string().optional().describe("Cookie name."),
       value: z.string().optional().describe("Cookie value (required for 'set')."),
       domain: z.string().optional().describe("Domain for the cookie."),
@@ -1390,7 +1392,8 @@ server.tool(
     "Capture or restore an MHTML snapshot. Best for offline archival, replay testing, and compliance audits.",
     {
       action: z.enum(["capture", "restore"]).describe("Action to perform."),
-      filePath: z.string().describe("Absolute file path to save/load the .mhtml snapshot."),
+      filePath: z.string().optional().describe("Absolute or relative file path to save/load the .mhtml snapshot (default: auto-generated in snapshots directory for capture)."),
+      filename: z.string().optional().describe("Alias for filePath."),
       hideOverlay: z.boolean().optional().describe("If false, keeps the Weavetab HUD and overlay visible in snapshot. Default true."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -1408,7 +1411,7 @@ server.tool(
     "browser_screenshot",
     "95-135ms capture. Best for visual layout validation, canvas/image inspection. For multimodal models only. Text-only models should use browser_map or browser_canvas instead.",
     {
-      format: z.enum(["png", "jpeg"]).optional().describe("Capture format. 'jpeg' is smaller and faster for large pages. Default 'png'."),
+      format: z.enum(["png", "jpeg", "base64"]).optional().describe("Capture format. 'jpeg' is smaller and faster for large pages. Default 'png' (alias 'base64')."),
       quality: z.number().optional().describe("JPEG quality 0-100 (default 90). Only used when format is jpeg."),
       fullPage: z.boolean().optional().describe("If true, captures the full scrollable page. Default false (viewport only)."),
       clip: z.object({
@@ -1486,13 +1489,18 @@ server.tool(
     {
       nodeId: z.number().optional().describe("CDP backendNodeId."),
       selector: z.string().optional().describe("CSS Selector."),
+      query: z.string().optional().describe("Alias for selector."),
       ref: z.string().optional().describe("Ref ID (e.g. 'w:42')."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
+        const normalizedArgs = {
+          ...args,
+          selector: args.selector || args.query,
+        };
         return await withSecurity(config, "browser_inspect", async (session, liveConfig) => {
-          return await agentAction(session, 'reading', () => browserInspect(session, args, liveConfig), 'browser_inspect');
+          return await agentAction(session, 'reading', () => browserInspect(session, normalizedArgs, liveConfig), 'browser_inspect');
         }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
@@ -1547,7 +1555,7 @@ server.tool(
     "browser_recording",
     `Record video screencast for compliance/audit. Compiles captured frames into video/animation (.webp, .gif, .webm, .mp4).`,
     {
-      action: z.enum(["start", "stop", "list"]).describe("Action to perform."),
+      action: z.enum(["start", "stop", "list", "status"]).describe("Action to perform ('start', 'stop', 'list', or 'status')."),
       sessionId: z.string().optional().describe("Unique recording session ID (required for start/stop)."),
       fps: z.number().min(1).max(10).optional().describe("Frames per second (1-10, default 3)."),
       maxFrames: z.number().optional().describe("Maximum frames to capture (default 500)."),
@@ -1963,58 +1971,69 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
   );
 
   // ── Plugins Lifecycle & Dynamic Registry ───────────────────────────
-  const { getVerifiedPackages, resolvePluginTrust } = await import("./plugin/registry.js");
+  const { getVerifiedPackages } = await import("./plugin/registry.js");
   const verifiedPackages = await getVerifiedPackages();
 
-  const loadedPluginNames = new Set<string>();
-
-function createTabProxy(session: any) {
-  if (!session?.Runtime) return undefined;
-  return {
-    isAvailable: () => Boolean(session?.Runtime),
-    url: async () => {
-      const res = await session.Runtime.evaluate({ expression: 'window.location.href', returnByValue: true });
-      return String(res.result?.value || '');
-    },
-    title: async () => {
-      const res = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
-      return String(res.result?.value || '');
-    },
-    evaluate: async (fn: any, ...evalArgs: any[]) => {
-      const expr = typeof fn === 'function' ? `(${fn.toString()})(${evalArgs.map((a: any) => JSON.stringify(a)).join(',')})` : fn;
-      const res = await session.Runtime.evaluate({ expression: expr, returnByValue: true, awaitPromise: true });
-      if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description || 'eval failed');
-      return res.result?.value;
-    },
-    waitForSelector: async (selector: string, opts: any = {}) => {
-      const timeout = opts.timeoutMs ?? 5000;
-      const start = Date.now();
-      while (Date.now() - start < timeout) {
-        const res = await session.Runtime.evaluate({ expression: `Boolean(document.querySelector(${JSON.stringify(selector)}))`, returnByValue: true });
-        if (res.result?.value) return true;
-        await new Promise(r => setTimeout(r, 100));
-      }
-      return false;
-    }
-  };
-}
-function normalizeToolResult(result: any) {
-  if (result && Array.isArray(result.content)) return result;
-  if (typeof result === 'string') return { content: [{ type: 'text' as const, text: result }] };
-  if (result && result.isError) {
+  function createTabProxy(session: any) {
+    if (!session?.Runtime) return undefined;
     return {
-      isError: true,
-      content: [{ type: 'text' as const, text: result.error || result.message || 'Execution error' }],
+      isAvailable: () => Boolean(session?.Runtime),
+      url: async () => {
+        const res = await session.Runtime.evaluate({ expression: 'window.location.href', returnByValue: true });
+        return String(res.result?.value || '');
+      },
+      title: async () => {
+        const res = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
+        return String(res.result?.value || '');
+      },
+      evaluate: async (fn: any, ...evalArgs: any[]) => {
+        const expr = typeof fn === 'function' ? `(${fn.toString()})(${evalArgs.map((a: any) => JSON.stringify(a)).join(',')})` : fn;
+        const res = await session.Runtime.evaluate({ expression: expr, returnByValue: true, awaitPromise: true });
+        if (res.exceptionDetails) throw new Error(res.exceptionDetails.exception?.description || 'eval failed');
+        return res.result?.value;
+      },
+      extract: async (selector: string, mode: "text" | "html" | "value" = "text") => {
+        const expr = `(() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          if (${JSON.stringify(mode)} === "html") return el.outerHTML;
+          if (${JSON.stringify(mode)} === "value" && "value" in el) return String(el.value);
+          return el.textContent?.trim() || "";
+        })()`;
+        const res = await session.Runtime.evaluate({ expression: expr, returnByValue: true });
+        return (res.result?.value as string | null) ?? null;
+      },
+      waitForSelector: async (selector: string, opts: any = {}) => {
+        const timeout = opts.timeoutMs ?? 5000;
+        const start = Date.now();
+        while (Date.now() - start < timeout) {
+          const res = await session.Runtime.evaluate({ expression: `Boolean(document.querySelector(${JSON.stringify(selector)}))`, returnByValue: true });
+          if (res.result?.value) return true;
+          await new Promise(r => setTimeout(r, 100));
+        }
+        return false;
+      }
     };
   }
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }],
-  };
-}
-  const surface = (surfaceRef = createSurface(
+
+  function normalizeToolResult(result: any) {
+    if (result && Array.isArray(result.content)) return result;
+    if (typeof result === 'string') return { content: [{ type: 'text' as const, text: result }] };
+    if (result && result.isError) {
+      return {
+        isError: true,
+        content: [{ type: 'text' as const, text: result.error || result.message || 'Execution error' }],
+      };
+    }
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }],
+    };
+  }
+
+  const surface = createSurface(
     server,
     (owner) => {
-      const pl: any = activeLoadedPlugins.get(owner);
+      const pl: any = pluginRuntimeRef?.getRecord(owner)?.plugin;
       const sess = sessionRegistry.getActive(getCachedConfig().agentId)?.session;
       return {
         tab: createTabProxy(sess),
@@ -2024,282 +2043,78 @@ function normalizeToolResult(result: any) {
       };
     },
     (msg) => process.stderr.write(`  \x1b[33m[!] ${msg}\x1b[0m\n`)
-  ));
+  );
 
-  const registerPluginTools = async (plugin: WeavetabPlugin) => {
-    if (loadedPluginNames.has(plugin.name)) return;
-    
-    const trust = resolvePluginTrust(plugin.name, verifiedPackages);
-    const isOfficial = trust.tier === "official";
+  const pluginRuntime = new PluginRuntime({
+    server,
+    config,
+    surface,
+    verifiedPackages,
+    callbacks: {
+      withSecurity,
+      createTabProxy,
+      normalizeToolResult,
+      wrapError,
+    },
+  });
+  pluginRuntimeRef = pluginRuntime;
+  pluginRuntime.snapshotBaseline();
 
-    const addedNames: string[] = [];
-    const overriddenNames: string[] = [];
-    const removedNames: string[] = [];
+  // Aggregated dynamic instructions resource
+  server.registerResource(
+    "Weavetab Instructions",
+    "weavetab://instructions",
+    {
+      mimeType: "text/markdown",
+      description: "Aggregated agent instructions and CLI commands guide for all active Weavetab plugins",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: "weavetab://instructions",
+          mimeType: "text/markdown",
+          text: buildPluginInstructions(pluginRuntime.getActivePlugins()) || "No plugin instructions active.",
+        },
+      ],
+    })
+  );
 
-    // Register any hooks declared in the plugin
-    if (plugin.hooks) {
-      hookPipeline.registerPluginHooks(plugin.name, plugin.hooks);
-    }
-
-    // 1. Tool Removals (disable built-in tools)
-    const manifestPerms = plugin.manifest?.permissions;
-    const declaredRemove: string[] = Array.isArray(manifestPerms)
-      ? []
-      : manifestPerms?.tools?.remove || [];
-    const toRemove = [
-      ...(plugin.removeTools || []),
-    ];
-    for (const toolName of toRemove) {
-      if (!declaredRemove.includes(toolName)) {
-        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to remove "${toolName}" but it's not listed in permissions.tools.remove — skipped.\x1b[0m\n`);
-        continue;
+  // Active CLI commands index
+  server.registerResource(
+    "Weavetab Plugin Commands",
+    "weavetab://commands",
+    {
+      mimeType: "application/json",
+      description: "JSON index of all active Weavetab plugin CLI commands",
+    },
+    async () => {
+      const cmds: Array<{ plugin: string; name: string; description: string; usage: string; requiresSession?: boolean }> = [];
+      for (const pl of pluginRuntime.getActivePlugins()) {
+        for (const c of getPluginCommands(pl)) {
+          cmds.push({
+            plugin: pl.name,
+            name: c.name,
+            description: c.description,
+            usage: c.usage || `weavetab plugin use ${pl.name} ${c.name}`,
+            requiresSession: c.requiresSession,
+          });
+        }
       }
-      if ((server as any)._registeredTools?.[toolName]) {
-        delete (server as any)._registeredTools[toolName];
-        removedNames.push(toolName);
-      }
-    }
-
-    // 2. Tool Overrides (replace or wrap built-in tools)
-    const declaredOverride: string[] = Array.isArray(manifestPerms)
-      ? []
-      : manifestPerms?.tools?.override || [];
-    const overrides = plugin.overrides || [];
-    for (const ov of overrides) {
-      if (!declaredOverride.includes(ov.name)) {
-        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to override "${ov.name}" but it's not listed in permissions.tools.override — skipped.\x1b[0m\n`);
-        continue;
-      }
-
-      const existingTool = (server as any)._registeredTools?.[ov.name];
-      const existingDesc = existingTool?.description || "";
-      const existingSchema = existingTool?.inputSchema?.shape || existingTool?.parameters?.shape || {};
-
-      if (existingTool) {
-        delete (server as any)._registeredTools[ov.name];
-      }
-
-      server.tool(
-        ov.name,
-        ov.description || existingDesc || `Tool overridden by ${plugin.name}`,
-        ov.schema ? toPluginInputShape(ov.schema) : existingSchema,
-        async (args: any) => {
-          try {
-            return await withSecurity(
-              config,
-              ov.name,
-              async (session, liveConfig) => {
-                const wrappedOrig = existingTool
-                  ? async (origArgs: Record<string, any>, origSess?: any, origCfg?: any) => {
-                      const finalSess = origSess || session;
-                      const finalCfg = origCfg || liveConfig;
-                      const res = await existingTool.handler(origArgs, finalSess, finalCfg);
-                      return res;
-                    }
-                  : undefined;
-
-                const result = await ov.handler(args, session, liveConfig, wrappedOrig);
-                return result;
-              },
-              isOfficial
-            );
-          } catch (e) {
-            return wrapError(e);
-          }
-        }
-      );
-      overriddenNames.push(ov.name);
-    }
-
-    // 3. Tool Additions (new tools)
-    const canAdd = !Array.isArray(manifestPerms) && manifestPerms?.tools?.add === true;
-    const newTools = plugin.tools || [];
-    for (const td of newTools) {
-      if (!canAdd) {
-        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to add tool "${td.name}" but permissions.tools.add is not declared — skipped.\x1b[0m\n`);
-        continue;
-      }
-      if ((server as any)._registeredTools?.[td.name]) {
-        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} registered tool "${td.name}" which replaced an existing tool.\x1b[0m\n`);
-        delete (server as any)._registeredTools[td.name];
-      }
-
-      server.tool(
-        td.name,
-        td.description,
-        toPluginInputShape((td as any).schema || (td as any).parameters),
-        async (args: any) => {
-          try {
-            return await withSecurity(
-              config,
-              td.name,
-              async (session, liveConfig) => {
-                const tab = createTabProxy(session);
-let result: any;
-if (td.handler.length <= 2) {
-  result = await (td.handler as any)(args, { tab, desktop: (plugin as any)._context?.desktop, storage: plugin.storage, config: liveConfig, session });
-} else {
-  result = await td.handler(args, session, liveConfig);
-}
-return normalizeToolResult(result);
-              },
-              isOfficial,
-              undefined,
-              (td as any).requiresSession !== false
-            );
-          } catch (e) {
-            return wrapError(e);
-          }
-        }
-      );
-      addedNames.push(td.name);
-    }
-
-    // 4. `/` commands (prompts) and `@` mentions (resources)
-    const canPrompt = !Array.isArray(manifestPerms) && manifestPerms?.prompts?.add === true;
-    const canResource = !Array.isArray(manifestPerms) && manifestPerms?.resources?.add === true;
-    for (const pd of plugin.prompts || []) {
-      if (!canPrompt) {
-        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to add prompt "${pd?.name}" but permissions.prompts.add is not declared — skipped.\x1b[0m\n`);
-        continue;
-      }
-      surface.addPrompt(plugin.name, pd);
-    }
-    for (const rd of plugin.resources || []) {
-      if (!canResource) {
-        process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} tried to add resource "${rd?.name}" but permissions.resources.add is not declared — skipped.\x1b[0m\n`);
-        continue;
-      }
-      surface.addResource(plugin.name, rd);
-    }
-
-    // Pass the rich SDK context so dynamic tool registrations receive full security & session
-    const fullPluginCtx = (plugin as any)._context;
-    if (fullPluginCtx && fullPluginCtx.mcp) {
-      fullPluginCtx.mcp.registerTool = (tool: any) => {
-        if (!canAdd) {
-          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic registerTool("${tool?.name}"): permissions.tools.add not declared — skipped.\x1b[0m\n`);
-          return;
-        }
-        if ((server as any)._registeredTools?.[tool.name]) {
-          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic tool "${tool.name}" replaced an existing tool.\x1b[0m\n`);
-          delete (server as any)._registeredTools[tool.name];
-        }
-        server.tool(tool.name, tool.description || "", toPluginInputShape(tool.schema || tool.parameters), async (args: any) => {
-          return await withSecurity(
-            config,
-            tool.name,
-            async (session, liveConfig) => {
-              const tab = createTabProxy(session);
-              let result: any;
-              if (tool.handler.length <= 2) {
-                result = await (tool.handler as any)(args, { tab, desktop: (plugin as any)._context?.desktop, storage: plugin.storage, config: liveConfig, session });
-              } else {
-                result = await tool.handler(args, session, liveConfig);
-              }
-              return normalizeToolResult(result);
-            },
-            isOfficial,
-            undefined,
-            tool.requiresSession !== false
-          );
-        });
-      };
-
-      fullPluginCtx.mcp.registerPrompt = (prompt: any) => {
-        if (!canPrompt) {
-          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic registerPrompt("${prompt?.name}"): permissions.prompts.add not declared — skipped.\x1b[0m\n`);
-          return;
-        }
-        surface.addPrompt(plugin.name, prompt);
-      };
-      fullPluginCtx.mcp.registerResource = (resource: any) => {
-        if (!canResource) {
-          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic registerResource("${resource?.name}"): permissions.resources.add not declared — skipped.\x1b[0m\n`);
-          return;
-        }
-        surface.addResource(plugin.name, resource);
-      };
-      fullPluginCtx.mcp.unregisterPrompt = (name: string) => { surface.removePrompt(plugin.name, name); };
-      fullPluginCtx.mcp.unregisterResource = (key: string) => { surface.removeResource(plugin.name, key); };
-
-      fullPluginCtx.mcp.overrideTool = (toolName: string, overrideHandler: any) => {
-        if (!declaredOverride.includes(toolName)) {
-          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic overrideTool("${toolName}"): not in permissions.tools.override — skipped.\x1b[0m\n`);
-          return;
-        }
-        const existingTool = (server as any)._registeredTools?.[toolName];
-        if (existingTool) {
-          delete (server as any)._registeredTools[toolName];
-        }
-        server.tool(toolName, `Tool overridden by ${plugin.name}`, {}, async (args: any) => {
-          return await withSecurity(
-            config,
-            toolName,
-            async (session, liveConfig) => {
-              const wrappedOrig = existingTool
-                ? async (origArgs: Record<string, any>, origSess?: any, origCfg?: any) => {
-                    const finalSess = origSess || session;
-                    const finalCfg = origCfg || liveConfig;
-                    return await existingTool.handler(origArgs, finalSess, finalCfg);
-                  }
-                : undefined;
-              const result = await overrideHandler(args, session, liveConfig, wrappedOrig);
-              return result;
-            },
-            isOfficial
-          );
-        });
-      };
-
-      fullPluginCtx.mcp.removeTool = (toolName: string) => {
-        if (!declaredRemove.includes(toolName)) {
-          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic removeTool("${toolName}"): not in permissions.tools.remove — skipped.\x1b[0m\n`);
-          return;
-        }
-        if ((server as any)._registeredTools?.[toolName]) {
-          delete (server as any)._registeredTools[toolName];
-        }
-      };
-
-      fullPluginCtx.mcp.unregisterTool = (toolName: string) => {
-        if (!declaredRemove.includes(toolName)) {
-          process.stderr.write(`  \x1b[33m[!] Plugin ${plugin.name} dynamic unregisterTool("${toolName}"): not in permissions.tools.remove — skipped.\x1b[0m\n`);
-          return;
-        }
-        if ((server as any)._registeredTools?.[toolName]) {
-          delete (server as any)._registeredTools[toolName];
-        }
+      return {
+        contents: [
+          {
+            uri: "weavetab://commands",
+            mimeType: "application/json",
+            text: JSON.stringify(cmds, null, 2),
+          },
+        ],
       };
     }
+  );
 
-    if (typeof plugin.onLoad === "function") {
-      try {
-        await plugin.onLoad(fullPluginCtx || (plugin as any)._context);
-      } catch (err: any) {
-        process.stderr.write(`  \u001b[31m[!] Plugin ${plugin.name} onLoad failed: ${err?.message}\u001b[0m\n`);
-      }
-    }
-    
-    loadedPluginNames.add(plugin.name);
-    activeLoadedPlugins.set(plugin.name, plugin);
-    process.stderr.write(`  [Plugin Loaded] ${plugin.name} v${plugin.version}\n`);
-    
-    // Notify the client that tools have changed (if transport is already connected)
-    try {
-      if ((server as any).server && typeof (server as any).server.sendToolListChanged === "function") {
-        Promise.resolve((server as any).server.sendToolListChanged()).catch(() => {});
-      }
-    } catch {
-      // Ignore if client doesn't support it or not connected yet
-    }
-  };
-
-  // Auto-load all installed plugins at startup
-  const allPlugins = discoverPlugins();
-  for (const plugin of allPlugins) {
-    await registerPluginTools(plugin);
-  }
+  // Discover and load plugins, then begin watching for hot-swap
+  await pluginRuntime.sync();
+  pluginRuntime.startWatchers();
 
   let transport;
   if (transportMode === "ws") {
@@ -2351,21 +2166,13 @@ async function cleanup() {
   if (cleanupCalled) return;
   cleanupCalled = true;
 
-  // Run plugin onUnload hooks and clear hook pipeline
-  try {
-    for (const plugin of activeLoadedPlugins.values()) {
-      if (typeof plugin.onUnload === "function") {
-        try {
-          plugin.onUnload((plugin as any)._context);
-        } catch (e: any) {
-          process.stderr.write(`[Weavetab] Error in plugin "${plugin.name}" onUnload: ${e?.message || e}\n`);
-        }
-      }
-    }
-    for (const name of activeLoadedPlugins.keys()) surfaceRef?.dropAll(name);
-    activeLoadedPlugins.clear();
-    hookPipeline.clearAllHooks();
-  } catch { /* non-fatal */ }
+  if (pluginRuntimeRef) {
+    try {
+      await pluginRuntimeRef.stop();
+    } catch { /* non-fatal */ }
+    pluginRuntimeRef = null;
+  }
+  hookPipeline.clearAllHooks();
 
   // Stop config file watcher handle
   try {

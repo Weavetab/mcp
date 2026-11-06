@@ -40,7 +40,11 @@ export async function browserSnapshot(
   if (!filename) filename = options.filePath;
 
   if (!filename || !filename.trim()) {
-    throw new Error("browser_snapshot requires a filename.");
+    if (action === "capture") {
+      filename = `snapshot-${Date.now()}.mhtml`;
+    } else {
+      throw new Error("browser_snapshot restore requires a filename or filePath.");
+    }
   }
 
   // If caller provided an absolute path, respect it; otherwise store in snapshots directory

@@ -15,7 +15,7 @@ import { sessionRegistry } from "../state/session.js";
 import { compileVideo } from "./video_compiler.js";
 
 export interface RecordingOptions {
-  action: "start" | "stop" | "list";
+  action: "start" | "stop" | "list" | "status";
   sessionId?: string;
   fps?: number;
   maxFrames?: number;
@@ -55,6 +55,8 @@ export async function browserRecording(
 ): Promise<{
   success: boolean;
   recordings?: RecordingState[];
+  active?: boolean;
+  count?: number;
   error?: string;
   dir?: string;
   frameCount?: number;
@@ -194,9 +196,11 @@ export async function browserRecording(
     };
   }
 
-  if (action === "list") {
+  if (action === "list" || action === "status") {
     return {
       success: true,
+      active: activeRecordings.size > 0,
+      count: activeRecordings.size,
       recordings: Array.from(activeRecordings.values()),
     };
   }

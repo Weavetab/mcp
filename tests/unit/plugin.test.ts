@@ -5,7 +5,17 @@ import {
   getVerifiedPackages,
   invalidateRegistryCache,
 } from "../../src/plugin/registry.js";
-import { inspectInstalledPackage, buildPluginContext, normalizePermissions } from "../../src/plugin/loader.js";
+import {
+  inspectInstalledPackage,
+  buildPluginContext,
+  normalizePermissions,
+  readBoundedAgentsMd,
+  getPluginCommands,
+  buildPluginInstructions,
+  touchPluginEpoch,
+  MAX_AGENTS_MD_LINES,
+  MAX_AGENTS_MD_CHARS,
+} from "../../src/plugin/loader.js";
 import { PluginStorageManager } from "../../src/plugin/storage.js";
 import { PluginExtensionBridge } from "../../src/plugin/extension_bridge.js";
 import { toPluginInputShape, toPromptShape } from "../../src/plugin/schema.js";
@@ -337,5 +347,139 @@ describe("Plugin Prompts and Resources Surface", () => {
     assert.strictEqual(surface.dropAll("plug-a"), true);
     assert.deepStrictEqual(surface.count(), { prompts: 0, resources: 0 });
     assert.ok(warnings.length >= 3);
+  });
+});
+
+// ─── Plugin CLI Commands & AGENTS.md Budgeting ────────────────────────────────
+
+describe("Plugin CLI Commands and AGENTS.md Context Budgeting", () => {
+  it("enforces permissions.commands.add when registering CLI commands via buildPluginContext", () => {
+    const storage = new PluginStorageManager("unit-test-cmd-perms");
+    const bridge = new PluginExtensionBridge("unit-test-cmd-perms", {});
+    const hooks = { beforeToolCall: [], afterToolCall: [], onPageNavigate: [] };
+
+    // 1. Blocked when permissions.commands.add is missing
+    const lockedPlugin: any = { name: "locked-cmd", version: "1.0.0", manifest: { permissions: {} } };
+    const lockedCtx = buildPluginContext(lockedPlugin, storage, bridge, {}, hooks);
+    lockedCtx.cli.registerCommand({ name: "dump", handler: async () => "ok" });
+    assert.strictEqual(lockedPlugin.commands, undefined);
+
+    // 2. Allowed when permissions.commands.add is granted
+    const openPerms = normalizePermissions(["commands.add"]);
+    const openPlugin: any = { name: "open-cmd", version: "1.0.0", manifest: { permissions: openPerms } };
+    const openCtx = buildPluginContext(openPlugin, storage, bridge, {}, hooks);
+    openCtx.cli.registerCommand({ name: "dump", description: "Dumps state", handler: async () => "dumped" });
+    assert.ok(Array.isArray(openPlugin.commands));
+    assert.strictEqual(openPlugin.commands.length, 1);
+    assert.strictEqual(openPlugin.commands[0].name, "dump");
+
+    // 3. Unregister removes command
+    openCtx.cli.unregisterCommand("dump");
+    assert.strictEqual(openPlugin.commands.length, 0);
+  });
+
+  it("reads AGENTS.md and clamps to strict line (80) and char (3200) budget", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wt-agents-test-"));
+    try {
+      // 1. Normal AGENTS.md
+      const normalContent = "# Test Plugin Playbook\n\n- Tool: test_tool\n- Command: weavetab plugin use test dump";
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), normalContent, "utf-8");
+      const readNormal = readBoundedAgentsMd(tmpDir);
+      assert.strictEqual(readNormal, normalContent);
+
+      // 2. Overflow line count (> 80 lines)
+      const linesArray = Array.from({ length: 120 }, (_, i) => `Line ${i + 1}: instruction`);
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), linesArray.join("\n"), "utf-8");
+      const readClampedLines = readBoundedAgentsMd(tmpDir);
+      assert.ok(readClampedLines);
+      const outputLines = readClampedLines.split("\n");
+      assert.strictEqual(outputLines.length, MAX_AGENTS_MD_LINES);
+      assert.strictEqual(outputLines[0], "Line 1: instruction");
+      assert.strictEqual(outputLines[79], "Line 80: instruction");
+
+      // 3. Overflow char count (> 3200 chars within 50 lines)
+      const bigLine = "A".repeat(100);
+      const bigContent = Array.from({ length: 50 }, () => bigLine).join("\n");
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), bigContent, "utf-8");
+      const readClampedChars = readBoundedAgentsMd(tmpDir);
+      assert.ok(readClampedChars);
+      assert.strictEqual(readClampedChars.length, MAX_AGENTS_MD_CHARS);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("inspects AGENTS.md in inspectInstalledPackage", () => {
+    const tmpDir = makeTmpPlugin({
+      name: "pkg-with-agents",
+      version: "1.0.0",
+      description: "Plugin with agents playbook",
+      agentsMd: "AGENTS.md",
+    });
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "# Custom Playbook\nInstructions for agent.", "utf-8");
+    try {
+      const info = inspectInstalledPackage(tmpDir);
+      assert.ok(info !== null);
+      assert.strictEqual(info?.packageName, "pkg-with-agents");
+      assert.ok(info?.agentsMdContent?.includes("# Custom Playbook"));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("inspects inline instructions in inspectInstalledPackage without requiring AGENTS.md", () => {
+    const tmpDir = makeTmpPlugin({
+      name: "pkg-inline-instructions",
+      version: "1.0.0",
+      description: "Plugin with declared instructions",
+      instructions: "Always prefer CLI commands over UI clicks.",
+    });
+    try {
+      const info = inspectInstalledPackage(tmpDir);
+      assert.ok(info !== null);
+      assert.strictEqual(info?.packageName, "pkg-inline-instructions");
+      assert.strictEqual(info?.instructions, "Always prefer CLI commands over UI clicks.");
+      assert.strictEqual(info?.agentsMdContent, "Always prefer CLI commands over UI clicks.");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("getPluginCommands and buildPluginInstructions aggregate CLI commands and instructions", () => {
+    const fakePlugin: any = {
+      name: "test-plugin",
+      version: "1.2.0",
+      instructions: "Follow strict formatting guidelines.",
+      manifest: {
+        commands: [
+          { name: "scan", description: "Performs quick scan", usage: "weavetab plugin use test-plugin scan" },
+        ],
+      },
+      commands: [
+        { name: "audit", description: "Runs audit" },
+      ],
+    };
+
+    const cmds = getPluginCommands(fakePlugin);
+    assert.strictEqual(cmds.length, 2);
+    assert.strictEqual(cmds[0].name, "scan");
+    assert.strictEqual(cmds[1].name, "audit");
+    assert.strictEqual(cmds[1].usage, "weavetab plugin use test-plugin audit");
+
+    const instructionsText = buildPluginInstructions([fakePlugin]);
+    assert.ok(instructionsText.includes("## Weavetab Plugin CLI Commands"));
+    assert.ok(instructionsText.includes("weavetab plugin use test-plugin scan"));
+    assert.ok(instructionsText.includes("weavetab plugin use test-plugin audit"));
+    assert.ok(instructionsText.includes("## Active Plugin Instructions"));
+    assert.ok(instructionsText.includes("### test-plugin (v1.2.0)"));
+    assert.ok(instructionsText.includes("Follow strict formatting guidelines."));
+  });
+
+  it("touchPluginEpoch touches .epoch file in global directory", () => {
+    touchPluginEpoch();
+    const epochPath = path.join(os.homedir(), ".weavetab", "plugins", ".epoch");
+    assert.ok(fs.existsSync(epochPath));
+    const content = fs.readFileSync(epochPath, "utf-8");
+    assert.ok(Number(content) > 0);
   });
 });

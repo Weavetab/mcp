@@ -41,23 +41,23 @@ Every tool adheres to a strict contract:
 | 16 | `browser_fill` | Input & Interaction | Smart multi-field form batch completion across text inputs, radios, checkboxes, and selects. Supports `app`. |
 | 17 | `browser_highlight` | Canvas & Visual Overlays | Zero-token visual CDP overlay highlights over target elements without DOM mutations. Supports `app`. |
 | 18 | `browser_upload` | Input & Interaction | File input attachment bypassing OS pickers via CDP `DOM.setFileInputFiles`. Supports `app`. |
-| 19 | `browser_find` | Vision & Reading | Fast in-page text search via a leaf-optimized TreeWalker returning clean CSS selectors. ~10x cheaper than `browser_map`. Supports `app`. |
+| 19 | `browser_find` | Vision & Reading | Fast in-page text search via a leaf-optimized TreeWalker returning clean CSS selectors. Filters out non-content tags (`<style>`, `<script>`, `<noscript>`, `<template>`) and overlay elements. Supports `app`. |
 | 20 | `browser_storage` | Storage & Cookies | Key-value store management for `localStorage` and `sessionStorage`. Supports `app`. |
 | 21 | `browser_network_intercept` | Network & Security | Request mocking, URL pattern blocking, and network timing/TLS diagnostic extraction. Supports `app`. |
 | 22 | `browser_console` | Vision & Reading | Reads and clears buffered console logs, warnings, exceptions, and network errors. Supports `app`. |
 | 23 | `browser_pdf` | Output & Media | Prints the active page to PDF with custom scaling, landscape mode, and page ranges. Supports `app`. |
 | 24 | `browser_eval` | Script Evaluation | Evaluates arbitrary JavaScript expressions directly in the main frame JS context. Supports `app`. |
-| 25 | `browser_cookies` | Storage & Cookies | Complete cookie CRUD management via CDP Network domain. Supports `app`. |
+| 25 | `browser_cookies` | Storage & Cookies | Complete cookie CRUD management via CDP Network domain (`action: 'get' \| 'list' \| 'set' \| 'delete'`). Supports `app`. |
 | 26 | `browser_canvas` | Canvas & Visual Overlays | Export canvas pixels as Base64 PNG or execute vector coordinate drawings. Supports `app`. |
 | 27 | `browser_scrape` | Vision & Reading | Structured data extraction via CSS or XPath selectors in a single round-trip. Supports `app`. |
-| 28 | `browser_snapshot` | Vision & Reading | Capture or restore complete MHTML DOM snapshots including inline resources. Supports `app`. |
-| 29 | `browser_screenshot` | Vision & Reading | Visual viewport or full-page capture in PNG or JPEG with custom clip regions. Supports `app`. |
+| 28 | `browser_snapshot` | Vision & Reading | Capture or restore complete MHTML DOM snapshots (`action: 'capture' \| 'restore'`, auto-generates timestamped file if omitted on capture). Supports `app`. |
+| 29 | `browser_screenshot` | Vision & Reading | Visual viewport or full-page capture in PNG or JPEG with custom clip regions (`format: 'png' \| 'jpeg' \| 'base64'`). Supports `app`. |
 | 30 | `browser_viewport` | Navigation & Environment | Configures viewport dimensions, device scale factor, mobile mode, and touch emulation. Supports `app`. |
 | 31 | `browser_clipboard` | Dialog & Human Oversight | Plaintext and base64 image reading/writing to the system clipboard; a single write can set text and image together. Supports `app`. |
-| 32 | `browser_inspect` | Vision & Reading | Deep DOM element inspection returning computed CSS styles, box model, and event listeners. Supports `app`. |
+| 32 | `browser_inspect` | Vision & Reading | Deep DOM element inspection returning computed CSS styles, box model, and event listeners (`nodeId`, `selector`, `query`, or `ref`). Supports `app`. |
 | 33 | `browser_extract_design` | Vision & Reading | Extracts design tokens, typography, colors, clean CSS, and Tailwind themes with pixel fidelity. Supports `app`. |
 | 34 | `browser_automation` | Mission & Automation | Injects self-running background tracking scripts into the page context for polling/monitoring. Supports `app`. |
-| 35 | `browser_recording` | Output & Media | Video screencast recording into `.webp`, `.gif`, `.webm`, or `.mp4` formats. Supports `app`. |
+| 35 | `browser_recording` | Output & Media | Video screencast recording into `.webp`, `.gif`, `.webm`, or `.mp4` formats (`action: 'start' \| 'stop' \| 'list' \| 'status'`). Supports `app`. |
 | 36 | `browser_detect` | Tabs & Windows | CRITICAL INITIALIZATION TOOL. Detects local browsers and configured desktop apps (Discord, Slack, etc.) and reports connection status, active tabs, and port. |
 | 37 | `browser_performance` | Performance & Vitals | Retrieves Core Web Vitals (FCP, LCP, CLS) and detailed network resource timings. Supports `app`. |
 | 38 | `browser_office` | Office Documents | Parses Word (`.docx`), Excel (`.xlsx`), PDF, and CSV files into structured data. |
@@ -110,7 +110,7 @@ browser_map({ delta: true })
 ---
 
 ### `browser_find`
-Fast in-page text search via a leaf-optimized, non-mutating TreeWalker shim returning clean CSS selectors. Approximately 10x cheaper than `browser_map` when only checking for text presence or targeting elements by visible string. Channel/user prefixes (`#`, `@`) are stripped for token matching.
+Fast in-page text search via a leaf-optimized, non-mutating TreeWalker shim returning clean CSS selectors. Filters out non-content elements (`<style>`, `<script>`, `<noscript>`, `<template>`) and internal Weavetab overlay hosts (`#wt-shadow-host`, `weavetab-host`, `[data-wt-ignore]`). Approximately 10x cheaper than `browser_map` when only checking for text presence or targeting elements by visible string. Channel/user prefixes (`#`, `@`) are stripped for token matching.
 
 **Parameters:**
 | Parameter | Type | Description |
@@ -432,15 +432,9 @@ browser_captcha({ action: "solve", timeout: 45000 })
 
 ---
 
-## 5. GitHub Automation (Plugin)
+## 5. Plugin Extensibility
 
-GitHub is no longer a built-in tool. Repository analysis, raw file reading, issue triage, and PR inspection are provided by the official **`@weavetab/plugin-github`** plugin, which registers a single `github` tool (`analyze` / `read` / `issues` / `pr`) with the same parameters and behavior the old `browser_github` tool had.
-
-```bash
-weavetab plugin add @weavetab/plugin-github
-```
-
-Once installed, the tool appears as `github` (exposed by MCP clients as `weavetab_github`). It never bootstraps a browser session, so calls are cheap and work headlessly.
+External tools and specialized workflow bridges are authored using @weavetab/sdk and dynamically mounted into Weavetab. Core Weavetab MCP maintains 41 deterministic browser and desktop automation tools.
 
 ---
 

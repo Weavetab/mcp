@@ -1,0 +1,150 @@
+name: Pull Request Guard & Sizing Gate
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+jobs:
+  pr-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR Sizing and Disclosures
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+            const body = pr.body || '';
+
+            // 1. Fetch changed files and compute true code diff
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              per_page: 100
+            });
+
+            // Patterns to exclude from functional code budget
+            const IGNORED_PATTERNS = [
+              /^package-lock\.json$/,
+              /^(dist|ext-dist|build)\//,
+              /\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot)$/i,
+              /^docs\/tools\/.*\.md$/,
+              /\.jsonl$/
+            ];
+
+            let codeAdditions = 0;
+            let codeDeletions = 0;
+
+            for (const file of files) {
+              const filename = file.filename;
+              const isIgnored = IGNORED_PATTERNS.some(re => re.test(filename));
+              if (!isIgnored) {
+                codeAdditions += file.additions || 0;
+                codeDeletions += file.deletions || 0;
+              }
+            }
+
+            console.log(`Calculated code diff: +${codeAdditions} / -${codeDeletions} across ${files.length} files.`);
+
+            // Assign size label
+            let sizeLabel = 'size/xs';
+            let sizeColor = '0E8A16';
+            if (codeAdditions >= 500) {
+              sizeLabel = 'size/blocked-over-500';
+              sizeColor = 'B60205';
+            } else if (codeAdditions >= 300) {
+              sizeLabel = 'size/l';
+              sizeColor = 'D93F0B';
+            } else if (codeAdditions >= 100) {
+              sizeLabel = 'size/m';
+              sizeColor = 'FBCA04';
+            } else if (codeAdditions >= 50) {
+              sizeLabel = 'size/s';
+              sizeColor = '0E8A16';
+            }
+
+            // Ensure label exists and set it
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: sizeLabel
+              });
+            } catch {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: sizeLabel,
+                color: sizeColor,
+                description: `PR additions size tier: ${sizeLabel}`
+              }).catch(() => {});
+            }
+
+            // Clean previous size labels
+            const existingLabels = (pr.labels || []).map(l => l.name);
+            const sizePrefixes = ['size/xs', 'size/s', 'size/m', 'size/l', 'size/blocked-over-500'];
+            for (const old of existingLabels) {
+              if (sizePrefixes.includes(old) && old !== sizeLabel) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  name: old
+                }).catch(() => {});
+              }
+            }
+
+            if (!existingLabels.includes(sizeLabel)) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                labels: [sizeLabel]
+              });
+            }
+
+            const violations = [];
+
+            // 2. Enforce the +500 lines budget
+            const MAX_LINES = 500;
+            if (codeAdditions > MAX_LINES) {
+              violations.push(
+                `🛑 **Line-Budget Violation (+${codeAdditions} lines added)**:\n` +
+                `This PR adds **+${codeAdditions} lines** of functional code (excluding lockfiles & assets), which exceeds our hard ceiling of **+${MAX_LINES} lines**.\n` +
+                `Large PRs hide subtle regressions and slow down the review pipeline. Please split this PR into smaller, reviewable increments (see \`CONTRIBUTING.md\`).`
+              );
+            }
+
+            // 3. Verify AI Agent Disclosure
+            const hasAgentDisclosure =
+              /\[x\]\s*(antigravity|claude|cursor|windsurf|copilot|gemini|codex|human|none|other)/i.test(body);
+
+            if (!hasAgentDisclosure) {
+              violations.push(
+                `🤖 **Missing AI Agent Disclosure**:\n` +
+                `We welcome both human engineers and AI-assisted workflows, but we require transparent disclosure.\n` +
+                `Please check the appropriate box under **"AI Agent / Assistant Disclosure"** in your PR description (e.g. \`[x] Antigravity\`, \`[x] Cursor\`, or \`[x] None (100% Human)\`).`
+              );
+            }
+
+            // 4. Verify Checklist Completion
+            const hasCheckedItem = /\[x\]/i.test(body);
+            if (!hasCheckedItem) {
+              violations.push(
+                `📋 **Incomplete Verification Checklist**:\n` +
+                `Please complete the verification checklist in your PR description to confirm that tests pass and requirements are verified.`
+              );
+            }
+
+            if (violations.length > 0) {
+              core.setFailed(violations.join('\n\n---\n\n'));
+            } else {
+              console.log('✅ PR passed sizing, AI agent disclosure, and checklist gates.');
+            }

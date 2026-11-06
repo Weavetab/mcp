@@ -1,0 +1,124 @@
+name: Issue Claim Engine
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  handle-claim:
+    # Only run on issues (not pull requests) when comment contains /claim or /unclaim
+    if: |
+      !github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/unclaim'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process Issue Claim
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const comment = context.payload.comment.body.trim().toLowerCase();
+            const sender = context.payload.comment.user.login;
+            const issueNumber = context.payload.issue.number;
+            const currentAssignees = (context.payload.issue.assignees || []).map(a => a.login);
+            const isClaim = comment === '/claim' || comment.startsWith('/claim ');
+            const isUnclaim = comment === '/unclaim' || comment.startsWith('/unclaim ');
+
+            // Ensure label 'claimed' exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'claimed'
+              });
+            } catch (e) {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'claimed',
+                color: '0E8A16',
+                description: 'Issue is actively claimed by a contributor'
+              }).catch(() => {});
+            }
+
+            if (isClaim) {
+              if (currentAssignees.length > 0) {
+                if (currentAssignees.includes(sender)) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `@${sender} You already hold the active claim on this issue.`
+                  });
+                  return;
+                }
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `⚠️ @${sender} This issue is already claimed by @${currentAssignees.join(', @')}.\n\nIf you believe this claim is abandoned (inactive for >7 days), please comment to ping them or request a maintainer review.`
+                });
+                return;
+              }
+
+              // Assign user
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                assignees: [sender]
+              });
+
+              // Add label
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: ['claimed']
+              });
+
+              const expiryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: `### 🎯 Issue Claimed\n\n@${sender} has claimed this issue!\n\n- **Claim Window:** 7 days (expires **${expiryDate}**)\n- **Next Steps:** Submit a PR referencing this issue (e.g. \`Fixes #${issueNumber}\`).\n- **Release Claim:** If you change your mind, reply with \`/unclaim\` to release it for others.\n\nHappy hacking!`
+              });
+            } else if (isUnclaim) {
+              if (!currentAssignees.includes(sender) && sender !== context.repo.owner) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `@${sender} You cannot unclaim an issue assigned to someone else.`
+                });
+                return;
+              }
+
+              await github.rest.issues.removeAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                assignees: currentAssignees
+              });
+
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name: 'claimed'
+                });
+              } catch (e) {}
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: `🔓 @${sender} has unclaimed this issue. It is now open for anyone to \`/claim\`.`
+              });
+            }

@@ -18,7 +18,7 @@ import { hideWeaveTabOverlay, restoreWeaveTabOverlay, maskSecretFieldsForCapture
 
 export interface ScreenshotOptions {
   /** Capture format — "png" (lossless) or "jpeg" (smaller). Default: "png". */
-  format?: "png" | "jpeg";
+  format?: "png" | "jpeg" | "base64";
   /** JPEG quality 0–100. Only used when format is "jpeg". Default: 90. */
   quality?: number;
   /** If true, captures the full scrollable page, not just the viewport. Default: false. */
@@ -45,7 +45,7 @@ export async function browserScreenshot(
   options: ScreenshotOptions = {},
   _config: Config
 ): Promise<ScreenshotResult> {
-  const format = options.format ?? "png";
+  const format = options.format === "jpeg" ? "jpeg" : "png";
   const quality = format === "jpeg" ? (options.quality ?? 90) : undefined;
 
   // Get viewport dimensions

@@ -5,6 +5,28 @@ import ora from "ora";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { z } from "zod";
+import { WEAVETAB_VERSION } from "../version.js";
+import {
+  getVerifiedPackages,
+  resolvePluginTrust,
+  resolvePluginCandidates,
+  invalidateRegistryCache,
+  REGISTRY_URL,
+  type PluginCandidate,
+} from "../plugin/registry.js";
+import {
+  listInstalledPlugins,
+  inspectInstalledPackage,
+  normalizePermissions,
+  loadAndInitPlugin,
+  resolveInstalledPluginInfo,
+  touchPluginEpoch,
+  MAX_AGENTS_MD_LINES,
+  MAX_AGENTS_MD_CHARS,
+} from "../plugin/loader.js";
 
 function getGlobalPluginDir(): string {
   const dir = path.join(os.homedir(), ".weavetab", "plugins");
@@ -17,10 +39,6 @@ function getGlobalPluginDir(): string {
   }
   return dir;
 }
-import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-
-import { WEAVETAB_VERSION } from "../version.js";
 
 const _require = createRequire(import.meta.url);
 function getVersion(): string {
@@ -31,19 +49,43 @@ function getVersion(): string {
   }
 }
 
-import {
-  getVerifiedPackages,
-  resolvePluginTrust,
-  resolvePluginCandidates,
-  invalidateRegistryCache,
-  OFFICIAL_PLUGIN_PREFIX,
-  REGISTRY_URL,
-  type PluginCandidate,
-} from "../plugin/registry.js";
-import { listInstalledPlugins, inspectInstalledPackage, normalizePermissions } from "../plugin/loader.js";
+function createCliTabProxy(session: any) {
+  if (!session?.Runtime) return undefined;
+  const ev = async (expression: string) => (await session.Runtime.evaluate({ expression, returnByValue: true, awaitPromise: true })).result?.value;
+  return {
+    session,
+    isAvailable: () => true,
+    url: async () => String((await ev("location.href")) || ""),
+    title: async () => String((await ev("document.title")) || ""),
+    evaluate: async (fn: any, ...a: any[]) => ev(typeof fn === "function" ? `(${fn})(${a.map((x: any) => JSON.stringify(x)).join(",")})` : fn),
+    extract: async (selector: string, mode: "text" | "html" | "value" = "text") => {
+      const expr = `(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        if (${JSON.stringify(mode)} === "html") return el.outerHTML;
+        if (${JSON.stringify(mode)} === "value" && "value" in el) return String(el.value);
+        return el.textContent?.trim() || "";
+      })()`;
+      return (await ev(expr)) ?? null;
+    },
+    waitForSelector: async (selector: string, opts: any = {}) => {
+      const timeout = opts.timeoutMs ?? 5000;
+      const start = Date.now();
+      while (Date.now() - start < timeout) {
+        const has = await ev(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
+        if (has) return true;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return false;
+    },
+  };
+}
 
-// Helper to run child process safely
-function runCommand(cmd: string, cmdArgs: string[], cwd: string = process.cwd()): Promise<{ code: number; stdout: string; stderr: string }> {
+function runCommand(
+  cmd: string,
+  cmdArgs: string[],
+  cwd: string = process.cwd()
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const isWin = process.platform === "win32";
     const executable = isWin && !cmd.endsWith(".cmd") && !cmd.endsWith(".exe") ? `${cmd}.cmd` : cmd;
@@ -56,8 +98,12 @@ function runCommand(cmd: string, cmdArgs: string[], cwd: string = process.cwd())
     let stdout = "";
     let stderr = "";
 
-    child.stdout?.on("data", (d) => { stdout += d.toString(); });
-    child.stderr?.on("data", (d) => { stderr += d.toString(); });
+    child.stdout?.on("data", (d) => {
+      stdout += d.toString();
+    });
+    child.stderr?.on("data", (d) => {
+      stderr += d.toString();
+    });
 
     child.on("close", (code) => {
       resolve({ code: code ?? 0, stdout, stderr });
@@ -69,15 +115,13 @@ function runCommand(cmd: string, cmdArgs: string[], cwd: string = process.cwd())
   });
 }
 
-function runNpmCommand(cmdArgs: string[], cwd: string = process.cwd()): Promise<{ code: number; stdout: string; stderr: string }> {
+function runNpmCommand(
+  cmdArgs: string[],
+  cwd: string = process.cwd()
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return runCommand("npm", cmdArgs, cwd);
 }
 
-/**
- * Resolve a human-readable author from a manifest. Handles every shape the
- * schema allows: a plain `author` string, an `author` object, an `author`
- * array, or the richer `authors[]` array of strings/objects.
- */
 function resolveManifestAuthor(manifest: any, fallback: string): string {
   const pick = (value: any): string | null => {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -96,6 +140,109 @@ function resolveManifestAuthor(manifest: any, fallback: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// CLI FLAG & ARGUMENT PARSER FOR `weavetab plugin use`
+// ---------------------------------------------------------------------------
+
+function coerceCliValue(val: string): any {
+  if (val === "true") return true;
+  if (val === "false") return false;
+  if (val === "null") return null;
+  if (/^-?\d+$/.test(val)) return parseInt(val, 10);
+  if (/^-?\d+\.\d+$/.test(val)) return parseFloat(val);
+  if ((val.startsWith("{") && val.endsWith("}")) || (val.startsWith("[") && val.endsWith("]"))) {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  }
+  return val;
+}
+
+export function parseCliInvokeArgs(rawArgs: string[]): { positional: string[]; flags: Record<string, any> } {
+  const positional: string[] = [];
+  const flags: Record<string, any> = {};
+
+  for (let i = 0; i < rawArgs.length; i++) {
+    const token = rawArgs[i];
+    if (token === "--json" && rawArgs[i + 1]) {
+      try {
+        const parsed = JSON.parse(rawArgs[i + 1]);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          Object.assign(flags, parsed);
+        }
+      } catch (e: any) {
+        throw new Error(`Invalid --json payload: ${e.message}`);
+      }
+      i++;
+      continue;
+    }
+    if (token.startsWith("--")) {
+      const eqIdx = token.indexOf("=");
+      if (eqIdx > 2) {
+        const k = token.slice(2, eqIdx);
+        const v = token.slice(eqIdx + 1);
+        flags[k] = coerceCliValue(v);
+      } else {
+        const k = token.slice(2);
+        const next = rawArgs[i + 1];
+        if (next !== undefined && !next.startsWith("-")) {
+          flags[k] = coerceCliValue(next);
+          i++;
+        } else {
+          flags[k] = true;
+        }
+      }
+      continue;
+    }
+    if (token.startsWith("-") && token.length === 2) {
+      const k = token.slice(1);
+      const next = rawArgs[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        flags[k] = coerceCliValue(next);
+        i++;
+      } else {
+        flags[k] = true;
+      }
+      continue;
+    }
+    positional.push(token);
+  }
+
+  return { positional, flags };
+}
+
+function validateAgainstPluginSchema(schema: any, input: Record<string, any>): Record<string, any> {
+  if (!schema) return input;
+  try {
+    if (typeof schema.safeParse === "function") {
+      const res = schema.safeParse(input);
+      if (!res.success) {
+        const msg = res.error.issues.map((iss: any) => `${iss.path.join(".") || "arg"}: ${iss.message}`).join("; ");
+        throw new Error(msg);
+      }
+      return res.data;
+    }
+    if (typeof schema === "object") {
+      const values = Object.values(schema);
+      const isZodShape = values.some((v: any) => v && typeof v === "object" && "_def" in v);
+      if (isZodShape) {
+        const zObj = z.object(schema);
+        const res = zObj.safeParse(input);
+        if (!res.success) {
+          const msg = res.error.issues.map((iss: any) => `${iss.path.join(".") || "arg"}: ${iss.message}`).join("; ");
+          throw new Error(msg);
+        }
+        return res.data;
+      }
+    }
+  } catch (err: any) {
+    throw new Error(`Invalid arguments: ${err.message}`);
+  }
+  return input;
+}
+
+// ---------------------------------------------------------------------------
 // 1. ADD / INSTALL PLUGIN WITH DISAMBIGUATION
 // ---------------------------------------------------------------------------
 
@@ -106,7 +253,6 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
     return;
   }
 
-  // Local path install: `weavetab plugin add ./my-plugin` (npm installs the directory).
   if (
     inputName === "." ||
     inputName.startsWith("./") ||
@@ -134,7 +280,6 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
   let selectedPkg = inputName;
   let selectedCandidate: PluginCandidate | undefined;
 
-  // Disambiguation Flow
   if (candidates.length > 1) {
     if (wantOfficial) {
       selectedCandidate = candidates.find((c) => c.isOfficialShortcut) || candidates[0];
@@ -178,7 +323,7 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
       selectedCandidate = candidates.find((c) => c.packageName === selectedPkg);
     } else {
       console.error(pc.red(`[ERROR] Ambiguous plugin name "${inputName}".`));
-      console.error(pc.dim('Multiple packages match on npm:'));
+      console.error(pc.dim("Multiple packages match on npm:"));
       for (const c of candidates) {
         console.error(`  - ${c.packageName} (${c.label})`);
       }
@@ -193,14 +338,20 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
   }
 
   const trust = selectedCandidate
-    ? { tier: selectedCandidate.tier, label: selectedCandidate.label, badge: selectedCandidate.badge, tooltip: selectedCandidate.tooltip }
+    ? {
+        tier: selectedCandidate.tier,
+        label: selectedCandidate.label,
+        badge: selectedCandidate.badge,
+        tooltip: selectedCandidate.tooltip,
+      }
     : resolvePluginTrust(selectedPkg, verifiedPackages);
 
   console.log();
-  console.log(boxen(pc.bold(pc.cyan(" WEAVETAB PLUGIN INSTALL ")), { padding: 0, borderStyle: "round", borderColor: "cyan" }));
+  console.log(
+    boxen(pc.bold(pc.cyan(" WEAVETAB PLUGIN INSTALL ")), { padding: 0, borderStyle: "round", borderColor: "cyan" })
+  );
   console.log();
 
-  // Trust Resolution & Security Guard
   if (trust.tier === "official") {
     console.log(`${pc.bgBlue(pc.white(" OFFICIAL "))} ${pc.green(selectedPkg)}`);
     console.log(pc.dim("  Author: Weavetab Core Team"));
@@ -210,7 +361,6 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
     console.log(pc.dim("  Status: Listed in Weavetab Community Verified Registry."));
     console.log(pc.dim("  Security: Reviewed by Weavetab maintainers.\n"));
   } else {
-    // Unverified Tier: Show prominent warning banner
     const warningMessage = [
       pc.bold(pc.yellow("⚠️  SECURITY WARNING: UNVERIFIED COMMUNITY PLUGIN")),
       "",
@@ -234,7 +384,9 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
 
     if (!isForce) {
       if (!process.stdin.isTTY) {
-        console.log(pc.red("[ERROR] Unverified plugin cannot be installed in non-interactive mode without --yes flag."));
+        console.log(
+          pc.red("[ERROR] Unverified plugin cannot be installed in non-interactive mode without --yes flag.")
+        );
         return;
       }
 
@@ -250,7 +402,6 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
     }
   }
 
-  // Run npm install
   const spinner = ora(`Installing ${pc.cyan(selectedPkg)} via npm...`).start();
   const globalPluginDir = getGlobalPluginDir();
   const installResult = await runNpmCommand(["install", selectedPkg], globalPluginDir);
@@ -265,13 +416,15 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
 
   spinner.succeed(pc.green(`installed ${pc.bold(selectedPkg)}`));
 
-  // Inspect installed package for weavetab.json
   const targetDir = path.join(globalPluginDir, "node_modules", selectedPkg);
   const installedInfo = inspectInstalledPackage(targetDir);
 
   if (installedInfo && installedInfo.manifest) {
     const manifest = installedInfo.manifest;
     const tools = manifest.tools || [];
+    const commands = manifest.commands || [];
+    const prompts = manifest.prompts || [];
+    const resources = manifest.resources || [];
     const permissions = normalizePermissions(manifest.permissions);
 
     const infoLines = [
@@ -280,25 +433,52 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
       `  ${pc.dim("Version:")}     ${manifest.version || "1.0.0"}`,
       `  ${pc.dim("Author:")}      ${resolveManifestAuthor(manifest, "Community")}`,
       `  ${pc.dim("Trust Tier:")}  ${trust.badge}`,
+      `  ${pc.dim("AGENTS.md:")}   ${installedInfo.agentsMdContent ? pc.green("Bundled (Context-Safe)") : pc.yellow("Missing")}`,
       `  ${pc.dim("Description:")} ${manifest.description || "No description provided"}`,
     ];
 
+    if (commands.length > 0) {
+      infoLines.push("", `${pc.bold(`CLI Commands (${commands.length}):`)}`);
+      for (const cmd of commands) {
+        infoLines.push(
+          `  • ${pc.cyan(`weavetab plugin use ${selectedPkg} ${cmd.name}`)}: ${pc.dim(cmd.description || "")}`
+        );
+      }
+    }
+
     if (tools.length > 0) {
-      infoLines.push("", `${pc.bold(`Exposed Tools (${tools.length}):`)}`);
+      infoLines.push("", `${pc.bold(`Exposed MCP Tools (${tools.length}):`)}`);
       for (const tool of tools) {
         infoLines.push(`  • ${pc.cyan(tool.name)}: ${pc.dim(tool.description || "")}`);
       }
     }
 
+    if (prompts.length + resources.length > 0) {
+      infoLines.push("", `${pc.bold(`Utilities (${prompts.length} prompts, ${resources.length} resources):`)}`);
+      for (const pr of prompts) {
+        infoLines.push(`  • ${pc.magenta(`/${pr.name}`)}: ${pc.dim(pr.description || "Prompt utility")}`);
+      }
+      for (const rs of resources) {
+        infoLines.push(
+          `  • ${pc.magenta(`@${rs.uri || rs.uriTemplate || rs.name}`)}: ${pc.dim(rs.description || "Resource utility")}`
+        );
+      }
+    }
+
     const permsList: string[] = [];
+    if (permissions.commands?.add) permsList.push(`CLI Commands (${permissions.commands.reason || "unspecified"})`);
     if (permissions.network) permsList.push(`Network (${permissions.network.reason || "unspecified"})`);
     if (permissions.cdp) permsList.push(`CDP (${permissions.cdp.reason || "unspecified"})`);
     if (permissions.fs) permsList.push(`FileSystem (${permissions.fs.reason || "unspecified"})`);
     if (permissions.tools?.override?.length) {
-      permsList.push(`Tool Overrides: [${permissions.tools.override.join(", ")}] (${permissions.tools.reason || "unspecified"})`);
+      permsList.push(
+        `Tool Overrides: [${permissions.tools.override.join(", ")}] (${permissions.tools.reason || "unspecified"})`
+      );
     }
     if (permissions.tools?.remove?.length) {
-      permsList.push(`Tool Removals: [${permissions.tools.remove.join(", ")}] (${permissions.tools.reason || "unspecified"})`);
+      permsList.push(
+        `Tool Removals: [${permissions.tools.remove.join(", ")}] (${permissions.tools.reason || "unspecified"})`
+      );
     }
 
     if (permsList.length > 0) {
@@ -311,7 +491,8 @@ export async function runPluginAdd(inputName: string, args: string[] = []): Prom
     console.log();
     console.log(boxen(infoLines.join("\n"), { padding: 1, borderStyle: "round", borderColor: "green" }));
     console.log();
-    console.log(pc.green("✔ Plugin is ready to use! Restart Weavetab MCP server to activate changes.\n"));
+    touchPluginEpoch();
+    console.log(pc.green("✔ Plugin installed and hot-loaded into active MCP sessions!\n"));
   } else {
     console.log();
     console.log(
@@ -361,18 +542,32 @@ export async function runPluginAddLocal(inputPath: string): Promise<void> {
   const installedInfo = fs.existsSync(targetDir) ? inspectInstalledPackage(targetDir) : local;
   const manifest = (installedInfo?.manifest || local.manifest) as any;
   const tools = manifest.tools || [];
+  const commands = manifest.commands || [];
   console.log();
-  console.log(boxen(
-    `${pc.bold("Plugin Details:")}\n` +
-    `  ${pc.dim("Name:")}        ${manifest.name || local.packageName}\n` +
-    `  ${pc.dim("Version:")}     ${manifest.version || "1.0.0"}\n` +
-    `  ${pc.dim("Source:")}      ${absDir} (local path)\n` +
-    `  ${pc.dim("Description:")} ${manifest.description || "No description provided"}` +
-    (tools.length > 0 ? `\n\n${pc.bold(`Exposed Tools (${tools.length}):`)}` + tools.map((t: any) => `\n  • ${pc.cyan(t.name)}: ${pc.dim(t.description || "")}`).join("") : ""),
-    { padding: 1, borderStyle: "round", borderColor: "green" }
-  ));
+  console.log(
+    boxen(
+      `${pc.bold("Plugin Details:")}\n` +
+        `  ${pc.dim("Name:")}        ${manifest.name || local.packageName}\n` +
+        `  ${pc.dim("Version:")}     ${manifest.version || "1.0.0"}\n` +
+        `  ${pc.dim("Source:")}      ${absDir} (local path)\n` +
+        `  ${pc.dim("Instructions:")} ${installedInfo?.instructions || installedInfo?.agentsMdContent ? pc.green("Declared") : pc.yellow("None")}\n` +
+        `  ${pc.dim("Description:")} ${manifest.description || "No description provided"}` +
+        (commands.length > 0
+          ? `\n\n${pc.bold(`CLI Commands (${commands.length}):`)}` +
+            commands
+              .map((c: any) => `\n  • ${pc.cyan(`weavetab plugin use ${local.packageName} ${c.name}`)}: ${pc.dim(c.description || "")}`)
+              .join("")
+          : "") +
+        (tools.length > 0
+          ? `\n\n${pc.bold(`Exposed Tools (${tools.length}):`)}` +
+            tools.map((t: any) => `\n  • ${pc.cyan(t.name)}: ${pc.dim(t.description || "")}`).join("")
+          : ""),
+      { padding: 1, borderStyle: "round", borderColor: "green" }
+    )
+  );
   console.log();
-  console.log(pc.green("✔ Plugin is ready to use! Restart Weavetab MCP server to activate changes.\n"));
+  touchPluginEpoch();
+  console.log(pc.green("✔ Plugin installed and hot-loaded into active MCP sessions!\n"));
 }
 
 // ---------------------------------------------------------------------------
@@ -384,12 +579,16 @@ export async function runPluginList(): Promise<void> {
   const plugins = listInstalledPlugins();
 
   console.clear();
-  console.log(boxen(pc.bold(pc.cyan(" INSTALLED WEAVETAB PLUGINS ")), { padding: 0, borderStyle: "round", borderColor: "cyan" }));
+  console.log(
+    boxen(pc.bold(pc.cyan(" INSTALLED WEAVETAB PLUGINS ")), { padding: 0, borderStyle: "round", borderColor: "cyan" })
+  );
   console.log();
 
   if (plugins.length === 0) {
     console.log(pc.dim("No Weavetab plugins found in the local node_modules directory."));
-    console.log(pc.dim(`Install official or community plugins using: ${pc.cyan("weavetab plugin add <packageName>")}\n`));
+    console.log(
+      pc.dim(`Install official or community plugins using: ${pc.cyan("weavetab plugin add <packageName>")}\n`)
+    );
     return;
   }
 
@@ -399,22 +598,326 @@ export async function runPluginList(): Promise<void> {
     const trust = resolvePluginTrust(pInfo.packageName, verifiedPackages);
     const m = pInfo.manifest;
     const toolCount = m.tools?.length ?? 0;
+    const cmdCount = m.commands?.length ?? 0;
+    const promptCount = m.prompts?.length ?? 0;
+    const resourceCount = m.resources?.length ?? 0;
 
     console.log(`${trust.badge} ${pc.bold(pc.cyan(pInfo.packageName))} ${pc.dim(`v${m.version || "1.0.0"}`)}`);
     console.log(`  ${pc.dim("Author:")}      ${resolveManifestAuthor(m, "Unknown")}`);
     console.log(`  ${pc.dim("Description:")} ${m.description || "(none)"}`);
-    console.log(`  ${pc.dim("Tools:")}       ${toolCount} tool(s) registered`);
+    console.log(
+      `  ${pc.dim("Capabilities:")} ${toolCount} tool(s), ${cmdCount} CLI command(s), ${promptCount + resourceCount} utilit${promptCount + resourceCount === 1 ? "y" : "ies"} (${promptCount} / prompts, ${resourceCount} @ resources)`
+    );
+    console.log(
+      `  ${pc.dim("Instructions:")} ${pInfo.instructions || pInfo.agentsMdContent ? pc.green(`Declared (view via: weavetab plugin use ${pInfo.packageName} instructions)`) : pc.yellow("None")}`
+    );
 
+    if (m.commands && m.commands.length > 0) {
+      const cmdNames = m.commands.map((c) => pc.cyan(c.name)).join(", ");
+      console.log(`  ${pc.dim("Commands:")}    ${cmdNames}`);
+    }
     if (m.tools && m.tools.length > 0) {
       const toolNames = m.tools.map((t) => pc.green(t.name)).join(", ");
-      console.log(`  ${pc.dim("Tool Names:")}  ${toolNames}`);
+      console.log(`  ${pc.dim("Tools:")}       ${toolNames}`);
     }
     console.log();
   }
 }
 
 // ---------------------------------------------------------------------------
-// 3. SEARCH PLUGINS (OFFICIAL & VERIFIED REGISTRY + NPM)
+// 3. USE / RUN PLUGIN CLI COMMANDS, TOOLS & AGENTS.MD PLAYBOOK
+// ---------------------------------------------------------------------------
+
+export async function runPluginUse(args: string[]): Promise<void> {
+  const pkgQuery = args[0];
+  if (!pkgQuery || pkgQuery === "--help" || pkgQuery === "-h") {
+    console.log();
+    console.log(
+      boxen(pc.bold(pc.cyan(" WEAVETAB PLUGIN USE ")), { padding: 0, borderStyle: "round", borderColor: "cyan" })
+    );
+    console.log();
+    console.log(pc.bold("USAGE"));
+    console.log(`  ${pc.cyan("weavetab plugin use <plugin>")}                        Inspect plugin commands, tools & utilities`);
+    console.log(`  ${pc.cyan("weavetab plugin use <plugin> agents")}                 Read the plugin's AGENTS.md playbook`);
+    console.log(`  ${pc.cyan("weavetab plugin use <plugin> <command> [--flags]")}    Execute a plugin CLI command`);
+    console.log(`  ${pc.cyan("weavetab plugin use <plugin> <tool> [--flags]")}       Execute a plugin MCP tool from the CLI`);
+    console.log();
+    console.log(pc.bold("EXAMPLES"));
+    console.log(`  ${pc.dim("$")} weavetab plugin use github repo-summary --repo weavetab/mcp`);
+    console.log(`  ${pc.dim("$")} weavetab plugin use realtime status`);
+    console.log(`  ${pc.dim("$")} weavetab plugin use auth profiles`);
+    console.log(`  ${pc.dim("$")} weavetab plugin use chaos agents`);
+    console.log();
+    return;
+  }
+
+  const loaded = await loadAndInitPlugin(pkgQuery);
+  if (!loaded) {
+    console.error(pc.red(`[ERROR] Plugin "${pkgQuery}" is not installed.`));
+    console.error(pc.dim(`Install it first with: ${pc.cyan(`weavetab plugin add ${pkgQuery}`)}`));
+    process.exit(1);
+  }
+
+  const { plugin, info } = loaded;
+  const target = args[1];
+  const restArgs = args.slice(2);
+
+  // If no target or --help, print overview of commands, tools, utilities, and AGENTS.md pointer
+  if (!target || target === "--help" || target === "-h" || target === "help") {
+    const cmds = plugin.commands || [];
+    const tools = plugin.tools || [];
+    const prompts = plugin.prompts || [];
+    const resources = plugin.resources || [];
+
+    console.log();
+    console.log(
+      boxen(
+        `${pc.bold(pc.cyan(info.packageName))} ${pc.dim(`v${plugin.version}`)}\n` +
+          pc.dim(plugin.description || info.manifest.description || ""),
+        { padding: 1, borderStyle: "round", borderColor: "cyan" }
+      )
+    );
+    console.log();
+
+    if (cmds.length > 0) {
+      console.log(pc.bold(`CLI COMMANDS (${cmds.length}) — permissions.commands.add = true`));
+      for (const c of cmds) {
+        console.log(`  ${pc.cyan(`weavetab plugin use ${pkgQuery} ${c.name}`)}`);
+        console.log(`    ${pc.dim(c.description || "")}`);
+        if (c.usage) console.log(`    ${pc.dim(`Usage: ${c.usage}`)}`);
+      }
+      console.log();
+    } else {
+      console.log(pc.dim("No CLI commands registered by this plugin.\n"));
+    }
+
+    if (tools.length > 0) {
+      console.log(pc.bold(`MCP TOOLS (${tools.length}) — callable via CLI or MCP`));
+      for (const t of tools) {
+        console.log(`  ${pc.green(`weavetab plugin use ${pkgQuery} ${t.name}`)} — ${pc.dim(t.description || "")}`);
+      }
+      console.log();
+    }
+
+    if (prompts.length + resources.length > 0) {
+      console.log(
+        pc.bold(`UTILITIES (${prompts.length} / Prompts, ${resources.length} @ Resources)`)
+      );
+      for (const pr of prompts) {
+        console.log(`  ${pc.magenta(`/${pr.name}`)} (Prompt) — ${pc.dim(pr.description || "")}`);
+      }
+      for (const rs of resources) {
+        console.log(
+          `  ${pc.magenta(`@${rs.uri || rs.uriTemplate || rs.name}`)} (Resource) — ${pc.dim(rs.description || "")}`
+        );
+      }
+      console.log();
+    }
+
+    const agentText = plugin.instructions || plugin.agentsMdContent;
+    if (agentText) {
+      console.log(
+        pc.dim(`Agent Instructions: run `) +
+          pc.cyan(`weavetab plugin use ${pkgQuery} instructions`) +
+          pc.dim(` to print full instructions.\n`)
+      );
+    }
+    return;
+  }
+
+  // `weavetab plugin use <pkg> instructions` (or `agents` alias) -> print instructions
+  if (target === "instructions" || target === "--instructions" || target === "agents" || target === "agents.md" || target === "--agents") {
+    const text = plugin.instructions || plugin.agentsMdContent;
+    if (!text) {
+      console.error(pc.yellow(`[WARN] Plugin "${info.packageName}" does not provide instructions.`));
+      process.exit(1);
+    }
+    console.log(text);
+    return;
+  }
+
+  const { positional, flags } = parseCliInvokeArgs(restArgs);
+  const pluginCtx = (plugin as any)._context;
+  const perms = normalizePermissions(plugin.permissions || info.manifest.permissions);
+
+  // 1. Match against registered CLI Commands (`plugin.commands`)
+  const matchedCmd = (plugin.commands || []).find((c) => c.name === target);
+  if (matchedCmd) {
+    if (!perms.commands?.add) {
+      console.error(
+        pc.red(
+          `[PERMISSION DENIED] Plugin "${info.packageName}" attempted to run CLI command "${target}" without 'permissions.commands.add: true' in weavetab.json.`
+        )
+      );
+      process.exit(1);
+    }
+
+    const validatedFlags = validateAgainstPluginSchema(matchedCmd.schema, flags);
+
+    let session: any = undefined;
+    let tabClient: any = undefined;
+    if (matchedCmd.requiresSession) {
+      const { loadConfig } = await import("../config/loader.js");
+      const { getOrConnect } = await import("../cdp/connector.js");
+      const cfg = await loadConfig();
+      session = (await getOrConnect(cfg)) as any;
+      const ev = async (expression: string) => (await session.Runtime.evaluate({ expression, returnByValue: true })).result?.value;
+      tabClient = createCliTabProxy(session);
+    }
+
+    const cmdCtx = {
+      args: positional,
+      flags: validatedFlags,
+      tab: tabClient,
+      desktop: pluginCtx.desktop,
+      storage: pluginCtx.storage,
+      config: pluginCtx.config,
+      logger: pluginCtx.logger,
+      session,
+    };
+
+    const output = await matchedCmd.handler(validatedFlags, cmdCtx);
+    if (typeof output === "string") {
+      console.log(output);
+    } else if (output !== undefined) {
+      console.log(JSON.stringify(output, null, 2));
+    }
+    return;
+  }
+
+  // 2. Match against registered MCP Tools (`plugin.tools`)
+  const matchedTool = (plugin.tools || []).find((t) => t.name === target);
+  if (matchedTool) {
+    if (!perms.tools?.add) {
+      console.error(
+        pc.red(
+          `[PERMISSION DENIED] Plugin "${info.packageName}" cannot run tool "${target}" without 'permissions.tools.add: true'.`
+        )
+      );
+      process.exit(1);
+    }
+
+    const validatedArgs = validateAgainstPluginSchema((matchedTool as any).schema, flags);
+
+    let session: any = undefined;
+    let tabClient: any = undefined;
+    if (matchedTool.requiresSession !== false) {
+      try {
+        const { loadConfig } = await import("../config/loader.js");
+        const { getOrConnect } = await import("../cdp/connector.js");
+        const cfg = await loadConfig();
+        session = (await getOrConnect(cfg)) as any;
+      const ev = async (expression: string) => (await session.Runtime.evaluate({ expression, returnByValue: true })).result?.value;
+      tabClient = createCliTabProxy(session);
+      } catch {
+        // Allow API-capable tools to still run or report their own session error
+      }
+    }
+
+    const toolCtx = {
+      tab: tabClient,
+      desktop: pluginCtx.desktop,
+      storage: pluginCtx.storage,
+      config: pluginCtx.config,
+      logger: pluginCtx.logger,
+      session,
+    };
+
+    const callCtx = session ? Object.assign(Object.create(session), toolCtx) : toolCtx;
+    const res =
+      matchedTool.handler.length <= 2
+        ? await matchedTool.handler(validatedArgs, callCtx)
+        : await matchedTool.handler(validatedArgs, session, pluginCtx.config);
+
+    if (typeof res === "string") {
+      console.log(res);
+    } else if (res && Array.isArray(res.content)) {
+      for (const item of res.content) {
+        if (item.type === "text" && typeof item.text === "string") {
+          console.log(item.text);
+        } else {
+          console.log(JSON.stringify(item, null, 2));
+        }
+      }
+      if (res.isError) process.exit(1);
+    } else if (res !== undefined) {
+      console.log(JSON.stringify(res, null, 2));
+    }
+    return;
+  }
+
+  // 3. Match against Prompt Utilities (`/prompt`) or Resource Utilities (`@uri`)
+  const cleanPromptName = target.startsWith("/") ? target.slice(1) : target;
+  const matchedPrompt = (plugin.prompts || []).find((pr) => pr.name === cleanPromptName);
+  if (matchedPrompt) {
+    const strFlags: Record<string, string> = {};
+    for (const [k, v] of Object.entries(flags)) strFlags[k] = String(v);
+    const out = await matchedPrompt.handler(strFlags, {
+      storage: pluginCtx.storage,
+      config: pluginCtx.config,
+      logger: pluginCtx.logger,
+    });
+    console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
+    return;
+  }
+
+  const cleanResName = target.startsWith("@") ? target.slice(1) : target;
+  const matchedRes = (plugin.resources || []).find(
+    (r) => r.name === cleanResName || r.uri === cleanResName || r.uriTemplate === cleanResName
+  );
+  if (matchedRes) {
+    const uri = matchedRes.uri || cleanResName;
+    const out = await matchedRes.read(uri, flags as any, {
+      storage: pluginCtx.storage,
+      config: pluginCtx.config,
+      logger: pluginCtx.logger,
+    });
+    console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
+    return;
+  }
+
+  console.error(
+    pc.red(
+      `[ERROR] Target "${target}" not found in plugin "${info.packageName}".`
+    )
+  );
+  const availableCmds = (plugin.commands || []).map((c) => c.name);
+  const availableTools = (plugin.tools || []).map((t) => t.name);
+  if (availableCmds.length > 0) {
+    console.error(pc.dim(`Available CLI commands: ${availableCmds.join(", ")}`));
+  }
+  if (availableTools.length > 0) {
+    console.error(pc.dim(`Available MCP tools:    ${availableTools.join(", ")}`));
+  }
+  process.exit(1);
+}
+
+export async function runPluginAgents(pkgQuery?: string): Promise<void> {
+  if (pkgQuery) {
+    await runPluginUse([pkgQuery, "instructions"]);
+    return;
+  }
+
+  const installed = listInstalledPlugins();
+  if (installed.length === 0) {
+    console.log(pc.dim("No plugins installed."));
+    return;
+  }
+
+  for (const pInfo of installed) {
+    console.log(boxen(pc.bold(pc.cyan(`${pInfo.packageName} — Instructions`)), { padding: 0, borderStyle: "round", borderColor: "cyan" }));
+    const text = pInfo.instructions || pInfo.agentsMdContent;
+    if (text) {
+      console.log(text);
+    } else {
+      console.log(pc.dim("(No instructions declared)"));
+    }
+    console.log();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. SEARCH PLUGINS (OFFICIAL & VERIFIED REGISTRY + NPM)
 // ---------------------------------------------------------------------------
 
 export async function runPluginSearch(query?: string): Promise<void> {
@@ -424,7 +927,6 @@ export async function runPluginSearch(query?: string): Promise<void> {
   const verifiedPackages = await getVerifiedPackages();
   const results: Array<{ name: string; tier: string; badge: string; description: string; author: string }> = [];
 
-  // 1. Search verified registry
   for (const pkgName of verifiedPackages) {
     if (!q || pkgName.toLowerCase().includes(q)) {
       results.push({
@@ -437,7 +939,6 @@ export async function runPluginSearch(query?: string): Promise<void> {
     }
   }
 
-  // 2. Query npm search
   try {
     const searchQuery = q ? `weavetab ${q}` : "weavetab plugin";
     const res = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(searchQuery)}&size=15`, {
@@ -467,12 +968,20 @@ export async function runPluginSearch(query?: string): Promise<void> {
         }
       }
     }
-  } catch { /* offline / network error */ }
+  } catch {
+    /* offline / network error */
+  }
 
   spinner.stop();
 
   console.log();
-  console.log(boxen(pc.bold(pc.cyan(` PLUGIN SEARCH RESULTS: "${q || "all"}" `)), { padding: 0, borderStyle: "round", borderColor: "cyan" }));
+  console.log(
+    boxen(pc.bold(pc.cyan(` PLUGIN SEARCH RESULTS: "${q || "all"}" `)), {
+      padding: 0,
+      borderStyle: "round",
+      borderColor: "cyan",
+    })
+  );
   console.log();
 
   if (results.length === 0) {
@@ -492,7 +1001,7 @@ export async function runPluginSearch(query?: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 4. BROWSE & ONE-CLICK INSTALL (TERMINAL MARKETPLACE)
+// 5. BROWSE & ONE-CLICK INSTALL (TERMINAL MARKETPLACE)
 // ---------------------------------------------------------------------------
 
 export async function runPluginBrowse(): Promise<void> {
@@ -514,7 +1023,9 @@ export async function runPluginBrowse(): Promise<void> {
     items.push({
       value: pkg,
       label: `${pc.bgGreen(pc.black(" Verified "))} ${pc.bold(pkg)}${status}`,
-      hint: isInstalled ? "Already installed. Select to reinstall or inspect." : "Verified community plugin. Press Enter to install.",
+      hint: isInstalled
+        ? "Already installed. Select to reinstall or inspect."
+        : "Verified community plugin. Press Enter to install.",
     });
   }
 
@@ -527,7 +1038,7 @@ export async function runPluginBrowse(): Promise<void> {
 
   items.push({
     value: "__search__",
-    label: `${pc.cyan("🔍 Search for community plugins on npm...")}`,
+    label: `${pc.cyan("Search for community plugins on npm...")}`,
     hint: "Search for third-party community plugins",
   });
 
@@ -555,10 +1066,10 @@ export async function runPluginBrowse(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 5. REMOVE / UNINSTALL PLUGIN
+// 6. REMOVE / UNINSTALL PLUGIN
 // ---------------------------------------------------------------------------
 
-export async function runPluginRemove(pkgName: string, args: string[] = []): Promise<void> {
+export async function runPluginRemove(pkgName: string): Promise<void> {
   if (!pkgName || pkgName.startsWith("-")) {
     console.log(pc.red("[ERROR] Please specify the package name to remove."));
     console.log(pc.dim("Usage: weavetab plugin remove <packageName>"));
@@ -576,11 +1087,12 @@ export async function runPluginRemove(pkgName: string, args: string[] = []): Pro
   }
 
   spinner.succeed(pc.green(`removed ${pc.bold(pkgName)}`));
+  touchPluginEpoch();
   console.log(pc.dim("The plugin and its tools have been uninstalled.\n"));
 }
 
 // ---------------------------------------------------------------------------
-// 6. VERIFY / CHECK PLUGIN TRUST
+// 7. VERIFY / CHECK PLUGIN TRUST & AGENTS.MD COMPLIANCE
 // ---------------------------------------------------------------------------
 
 export async function runPluginVerify(pkgName: string): Promise<void> {
@@ -594,14 +1106,30 @@ export async function runPluginVerify(pkgName: string): Promise<void> {
   const verifiedPackages = await getVerifiedPackages();
   spinner.stop();
 
-  const trust = resolvePluginTrust(pkgName, verifiedPackages);
+  const localInfo = resolveInstalledPluginInfo(pkgName);
+  const resolvedName = localInfo?.packageName || pkgName;
+  const trust = resolvePluginTrust(resolvedName, verifiedPackages);
 
   console.log();
-  console.log(boxen(pc.bold(pc.cyan(` PLUGIN TRUST REPORT: ${pkgName} `)), { padding: 0, borderStyle: "round", borderColor: "cyan" }));
+  console.log(
+    boxen(pc.bold(pc.cyan(` PLUGIN TRUST REPORT: ${resolvedName} `)), {
+      padding: 0,
+      borderStyle: "round",
+      borderColor: "cyan",
+    })
+  );
   console.log();
-  console.log(`  ${pc.dim("Package:")}    ${pc.bold(pkgName)}`);
+  console.log(`  ${pc.dim("Package:")}    ${pc.bold(resolvedName)}`);
   console.log(`  ${pc.dim("Tier:")}       ${trust.badge} (${trust.label})`);
   console.log(`  ${pc.dim("Details:")}    ${trust.tooltip}`);
+  if (localInfo) {
+    const text = localInfo.instructions || localInfo.agentsMdContent;
+    const hasInstructions = Boolean(text);
+    const chars = text ? text.length : 0;
+    console.log(
+      `  ${pc.dim("Instructions:")} ${hasInstructions ? pc.green(`Compliant (${chars}/${MAX_AGENTS_MD_CHARS} chars)`) : pc.yellow("None declared")}`
+    );
+  }
   console.log();
 
   if (trust.tier === "unverified") {
@@ -611,7 +1139,7 @@ export async function runPluginVerify(pkgName: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 7. MAIN CLI ROUTER FOR PLUGINS (User / Operations Mode)
+// 8. MAIN CLI ROUTER FOR PLUGINS (User / Operations Mode)
 // ---------------------------------------------------------------------------
 
 export async function runPluginCli(args: string[]): Promise<void> {
@@ -625,28 +1153,38 @@ export async function runPluginCli(args: string[]): Promise<void> {
 
   if (!subcmd || subcmd === "--help" || subcmd === "-h" || subcmd === "help") {
     console.log();
-    console.log(boxen(pc.bold(pc.cyan(" WEAVETAB PLUGIN MANAGER ")), { padding: 0, borderStyle: "round", borderColor: "cyan" }));
+    console.log(
+      boxen(pc.bold(pc.cyan(" WEAVETAB PLUGIN MANAGER ")), { padding: 0, borderStyle: "round", borderColor: "cyan" })
+    );
     console.log();
     console.log(pc.bold("USAGE"));
     console.log(`  weavetab plugin <command> [options]`);
     console.log();
     console.log(pc.bold("COMMANDS"));
-    console.log(`  ${pc.cyan("add <pkg|path>")}     Install a plugin by npm name or local path (e.g. @acme/weavetab-plugin, ./my-plugin)`);
-    console.log(`  ${pc.cyan("browse")}             Interactive terminal explorer to browse & 1-click install`);
-    console.log(`  ${pc.cyan("search [query]")}     Search plugins across official registry & npm`);
-    console.log(`  ${pc.cyan("list")}               List all installed plugins and their registered tools`);
-    console.log(`  ${pc.cyan("remove <pkg>")}       Uninstall a plugin from local environment`);
-    console.log(`  ${pc.cyan("verify <pkg>")}       Check trust tier and registry verification status`);
+    console.log(
+      `  ${pc.cyan("use <pkg> [cmd]")}     Execute a plugin CLI command, MCP tool, or read its AGENTS.md playbook`
+    );
+    console.log(
+      `  ${pc.cyan("agents [pkg]")}        Print the context-safe AGENTS.md guide for one or all installed plugins`
+    );
+    console.log(
+      `  ${pc.cyan("add <pkg|path>")}      Install a plugin by npm name or local path (e.g. @acme/weavetab-plugin, ./my-plugin)`
+    );
+    console.log(`  ${pc.cyan("browse")}              Interactive terminal explorer to browse & 1-click install`);
+    console.log(`  ${pc.cyan("search [query]")}      Search plugins across official registry & npm`);
+    console.log(`  ${pc.cyan("list")}                List all installed plugins, CLI commands, tools, and utilities`);
+    console.log(`  ${pc.cyan("remove <pkg>")}        Uninstall a plugin from local environment`);
+    console.log(`  ${pc.cyan("verify <pkg>")}        Check trust tier, registry status, and AGENTS.md compliance`);
     console.log();
     console.log(pc.bold("DEVELOPER SDK (@weavetab/sdk)"));
     console.log(`  ${pc.dim("Scaffold a plugin:")}  ${pc.cyan("npx @weavetab/sdk init <name>")}`);
     console.log(`  ${pc.dim("Build & validate:")}   ${pc.cyan("npx @weavetab/sdk build")}`);
     console.log();
     console.log(pc.bold("OPTIONS (for 'add' / general)"));
-    console.log(`  ${pc.cyan("--refresh")}          Invalidate and refresh the verified plugin cache`);
-    console.log(`  ${pc.cyan("--official, -O")}     Prefer official @weavetab/plugin-<name>`);
-    console.log(`  ${pc.cyan("--community, -C")}    Prefer community package`);
-    console.log(`  ${pc.cyan("--yes, -y")}          Bypass interactive warning prompt for unverified plugins`);
+    console.log(`  ${pc.cyan("--refresh")}           Invalidate and refresh the verified plugin cache`);
+    console.log(`  ${pc.cyan("--official, -O")}      Prefer official @weavetab/plugin-<name>`);
+    console.log(`  ${pc.cyan("--community, -C")}     Prefer community package`);
+    console.log(`  ${pc.cyan("--yes, -y")}           Bypass interactive warning prompt for unverified plugins`);
     console.log();
     return;
   }
@@ -656,6 +1194,16 @@ export async function runPluginCli(args: string[]): Promise<void> {
     console.log(pc.dim("To scaffold a new plugin:   ") + pc.cyan("npx @weavetab/sdk init <name>"));
     console.log(pc.dim("To build/validate a plugin: ") + pc.cyan("npx @weavetab/sdk build"));
     console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://weavetab.dev/docs/sdk-overview\n"));
+    return;
+  }
+
+  if (subcmd === "use" || subcmd === "run" || subcmd === "exec") {
+    await runPluginUse(cleanArgs.slice(1));
+    return;
+  }
+
+  if (subcmd === "agents" || subcmd === "guide") {
+    await runPluginAgents(cleanArgs[1]);
     return;
   }
 
@@ -680,7 +1228,7 @@ export async function runPluginCli(args: string[]): Promise<void> {
   }
 
   if (subcmd === "remove" || subcmd === "rm" || subcmd === "uninstall") {
-    await runPluginRemove(cleanArgs[1], cleanArgs.slice(2));
+    await runPluginRemove(cleanArgs[1]);
     return;
   }
 
