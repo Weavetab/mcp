@@ -10,8 +10,8 @@ By submitting a Contribution (via GitHub pull request, issue patch, commit, or o
 
 ### 1. Definitions
 - **"You"** (or **"Contributor"**) means the individual or legal entity submitting a Contribution to Weavetab.
-- **"Contribution"** means any original work of authorship, code, documentation, test suite, enhancement, bug fix, or other material submitted by You for inclusion in any Weavetab repository or package (including `@weavetab/mcp`, `@weavetab/sdk`, `@weavetab/skills`, and associated plugins).
-- **"Maintainer"** means **fy2ne** and any designated successors or legal assignees of the Weavetab project.
+- **"Contribution"** means any original work of authorship, code, documentation, test suite, enhancement, bug fix, or other material submitted by You for inclusion in any official Weavetab repository or package (including `@weavetab/mcp`, `@weavetab/sdk`, and `@weavetab/skills`).
+- **"Maintainer"** means **Weavetab** (maintained and owned by **fy2ne** <hello@fy2ne.me>) and any designated successors or legal assignees of the Weavetab project.
 
 ---
 

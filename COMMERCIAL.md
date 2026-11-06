@@ -40,4 +40,4 @@ A **Weavetab Commercial License** is required if:
 To evaluate or purchase a commercial license:
 - **Email**: `license@weavetab.dev` (or `hello@fy2ne.me`)
 - **Website**: [weavetab.dev/pricing](https://weavetab.dev)
-- **Maintainer**: [fy2ne](https://fy2ne.me)
+- **Organization & Ownership**: [Weavetab](https://weavetab.dev) (owned by [fy2ne](https://fy2ne.me))
