@@ -1,6 +1,6 @@
 # Weavetab MCP Security Policy
 
-> **Version:** 2.6.2 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.6.3 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 ---
 

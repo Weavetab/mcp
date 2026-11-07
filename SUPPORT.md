@@ -59,13 +59,3 @@ Need dedicated support, custom MCP tool development, enterprise security auditin
 * **Founder & Lead Maintainer**: [fy2ne](https://github.com/fy2ne)
 * **Contact**: [hello@fy2ne.me](mailto:hello@fy2ne.me)
 * **Website**: [https://fy2ne.me](https://fy2ne.me)
-
----
-
-## 6. Sponsoring & Financial Support
-
-Weavetab is an open-source, AGPL-licensed browser and desktop automation engine. If Weavetab powers your production agents or saves your team engineering hours, consider supporting ongoing development:
-
-* **[GitHub Sponsors](https://github.com/sponsors/fy2ne)** — Monthly or one-time developer sponsorship.
-
-Your sponsorship funds continuous CDP compatibility updates, zero-API anti-bot heuristic research, and plugin development.

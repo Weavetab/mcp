@@ -4,7 +4,7 @@
   "title": "WeavetabPluginManifest",
   "description": "Schema definition for Weavetab plugin manifest (weavetab.json)",
   "type": "object",
-  "required": ["name", "version"],
+  "required": ["name"],
   "properties": {
     "$schema": {
       "type": "string",
@@ -12,7 +12,7 @@
     },
     "name": {
       "type": "string",
-      "description": "Unique plugin package name (e.g., '@acme/weavetab-plugin', 'my-plugin').",
+      "description": "Unique plugin package name matching package.json (e.g., '@weavetab/plugin-github', 'wt-choas').",
       "pattern": "^(?:@[a-z0-9-*~][a-z0-9-*._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"
     },
     "displayName": {
@@ -20,80 +20,44 @@
       "description": "Human-readable title shown on weavetab.dev (e.g., 'GitHub'). Optional. When absent the registry derives one from name.",
       "maxLength": 60
     },
-    "version": {
-      "type": "string",
-      "description": "Semantic version string (e.g., '1.0.0')."
-    },
     "description": {
       "type": "string",
       "description": "Human-readable summary of what the plugin provides."
+    },
+    "tags": {
+      "type": "array",
+      "description": "Discovery category tags for the plugin.",
+      "items": { "type": "string" }
+    },
+    "logo": {
+      "type": "string",
+      "description": "Relative path or URL to the plugin logo."
+    },
+    "banner": {
+      "type": "string",
+      "description": "Relative path or URL to the plugin header banner."
+    },
+    "links": {
+      "type": "object",
+      "description": "Optional external links (docs, discord, github, issues, homepage).",
+      "properties": {
+        "github": { "type": "string" },
+        "npm": { "type": "string" },
+        "docs": { "type": "string" },
+        "discord": { "type": "string" },
+        "issues": { "type": "string" },
+        "homepage": { "type": "string" }
+      },
+      "additionalProperties": { "type": "string" }
     },
     "entry": {
       "type": "string",
       "description": "Entry point file relative to the plugin root (e.g., 'dist/index.js'). Defaults to 'dist/index.js' or package.json main."
     },
-    "agentsMd": {
+    "instructions": {
       "type": "string",
-      "description": "Relative path to the mandatory AI agent playbook file (defaults to 'AGENTS.md'). Must be <= 80 lines and <= 3200 characters."
-    },
-    "author": {
-      "description": "Plugin author name or author object with contact details.",
-      "oneOf": [
-        { "type": "string" },
-        {
-          "type": "object",
-          "properties": {
-            "name": { "type": "string" },
-            "email": { "type": "string" },
-            "url": { "type": "string" },
-            "role": { "type": "string" }
-          },
-          "required": ["name"]
-        }
-      ]
-    },
-    "authors": {
-      "type": "array",
-      "description": "List of plugin contributors or co-authors.",
-      "items": {
-        "oneOf": [
-          { "type": "string" },
-          {
-            "type": "object",
-            "properties": {
-              "name": { "type": "string" },
-              "email": { "type": "string" },
-              "url": { "type": "string" },
-              "role": { "type": "string" }
-            },
-            "required": ["name"]
-          }
-        ]
-      }
-    },
-    "license": {
-      "type": "string",
-      "description": "SPDX license identifier (e.g., 'MIT', 'Apache-2.0')."
-    },
-    "engines": {
-      "type": "object",
-      "description": "Engine requirements for the plugin runtime.",
-      "properties": {
-        "weavetab": {
-          "type": "string",
-          "description": "Semver range of compatible Weavetab versions (e.g., '^2.6.2')."
-        },
-        "node": {
-          "type": "string",
-          "description": "Semver range of compatible Node.js versions."
-        }
-      },
-      "additionalProperties": { "type": "string" }
-    },
-    "environments": {
-      "type": "array",
-      "description": "Environments where this plugin can execute (e.g. ['mcp', 'cli', 'browser']).",
-      "items": { "type": "string" }
+      "description": "Operational instructions, heuristics, and guidance for AI agents interacting with this plugin. Strictly capped to prevent context window overflow (max 3200 characters, ~80 lines).",
+      "maxLength": 3200
     },
     "defaultConfig": {
       "type": "object",

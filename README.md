@@ -10,7 +10,7 @@
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square" alt="Node" />
   <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-41-ec4899?style=flat-square" alt="tools" /></a>
-  <a href="https://github.com/sponsors/fy2ne"><img src="https://img.shields.io/badge/sponsor-fy2ne-ea4aaa?style=flat-square&logo=github-sponsors" alt="sponsor" /></a>
+
 </p>
 
 <p>
@@ -229,6 +229,7 @@ weavetab config                 # Interactive configuration wizard
 weavetab secrets set KEY_NAME   # Store a secret (never echoed)
 weavetab secrets list           # List stored secret keys (not values)
 weavetab plugin add <name>      # Install a verified/confirmed plugin
+weavetab plugin update <name>   # Interactively upgrade an installed plugin
 weavetab plugin list            # List installed plugins
 ```
 
@@ -269,4 +270,4 @@ AGPL-3.0-only. Client connections over stdio or WebSocket do not extend copyleft
 
 For commercial embedding, closed-source SaaS, or proprietary enterprise licensing, see [COMMERCIAL.md](../COMMERCIAL.md) or contact license@weavetab.dev.
 
-[Sponsor development](https://github.com/sponsors/fy2ne) &nbsp;&middot;&nbsp; [Discussions](https://github.com/Weavetab/mcp/discussions) &nbsp;&middot;&nbsp; [SUPPORT.md](SUPPORT.md)
+[Sponsor on Ko-fi](https://ko-fi.com/fy2ne) &nbsp;&middot;&nbsp; [Discussions](https://github.com/Weavetab/mcp/discussions) &nbsp;&middot;&nbsp; [SUPPORT.md](SUPPORT.md)

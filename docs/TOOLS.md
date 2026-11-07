@@ -1,6 +1,6 @@
 # Weavetab MCP Tool Reference
 
-> **Version:** 2.6.2 | **Total Tools:** 41 | **Architecture:** Direct CDP WebSocket
+> **Version:** 2.6.3 | **Total Tools:** 41 | **Architecture:** Direct CDP WebSocket
 
 Weavetab provides 41 production-grade MCP tools organized into functional categories.
 

@@ -1,8 +1,8 @@
 # Weavetab Plugin System & SDK Specification
 
-> **Version:** 2.6.2 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
+> **Version:** 2.6.3 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
 
-The **Weavetab Plugin System** allows developers to extend the MCP runtime and CLI with custom MCP **Tools**, terminal CLI **Commands** (`weavetab plugin use`), **Utilities** (`/` Prompts and `@` Resources), visual HUD overlays, lifecycle hooks, tool overrides, and a strictly bounded `AGENTS.md` playbook.
+The **Weavetab Plugin System** allows developers to extend the MCP runtime and CLI with custom MCP **Tools**, terminal CLI **Commands** (`weavetab plugin use`), **`/` Prompts**, **`@` Resources**, visual HUD overlays, lifecycle hooks, tool overrides, and strictly bounded `instructions` declared in `weavetab.json`.
 
 ---
 
@@ -34,9 +34,8 @@ import { definePlugin, defineTool, defineCommand, z, type PluginContext } from "
 
 export default definePlugin({
   name: "weavetab-plugin-sample",
-  version: "1.0.0",
   description: "Sample custom tool and CLI command plugin for Weavetab",
-  agentsMd: "AGENTS.md",
+  instructions: "Run custom_analyzer after navigating to the target page. Use 'weavetab plugin use weavetab-plugin-sample status' for CLI diagnostics.",
 
   defaultConfig: {
     enableHud: true,
@@ -82,20 +81,20 @@ export default definePlugin({
 
 ---
 
-## 3. Manifest Specification (`weavetab.json`) & Mandatory `AGENTS.md`
+## 3. Single Source of Truth (`package.json` vs `weavetab.json`)
 
-Plugins require a `weavetab.json` manifest and a strictly bounded `AGENTS.md` playbook (`<= 80` lines, `<= 3,200` characters) at their package root:
+Standard npm metadata (`version`, `license`, `author`, `engines.node`, and the `@weavetab/sdk` dependency range) lives exclusively in `package.json`. `weavetab.json` declares Weavetab-specific metadata, capabilities, permissions, and bounded agent `instructions` (`<= 80` lines, `<= 3,200` characters):
 
 ```json
 {
   "$schema": "https://weavetab.dev/schema/plugin.json",
   "name": "weavetab-plugin-sample",
-  "version": "1.0.0",
+  "displayName": "Sample Analyzer",
+  "description": "Sample custom tool and CLI command plugin for Weavetab",
   "entry": "dist/index.js",
-  "agentsMd": "AGENTS.md",
-  "engines": {
-    "weavetab": ">=2.6.2",
-    "node": ">=18.0.0"
+  "instructions": "Run custom_analyzer after navigating to the target page. Use 'weavetab plugin use weavetab-plugin-sample status' for CLI diagnostics.",
+  "defaultConfig": {
+    "enableHud": true
   },
   "permissions": {
     "extension": { "hud": true, "reason": "Displays HUD thoughts" },
@@ -121,19 +120,18 @@ Plugins require a `weavetab.json` manifest and a strictly bounded `AGENTS.md` pl
 
 > Registering MCP tools via `ctx.mcp.registerTool()` requires `permissions.tools.add`. Registering CLI commands via `ctx.cli.registerCommand()` requires `permissions.commands.add`. Registering `/` Prompts via `ctx.mcp.registerPrompt()` requires `permissions.prompts.add`, and registering `@` Resources via `ctx.mcp.registerResource()` requires `permissions.resources.add`.
 
-### Registering Utilities (`/` Prompts & `@` Resources)
+### Registering `/` Prompts & `@` Resources
 
-MCP clients surface **Prompts** as `/` shortcuts and **Resources** as `@` context mentions (grouped under **Utilities** on `/discover`). Plugins can register both statically on `definePlugin({ prompts, resources })` or dynamically in `onLoad`:
+MCP clients surface **Prompts** as `/` shortcuts and **Resources** as `@` context mentions. Plugins can register both statically on `definePlugin({ prompts, resources })` or dynamically in `onLoad`:
 
 ```typescript
 import { definePlugin, definePrompt, defineResource, z } from "@weavetab/sdk";
 
 export default definePlugin({
   name: "@weavetab/plugin-sample",
-  version: "1.0.0",
-  agentsMd: "AGENTS.md",
+  instructions: "Use /audit_form for form checks and @sample://rule/{id} for active rule inspection.",
   async onLoad(ctx) {
-    // `/` Prompt utility
+    // `/` Prompt
     ctx.mcp.registerPrompt(
       definePrompt({
         name: "audit_form",
@@ -146,7 +144,7 @@ export default definePlugin({
       })
     );
 
-    // `@` Resource utility (fixed URI or RFC 6570 uriTemplate with autocomplete)
+    // `@` Resource (fixed URI or RFC 6570 uriTemplate with autocomplete)
     ctx.mcp.registerResource(
       defineResource({
         name: "rule-by-id",
@@ -172,9 +170,9 @@ Reserved URI schemes (`weavetab://`, `file://`, `http://`, `https://`, `data://`
 | :--- | :--- | :--- |
 | **MCP Tools** | `ctx.mcp.registerTool(tool)` | Register callable MCP tools (`permissions.tools.add`). |
 | **CLI Commands** | `ctx.cli.registerCommand(cmd)` | Register terminal CLI commands invoked via `weavetab plugin use <pkg> <cmd>` (`permissions.commands.add`). |
-| **Utilities: `/` Prompts** | `ctx.mcp.registerPrompt(prompt)` | Register `/` prompt templates in MCP clients (`permissions.prompts.add`). |
-| **Utilities: `@` Resources** | `ctx.mcp.registerResource(resource)` | Register `@` resources or RFC 6570 URI templates (`permissions.resources.add`). |
-| **`AGENTS.md` Playbook** | `agentsMd: "AGENTS.md"` | Bounded (`<= 80` lines, `<= 3,200` chars) AI agent playbook exposed at `weavetab://plugins/<slug>/agents`. |
+| **`/` Prompts** | `ctx.mcp.registerPrompt(prompt)` | Register `/` prompt templates in MCP clients (`permissions.prompts.add`). |
+| **`@` Resources** | `ctx.mcp.registerResource(resource)` | Register `@` resources or RFC 6570 URI templates (`permissions.resources.add`). |
+| **Agent Instructions** | `instructions` in `weavetab.json` | Bounded (`<= 80` lines, `<= 3,200` chars) operational instructions injected into MCP handshake and `weavetab://plugins/<name>/instructions`. |
 | **Sandboxed Storage** | `ctx.storage.get()`, `ctx.storage.set()` | Isolated key-value storage in `~/.weavetab/plugins/<name>/`. |
 | **Thought Bubbles** | `ctx.extension.showThought(session, text)` | Floating green thoughts on the live browser tab. |
 | **HUD Badges** | `ctx.extension.setHudState(session, state)` | Real-time status in the Weavetab overlay. |
@@ -183,7 +181,7 @@ Reserved URI schemes (`weavetab://`, `file://`, `http://`, `https://`, `data://`
 
 ---
 
-## 5. Installing & Running Plugins from the CLI
+## 5. Installing, Updating & Running Plugins from the CLI
 
 Plugins are installed directly from npm into `~/.weavetab/plugins/` using the Weavetab CLI:
 
@@ -191,11 +189,14 @@ Plugins are installed directly from npm into `~/.weavetab/plugins/` using the We
 # Install a plugin by package name (or official short alias):
 weavetab plugin add <plugin-name>
 
+# Interactively upgrade an installed plugin to a newer published version:
+weavetab plugin update <plugin-name>
+
 # Run a plugin's CLI command or MCP tool:
 weavetab plugin use <plugin-name> <command-or-tool> [--flags]
 
-# View a plugin's AGENTS.md playbook:
-weavetab plugin agents <plugin-name>
+# View a plugin's instructions & CLI flag schemas:
+weavetab plugin use <plugin-name> instructions
 
 # List all active installed plugins:
 weavetab plugin list
@@ -206,16 +207,16 @@ weavetab plugin rm <plugin-name>
 
 ---
 
-## 6. Preflight & Testing (`AGENTS.md` Budget Enforcement)
+## 6. Preflight & Testing
 
-Before publishing to npm, verify your plugin with the official SDK preflight audit and testing harness. `@weavetab/sdk` rejects any plugin whose `AGENTS.md` is missing or exceeds `80` lines / `3,200` characters:
+Before publishing to npm, verify your plugin with the official SDK preflight audit and testing harness. `@weavetab/sdk` validates `package.json`, `weavetab.json`, permissions, and enforces the `instructions` budget (`<= 80` lines / `<= 3,200` characters):
 
 ```bash
-# Run SDK preflight audit (manifest, AGENTS.md budget, permissions, naming anti-squatting):
+# Run SDK preflight audit (manifest, package.json metadata, instructions budget, permissions):
 npx @weavetab/sdk preflight
 
 # Offline unit testing without launching Chrome:
 npm test
 ```
 
-Installed plugins mount automatically on server startup. Tool results returned as strings, markdown, or JSON objects are normalized directly into MCP standard content format.
+Installed plugins mount automatically on server startup and hot-reload across active MCP sessions whenever added, updated, or removed.

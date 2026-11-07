@@ -405,48 +405,27 @@ export class PluginRuntime {
     }
 
     // 7. Register dedicated instructions resource
-    const instructionsText = plugin.instructions || plugin.agentsMdContent;
+    const instructionsText = plugin.instructions;
     if (instructionsText) {
       try {
-        const uri1 = `weavetab://plugins/${plugin.name}/instructions`;
+        const uri = `weavetab://plugins/${plugin.name}/instructions`;
         this.server.registerResource(
           `${plugin.name} Instructions`,
-          uri1,
+          uri,
           { mimeType: "text/markdown", description: `Agent instructions for ${plugin.name}` },
           async () => ({
             contents: [
               {
-                uri: uri1,
+                uri,
                 mimeType: "text/markdown",
-                text: plugin.instructions || plugin.agentsMdContent || "",
+                text: plugin.instructions || "",
               },
             ],
           })
         );
         record.disposables.push(() => {
           try {
-            delete (this.server as any)._registeredResources?.[uri1];
-          } catch {}
-        });
-
-        const uri2 = `weavetab://plugins/${plugin.name}/agents`;
-        this.server.registerResource(
-          `${plugin.name} Agents Playbook`,
-          uri2,
-          { mimeType: "text/markdown", description: `Legacy agents playbook for ${plugin.name}` },
-          async () => ({
-            contents: [
-              {
-                uri: uri2,
-                mimeType: "text/markdown",
-                text: plugin.instructions || plugin.agentsMdContent || "",
-              },
-            ],
-          })
-        );
-        record.disposables.push(() => {
-          try {
-            delete (this.server as any)._registeredResources?.[uri2];
+            delete (this.server as any)._registeredResources?.[uri];
           } catch {}
         });
       } catch {
@@ -539,9 +518,10 @@ export class PluginRuntime {
           const ok = await this.loadPlugin(info.dir);
           if (ok) changes++;
         } else {
-          // Check if updated on disk
+          // Check if updated on disk (package.json is the primary version source)
           const latestMtime = this.getEntryMtime(info.dir, existing.plugin);
-          const versionChanged = existing.version !== (info.manifest?.version || "1.0.0");
+          const diskVersion = info.pkgJson?.version || info.manifest?.version || "1.0.0";
+          const versionChanged = existing.version !== diskVersion;
           if (versionChanged || latestMtime > existing.entryMtime) {
             process.stderr.write(`[Weavetab] Plugin "${name}" updated on disk — hot-reloading...\n`);
             await this.unloadPlugin(name);
@@ -594,7 +574,7 @@ export class PluginRuntime {
         fs.mkdirSync(globalDir, { recursive: true });
       }
       const w1 = fs.watch(globalDir, { recursive: false }, (_evt, filename) => {
-        if (filename === ".epoch" || filename === "package.json") {
+        if (!filename || filename === ".epoch" || filename === "package.json") {
           triggerDebounced();
         }
       });

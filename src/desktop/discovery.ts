@@ -255,14 +255,35 @@ export function isValidElectronExecutablePath(execPath: string): boolean {
   if (!execPath || typeof execPath !== "string") return false;
   const normalizedPath = execPath.toLowerCase().trim();
 
-  // Check for suspicious patterns that might indicate command injection or shell escapes
-  const suspiciousPatterns = [
-    '%', // URL encoding
-    'cmd.exe', 'powershell.exe', 'bash', 'sh', 'wscript.exe', 'cscript.exe'
-  ];
+  // Block shell metacharacters or URL encoding in paths
+  const forbiddenChars = ["%", ";", "|", "&", "`", "$", "\n", "\r"];
+  if (forbiddenChars.some((ch) => normalizedPath.includes(ch))) {
+    logDebug(`[SECURITY] Electron path validation failed: forbidden char in path: ${execPath}`);
+    return false;
+  }
 
-  if (suspiciousPatterns.some(pattern => normalizedPath.includes(pattern))) {
-    logDebug(`[SECURITY] Electron path validation failed: suspicious pattern in path: ${execPath}`);
+  // Block direct shell interpreters by executable basename (never substring match full path, which breaks /usr/share on Linux)
+  const baseName = path.basename(normalizedPath);
+  const blockedBinaries = new Set([
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "fish",
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+    "wscript",
+    "wscript.exe",
+    "cscript",
+    "cscript.exe",
+  ]);
+
+  if (blockedBinaries.has(baseName)) {
+    logDebug(`[SECURITY] Electron path validation failed: blocked shell binary: ${execPath}`);
     return false;
   }
 
@@ -385,17 +406,37 @@ export function resolveElectronExecutablePath(appName: string, configuredPath?: 
       candidates.push(path.join(localAppData, "Programs", "obsidian", "Obsidian.exe"));
     }
   } else if (platform === "darwin") {
-    if (normApp === "discord") candidates.push("/Applications/Discord.app/Contents/MacOS/Discord");
-    else if (normApp === "slack") candidates.push("/Applications/Slack.app/Contents/MacOS/Slack");
-    else if (normApp === "code" || normApp === "vscode") candidates.push("/Applications/Visual Studio Code.app/Contents/MacOS/Electron");
-    else if (normApp === "linear") candidates.push("/Applications/Linear.app/Contents/MacOS/Linear");
-    else if (normApp === "notion") candidates.push("/Applications/Notion.app/Contents/MacOS/Notion");
-    else if (normApp === "obsidian") candidates.push("/Applications/Obsidian.app/Contents/MacOS/Obsidian");
+    const homeApps = path.join(process.env.HOME || "", "Applications");
+    if (normApp === "discord") {
+      candidates.push("/Applications/Discord.app/Contents/MacOS/Discord");
+      candidates.push(path.join(homeApps, "Discord.app/Contents/MacOS/Discord"));
+    } else if (normApp === "slack") {
+      candidates.push("/Applications/Slack.app/Contents/MacOS/Slack");
+      candidates.push(path.join(homeApps, "Slack.app/Contents/MacOS/Slack"));
+    } else if (normApp === "code" || normApp === "vscode") {
+      candidates.push("/Applications/Visual Studio Code.app/Contents/MacOS/Electron");
+      candidates.push(path.join(homeApps, "Visual Studio Code.app/Contents/MacOS/Electron"));
+    } else if (normApp === "cursor") {
+      candidates.push("/Applications/Cursor.app/Contents/MacOS/Cursor");
+      candidates.push(path.join(homeApps, "Cursor.app/Contents/MacOS/Cursor"));
+    } else if (normApp === "linear") {
+      candidates.push("/Applications/Linear.app/Contents/MacOS/Linear");
+      candidates.push(path.join(homeApps, "Linear.app/Contents/MacOS/Linear"));
+    } else if (normApp === "notion") {
+      candidates.push("/Applications/Notion.app/Contents/MacOS/Notion");
+      candidates.push(path.join(homeApps, "Notion.app/Contents/MacOS/Notion"));
+    } else if (normApp === "obsidian") {
+      candidates.push("/Applications/Obsidian.app/Contents/MacOS/Obsidian");
+      candidates.push(path.join(homeApps, "Obsidian.app/Contents/MacOS/Obsidian"));
+    }
   } else {
-    // Linux
-    candidates.push(`/usr/bin/${normApp}`);
-    candidates.push(`/usr/local/bin/${normApp}`);
-    candidates.push(`/usr/share/${normApp}/${normApp}`);
+    // Linux (native, /opt, /usr/share, Snap, Flatpak)
+    const binName = normApp === "vscode" ? "code" : normApp;
+    candidates.push(`/usr/bin/${binName}`);
+    candidates.push(`/usr/local/bin/${binName}`);
+    candidates.push(`/usr/share/${binName}/${binName}`);
+    candidates.push(`/opt/${binName}/${binName}`);
+    candidates.push(`/snap/bin/${binName}`);
   }
 
   for (const c of candidates) {
