@@ -1,4 +1,4 @@
-import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, basename, resolve } from "node:path";
 import os from "node:os";
@@ -16,8 +16,8 @@ import { WEAVETAB_VERSION } from "../version.js";
 
 const require = createRequire(import.meta.url);
 
-export const MAX_AGENTS_MD_LINES = 80;
-export const MAX_AGENTS_MD_CHARS = 3200;
+export const MAX_INSTRUCTIONS_LINES = 80;
+export const MAX_INSTRUCTIONS_CHARS = 3200;
 
 export interface InstalledPluginInfo {
   packageName: string;
@@ -26,7 +26,6 @@ export interface InstalledPluginInfo {
   pkgJson?: Record<string, any>;
   hasValidManifest: boolean;
   instructions?: string;
-  agentsMdContent?: string;
 }
 
 export function touchPluginEpoch(): void {
@@ -39,15 +38,24 @@ export function touchPluginEpoch(): void {
   }
 }
 
+function normalizeCachePath(p: string): string {
+  const forward = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" || process.platform === "darwin" ? forward.toLowerCase() : forward;
+}
+
 /**
  * Invalidates Node's require.cache for all files inside a package directory,
- * ensuring that reloading a plugin picks up the latest code from disk.
+ * ensuring that reloading a plugin picks up the latest code from disk across Windows, macOS, and Linux.
  */
 export function invalidatePluginModuleCache(pkgDir: string): void {
   try {
-    const norm = resolve(pkgDir);
+    const resolved = resolve(pkgDir);
+    const real = existsSync(resolved) ? realpathSync(resolved) : resolved;
+    const prefixes = Array.from(new Set([normalizeCachePath(resolved), normalizeCachePath(real)]));
+
     for (const modPath of Object.keys(require.cache)) {
-      if (modPath.startsWith(norm)) {
+      const normMod = normalizeCachePath(modPath);
+      if (prefixes.some((pref) => normMod === pref || normMod.startsWith(pref + "/"))) {
         delete require.cache[modPath];
       }
     }
@@ -92,22 +100,16 @@ function getWorkspacePluginDirs(): string[] {
 }
 
 /**
- * Reads AGENTS.md from a plugin directory and strictly clamps it to MAX_AGENTS_MD_LINES
- * and MAX_AGENTS_MD_CHARS so a rogue plugin can never bloat an AI agent's context window.
+ * Strictly clamps plugin instructions from weavetab.json to MAX_INSTRUCTIONS_LINES
+ * and MAX_INSTRUCTIONS_CHARS so a plugin can never bloat an AI agent's context window.
  */
-export function readBoundedAgentsMd(pkgDir: string, manifest?: WeavetabManifest): string | undefined {
-  const rel = typeof manifest?.agentsMd === "string" && manifest.agentsMd.trim() ? manifest.agentsMd.trim() : "AGENTS.md";
-  const fullPath = join(pkgDir, rel);
-  if (!existsSync(fullPath)) return undefined;
-  try {
-    const raw = readFileSync(fullPath, "utf-8").trim();
-    if (!raw) return undefined;
-    const lines = raw.split(/\r?\n/);
-    const clampedLines = lines.slice(0, MAX_AGENTS_MD_LINES).join("\n");
-    return clampedLines.length > MAX_AGENTS_MD_CHARS ? clampedLines.slice(0, MAX_AGENTS_MD_CHARS) : clampedLines;
-  } catch {
-    return undefined;
-  }
+export function clampPluginInstructions(raw?: string): string | undefined {
+  if (!raw || typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const lines = trimmed.split(/\r?\n/);
+  const clampedLines = lines.slice(0, MAX_INSTRUCTIONS_LINES).join("\n");
+  return clampedLines.length > MAX_INSTRUCTIONS_CHARS ? clampedLines.slice(0, MAX_INSTRUCTIONS_CHARS) : clampedLines;
 }
 
 /**
@@ -194,7 +196,7 @@ function checkEngineCompatibility(engineReq?: string): { compatible: boolean; me
 }
 
 /**
- * Reads the manifest (weavetab.json), package.json, and AGENTS.md for an installed package
+ * Reads the manifest (weavetab.json) and package.json for an installed package
  * without executing its runtime code (safe for listing/inspection).
  */
 export function inspectInstalledPackage(pkgDir: string): InstalledPluginInfo | null {
@@ -216,11 +218,7 @@ export function inspectInstalledPackage(pkgDir: string): InstalledPluginInfo | n
     }
 
     const packageName = pkgJson?.name || manifest.name || basename(pkgDir);
-    const boundedAgents = readBoundedAgentsMd(pkgDir, manifest);
-    const rawInstructions = typeof manifest.instructions === "string" ? manifest.instructions.trim() : "";
-    const instructions = rawInstructions
-      ? (rawInstructions.length > MAX_AGENTS_MD_CHARS ? rawInstructions.slice(0, MAX_AGENTS_MD_CHARS) : rawInstructions)
-      : boundedAgents;
+    const instructions = clampPluginInstructions(manifest.instructions);
 
     return {
       packageName,
@@ -229,7 +227,6 @@ export function inspectInstalledPackage(pkgDir: string): InstalledPluginInfo | n
       pkgJson,
       hasValidManifest: true,
       instructions,
-      agentsMdContent: boundedAgents || instructions,
     };
   } catch {
     return null;
@@ -494,13 +491,6 @@ export function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
     const rawManifest = readFileSync(manifestPath, "utf-8");
     const manifest = JSON.parse(rawManifest) as WeavetabManifest;
 
-    if (manifest.engines?.weavetab) {
-      const compat = checkEngineCompatibility(manifest.engines.weavetab);
-      if (!compat.compatible) {
-        console.error(`[Weavetab] Warning: ${compat.message}`);
-      }
-    }
-
     let pkg: Record<string, any> = {};
     const pkgPath = join(pkgDir, "package.json");
     if (existsSync(pkgPath)) {
@@ -508,6 +498,18 @@ export function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
         pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
       } catch {
         /* malformed package.json */
+      }
+    }
+
+    const sdkRange =
+      pkg.dependencies?.["@weavetab/sdk"] ||
+      pkg.peerDependencies?.["@weavetab/sdk"] ||
+      pkg.devDependencies?.["@weavetab/sdk"] ||
+      manifest.engines?.weavetab;
+    if (sdkRange) {
+      const compat = checkEngineCompatibility(sdkRange);
+      if (!compat.compatible) {
+        console.error(`[Weavetab] Warning: ${compat.message}`);
       }
     }
 
@@ -551,9 +553,9 @@ export function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
         Boolean(normalizedPerms?.resources) ||
         typeof plugin.onLoad === "function")
     ) {
-      plugin.name = plugin.name || manifest.name || pkg.name || basename(pkgDir);
-      plugin.version = plugin.version || manifest.version || pkg.version || "1.0.0";
-      plugin.description = plugin.description || manifest.description || pkg.description || "";
+      plugin.name = pkg.name || manifest.name || plugin.name || basename(pkgDir);
+      plugin.version = pkg.version || plugin.version || manifest.version || "1.0.0";
+      plugin.description = manifest.description || plugin.description || pkg.description || "";
       plugin.manifest = manifest;
       plugin.permissions = normalizedPerms;
       plugin.manifest.permissions = normalizedPerms;
@@ -575,16 +577,9 @@ export function tryLoadPlugin(pkgDir: string): WeavetabPlugin | null {
         plugin.commands = [];
       }
 
-      const boundedAgents = readBoundedAgentsMd(pkgDir, manifest);
       const rawManifestInstructions = typeof manifest.instructions === "string" ? manifest.instructions.trim() : "";
       const rawPluginInstructions = typeof plugin.instructions === "string" ? plugin.instructions.trim() : "";
-      const chosenInstructions = rawManifestInstructions || rawPluginInstructions || boundedAgents;
-      const clampedInstructions = chosenInstructions
-        ? (chosenInstructions.length > MAX_AGENTS_MD_CHARS ? chosenInstructions.slice(0, MAX_AGENTS_MD_CHARS) : chosenInstructions)
-        : undefined;
-
-      plugin.instructions = clampedInstructions;
-      plugin.agentsMdContent = boundedAgents || clampedInstructions;
+      plugin.instructions = clampPluginInstructions(rawManifestInstructions || rawPluginInstructions);
 
       plugin.removeTools = Array.isArray(plugin.removeTools)
         ? plugin.removeTools
@@ -805,45 +800,27 @@ export function getPluginCommands(
 }
 
 export function buildPluginInstructions(plugins: Iterable<WeavetabPlugin>): string {
-  const sections: string[] = [];
-  const allCmds: Array<{ plugin: string; name: string; description: string; usage: string }> = [];
-  const pluginInstructionsList: Array<{ name: string; version: string; instructions: string }> = [];
+  const pluginBlocks: string[] = [];
 
   for (const pl of plugins) {
     const cmds = getPluginCommands(pl);
-    for (const cmd of cmds) {
-      allCmds.push({
-        plugin: pl.name,
-        name: cmd.name,
-        description: cmd.description,
-        usage: cmd.usage,
-      });
+    const text = pl.instructions?.trim();
+    if (!text && cmds.length === 0) continue;
+
+    const lines: string[] = [`### ${pl.name} (v${pl.version || "1.0.0"})`];
+    if (text) {
+      lines.push(text);
     }
-    const text = pl.instructions || pl.agentsMdContent;
-    if (text && text.trim()) {
-      pluginInstructionsList.push({
-        name: pl.name,
-        version: pl.version || "1.0.0",
-        instructions: text.trim(),
-      });
+    if (cmds.length > 0) {
+      lines.push(
+        "**CLI Commands** (run via terminal execution):",
+        ...cmds.map((c) => `- \`${c.usage}\` — ${c.description}`)
+      );
     }
+    pluginBlocks.push(lines.join("\n"));
   }
 
-  if (allCmds.length > 0) {
-    sections.push(
-      "## Weavetab Plugin CLI Commands\n" +
-        "The following terminal commands are exposed by active Weavetab plugins. " +
-        "Run them using terminal execution (`run_command`):\n" +
-        allCmds.map((c) => `- \`${c.usage}\`: ${c.description}`).join("\n")
-    );
-  }
+  if (pluginBlocks.length === 0) return "";
 
-  if (pluginInstructionsList.length > 0) {
-    sections.push(
-      "## Active Plugin Instructions\n" +
-        pluginInstructionsList.map((p) => `### ${p.name} (v${p.version})\n${p.instructions}`).join("\n\n")
-    );
-  }
-
-  return sections.join("\n\n");
+  return "## Active Weavetab Plugins\n\n" + pluginBlocks.join("\n\n");
 }

@@ -165,24 +165,18 @@ export interface WeavetabManifestLinks {
 export interface WeavetabManifest {
   /** Schema identifier */
   $schema?: string;
-  /** Human-readable display name */
+  /** Package identifier matching package.json */
   name: string;
-  /** Optional display title */
+  /** Optional human-readable display title */
   displayName?: string;
-  /** Semantic version string */
-  version: string;
+  /** Semantic version string (resolved from package.json) */
+  version?: string;
   /** Short summary of what this plugin provides */
   description?: string;
   /** Entry point file relative to the plugin root (e.g., 'dist/index.js') */
   entry?: string;
   /** System instructions injected directly into AI agent MCP context (max 3200 characters) */
   instructions?: string;
-  /** @deprecated use `instructions` declared directly in weavetab.json */
-  agentsMd?: string;
-  /** Single author or multiple authors with roles */
-  author?: string | WeavetabManifestAuthor | (string | WeavetabManifestAuthor)[];
-  /** Array of authors */
-  authors?: (string | WeavetabManifestAuthor)[];
   /** Path to plugin logo */
   logo?: string;
   /** Path to plugin header banner */
@@ -193,10 +187,6 @@ export interface WeavetabManifest {
   tags?: string[];
   /** External links */
   links?: WeavetabManifestLinks;
-  /** Engine dependencies */
-  engines?: Record<string, string>;
-  /** Supported environments */
-  environments?: string[];
   /** Tools exposed by this plugin to the MCP server */
   tools?: WeavetabManifestTool[];
   /** CLI commands exposed by this plugin (`weavetab plugin use <plugin> <cmd>`) */
@@ -209,8 +199,6 @@ export interface WeavetabManifest {
   defaultConfig?: Record<string, any>;
   /** Required permissions with security rationale */
   permissions?: WeavetabManifestPermissions;
-  /** Open source license */
-  license?: string;
   [key: string]: any;
 }
 
@@ -417,8 +405,6 @@ export interface WeavetabPluginDefinition {
   resources?: WeavetabPluginResource[];
   /** System instructions injected directly into AI agent MCP context */
   instructions?: string;
-  /** @deprecated use `instructions` */
-  agentsMd?: string;
   overrides?: WeavetabToolOverride[];
   removeTools?: string[];
   defaultConfig?: Record<string, any>;
@@ -443,10 +429,8 @@ export interface WeavetabPlugin {
   prompts?: WeavetabPluginPrompt[];
   /** Add `@` resource utilities */
   resources?: WeavetabPluginResource[];
-  /** System instructions injected into AI agent context (from weavetab.json or legacy AGENTS.md) */
+  /** System instructions injected into AI agent context (from weavetab.json) */
   instructions?: string;
-  /** Loaded AGENTS.md playbook content (strictly bounded) */
-  agentsMdContent?: string;
   /** Override or wrap existing tools */
   overrides?: WeavetabToolOverride[];
   /** Built-in tools to remove or disable */

@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, after } from "node:test";
 import assert from "node:assert";
 import {
   resolvePluginTrust,
@@ -9,13 +9,14 @@ import {
   inspectInstalledPackage,
   buildPluginContext,
   normalizePermissions,
-  readBoundedAgentsMd,
+  clampPluginInstructions,
   getPluginCommands,
   buildPluginInstructions,
   touchPluginEpoch,
-  MAX_AGENTS_MD_LINES,
-  MAX_AGENTS_MD_CHARS,
+  MAX_INSTRUCTIONS_LINES,
+  MAX_INSTRUCTIONS_CHARS,
 } from "../../src/plugin/loader.js";
+import { compareSemver } from "../../src/cli/plugin.js";
 import { PluginStorageManager } from "../../src/plugin/storage.js";
 import { PluginExtensionBridge } from "../../src/plugin/extension_bridge.js";
 import { toPluginInputShape, toPromptShape } from "../../src/plugin/schema.js";
@@ -33,7 +34,7 @@ function makeTmpPlugin(manifest: object, pkg?: object): string {
   fs.writeFileSync(path.join(tmpDir, "weavetab.json"), JSON.stringify(manifest), "utf-8");
   fs.writeFileSync(
     path.join(tmpDir, "package.json"),
-    JSON.stringify(pkg ?? { name: (manifest as any).name, version: (manifest as any).version }),
+    JSON.stringify(pkg ?? { name: (manifest as any).name || "test-plugin", version: (manifest as any).version || "1.0.0" }),
     "utf-8",
   );
   return tmpDir;
@@ -42,7 +43,6 @@ function makeTmpPlugin(manifest: object, pkg?: object): string {
 // ─── Trust Tier Tests (self-contained, no registry I/O) ───────────────────────
 
 describe("Plugin Trust Tier Resolution", () => {
-  // A stand-alone set — no real package names, just structural tests
   const mockVerified = new Set(["plugin-a", "plugin-b", "plugin-c"]);
 
   it("classifies @weavetab/plugin-* as official tier", () => {
@@ -91,18 +91,26 @@ describe("Plugin Trust Tier Resolution", () => {
 // ─── Manifest Inspection ──────────────────────────────────────────────────────
 
 describe("Plugin Manifest Inspection", () => {
-  it("inspects a plugin directory with a weavetab.json", () => {
-    const tmpDir = makeTmpPlugin({
-      name: "test-plugin",
-      version: "1.0.0",
-      description: "Generic test plugin",
-      tools: [{ name: "do_something", description: "Does something" }],
-      permissions: { network: { intercept: true, reason: "Needs network" } },
-    });
+  it("inspects a plugin directory with a weavetab.json and package.json", () => {
+    const tmpDir = makeTmpPlugin(
+      {
+        name: "test-plugin",
+        description: "Generic test plugin",
+        tools: [{ name: "do_something", description: "Does something" }],
+        permissions: { network: { intercept: true, reason: "Needs network" } },
+      },
+      {
+        name: "test-plugin",
+        version: "1.4.2",
+        license: "MIT",
+        author: "Test Author",
+      }
+    );
     try {
       const info = inspectInstalledPackage(tmpDir);
       assert.ok(info !== null);
       assert.strictEqual(info?.packageName, "test-plugin");
+      assert.strictEqual(info?.pkgJson?.version, "1.4.2");
       assert.strictEqual(info?.manifest.tools?.length, 1);
       assert.strictEqual(info?.manifest.tools?.[0].name, "do_something");
       assert.strictEqual(info?.manifest.permissions?.network?.intercept, true);
@@ -114,7 +122,6 @@ describe("Plugin Manifest Inspection", () => {
   it("parses tool override and remove permissions", () => {
     const tmpDir = makeTmpPlugin({
       name: "test-override-plugin",
-      version: "1.0.0",
       permissions: {
         tools: {
           override: ["browser_eval"],
@@ -152,6 +159,12 @@ describe("Plugin Manifest Inspection", () => {
 
 describe("Plugin Isolated Storage", () => {
   const storage = new PluginStorageManager("unit-test-storage-" + Date.now());
+
+  after(() => {
+    try {
+      fs.rmSync(storage.getDirectory(), { recursive: true, force: true });
+    } catch {}
+  });
 
   it("creates an isolated directory and loads default config", () => {
     const dir = storage.getDirectory();
@@ -350,9 +363,9 @@ describe("Plugin Prompts and Resources Surface", () => {
   });
 });
 
-// ─── Plugin CLI Commands & AGENTS.md Budgeting ────────────────────────────────
+// ─── Plugin CLI Commands & Instructions Context Budgeting ─────────────────────
 
-describe("Plugin CLI Commands and AGENTS.md Context Budgeting", () => {
+describe("Plugin CLI Commands and Instructions Context Budgeting", () => {
   it("enforces permissions.commands.add when registering CLI commands via buildPluginContext", () => {
     const storage = new PluginStorageManager("unit-test-cmd-perms");
     const bridge = new PluginExtensionBridge("unit-test-cmd-perms", {});
@@ -378,59 +391,28 @@ describe("Plugin CLI Commands and AGENTS.md Context Budgeting", () => {
     assert.strictEqual(openPlugin.commands.length, 0);
   });
 
-  it("reads AGENTS.md and clamps to strict line (80) and char (3200) budget", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wt-agents-test-"));
-    try {
-      // 1. Normal AGENTS.md
-      const normalContent = "# Test Plugin Playbook\n\n- Tool: test_tool\n- Command: weavetab plugin use test dump";
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), normalContent, "utf-8");
-      const readNormal = readBoundedAgentsMd(tmpDir);
-      assert.strictEqual(readNormal, normalContent);
+  it("clamps instructions to strict line (80) and char (3200) budget", () => {
+    const normalContent = "Use test_tool for inspections.\nRun weavetab plugin use test dump for CLI.";
+    assert.strictEqual(clampPluginInstructions(normalContent), normalContent);
 
-      // 2. Overflow line count (> 80 lines)
-      const linesArray = Array.from({ length: 120 }, (_, i) => `Line ${i + 1}: instruction`);
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), linesArray.join("\n"), "utf-8");
-      const readClampedLines = readBoundedAgentsMd(tmpDir);
-      assert.ok(readClampedLines);
-      const outputLines = readClampedLines.split("\n");
-      assert.strictEqual(outputLines.length, MAX_AGENTS_MD_LINES);
-      assert.strictEqual(outputLines[0], "Line 1: instruction");
-      assert.strictEqual(outputLines[79], "Line 80: instruction");
+    const linesArray = Array.from({ length: 120 }, (_, i) => `Line ${i + 1}: instruction`);
+    const readClampedLines = clampPluginInstructions(linesArray.join("\n"));
+    assert.ok(readClampedLines);
+    const outputLines = readClampedLines.split("\n");
+    assert.strictEqual(outputLines.length, MAX_INSTRUCTIONS_LINES);
+    assert.strictEqual(outputLines[0], "Line 1: instruction");
+    assert.strictEqual(outputLines[79], "Line 80: instruction");
 
-      // 3. Overflow char count (> 3200 chars within 50 lines)
-      const bigLine = "A".repeat(100);
-      const bigContent = Array.from({ length: 50 }, () => bigLine).join("\n");
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), bigContent, "utf-8");
-      const readClampedChars = readBoundedAgentsMd(tmpDir);
-      assert.ok(readClampedChars);
-      assert.strictEqual(readClampedChars.length, MAX_AGENTS_MD_CHARS);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    const bigLine = "A".repeat(100);
+    const bigContent = Array.from({ length: 50 }, () => bigLine).join("\n");
+    const readClampedChars = clampPluginInstructions(bigContent);
+    assert.ok(readClampedChars);
+    assert.strictEqual(readClampedChars.length, MAX_INSTRUCTIONS_CHARS);
   });
 
-  it("inspects AGENTS.md in inspectInstalledPackage", () => {
-    const tmpDir = makeTmpPlugin({
-      name: "pkg-with-agents",
-      version: "1.0.0",
-      description: "Plugin with agents playbook",
-      agentsMd: "AGENTS.md",
-    });
-    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "# Custom Playbook\nInstructions for agent.", "utf-8");
-    try {
-      const info = inspectInstalledPackage(tmpDir);
-      assert.ok(info !== null);
-      assert.strictEqual(info?.packageName, "pkg-with-agents");
-      assert.ok(info?.agentsMdContent?.includes("# Custom Playbook"));
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("inspects inline instructions in inspectInstalledPackage without requiring AGENTS.md", () => {
+  it("inspects inline instructions in inspectInstalledPackage", () => {
     const tmpDir = makeTmpPlugin({
       name: "pkg-inline-instructions",
-      version: "1.0.0",
       description: "Plugin with declared instructions",
       instructions: "Always prefer CLI commands over UI clicks.",
     });
@@ -439,13 +421,12 @@ describe("Plugin CLI Commands and AGENTS.md Context Budgeting", () => {
       assert.ok(info !== null);
       assert.strictEqual(info?.packageName, "pkg-inline-instructions");
       assert.strictEqual(info?.instructions, "Always prefer CLI commands over UI clicks.");
-      assert.strictEqual(info?.agentsMdContent, "Always prefer CLI commands over UI clicks.");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("getPluginCommands and buildPluginInstructions aggregate CLI commands and instructions", () => {
+  it("getPluginCommands and buildPluginInstructions group CLI commands and instructions per plugin", () => {
     const fakePlugin: any = {
       name: "test-plugin",
       version: "1.2.0",
@@ -467,12 +448,18 @@ describe("Plugin CLI Commands and AGENTS.md Context Budgeting", () => {
     assert.strictEqual(cmds[1].usage, "weavetab plugin use test-plugin audit");
 
     const instructionsText = buildPluginInstructions([fakePlugin]);
-    assert.ok(instructionsText.includes("## Weavetab Plugin CLI Commands"));
-    assert.ok(instructionsText.includes("weavetab plugin use test-plugin scan"));
-    assert.ok(instructionsText.includes("weavetab plugin use test-plugin audit"));
-    assert.ok(instructionsText.includes("## Active Plugin Instructions"));
+    assert.ok(instructionsText.includes("## Active Weavetab Plugins"));
     assert.ok(instructionsText.includes("### test-plugin (v1.2.0)"));
     assert.ok(instructionsText.includes("Follow strict formatting guidelines."));
+    assert.ok(instructionsText.includes("weavetab plugin use test-plugin scan"));
+    assert.ok(instructionsText.includes("weavetab plugin use test-plugin audit"));
+  });
+
+  it("compareSemver orders versions accurately for weavetab plugin update", () => {
+    assert.ok(compareSemver("1.4.0", "1.3.0") > 0);
+    assert.ok(compareSemver("2.0.0", "1.9.9") > 0);
+    assert.strictEqual(compareSemver("1.3.0", "1.3.0"), 0);
+    assert.ok(compareSemver("1.2.9", "1.3.0") < 0);
   });
 
   it("touchPluginEpoch touches .epoch file in global directory", () => {
