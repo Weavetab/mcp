@@ -46,14 +46,22 @@ const mcpVersionTs = resolve(mcpRoot, 'src', 'version.ts');
 if (existsSync(mcpVersionTs)) {
   const content = readFileSync(mcpVersionTs, 'utf8');
   const match = content.match(/WEAVETAB_VERSION\s*=\s*["']([^"']+)["']/);
-  if (match) versions['MCP/src/version.ts'] = match[1];
+  if (!match) {
+    console.error('  [ERROR] WEAVETAB_VERSION constant not found in MCP/src/version.ts');
+    process.exit(1);
+  }
+  versions['MCP/src/version.ts'] = match[1];
 }
 
 const sdkVersionTs = resolve(repoRoot, 'sdk', 'src', 'version.ts');
 if (existsSync(sdkVersionTs)) {
   const content = readFileSync(sdkVersionTs, 'utf8');
   const match = content.match(/WEAVETAB_VERSION\s*=\s*["']([^"']+)["']/);
-  if (match) versions['sdk/src/version.ts'] = match[1];
+  if (!match) {
+    console.error('  [ERROR] WEAVETAB_VERSION constant not found in sdk/src/version.ts');
+    process.exit(1);
+  }
+  versions['sdk/src/version.ts'] = match[1];
 }
 
 console.log('[Weavetab Version Check] Verifying manifest & package synchronization across MCP, SDK, and Skills...');

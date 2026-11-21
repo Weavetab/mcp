@@ -1,6 +1,6 @@
 # Weavetab Plugin System & SDK Specification
 
-> **Version:** 2.6.3 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
+> **Version:** 2.6.4 | **SDK:** @weavetab/sdk (MIT) | **Runtime:** AGPL-3.0-only
 
 The **Weavetab Plugin System** allows developers to extend the MCP runtime and CLI with custom MCP **Tools**, terminal CLI **Commands** (`weavetab plugin use`), **`/` Prompts**, **`@` Resources**, visual HUD overlays, lifecycle hooks, tool overrides, and strictly bounded `instructions` declared in `weavetab.json`.
 
@@ -118,7 +118,7 @@ Standard npm metadata (`version`, `license`, `author`, `engines.node`, and the `
 }
 ```
 
-> Registering MCP tools via `ctx.mcp.registerTool()` requires `permissions.tools.add`. Registering CLI commands via `ctx.cli.registerCommand()` requires `permissions.commands.add`. Registering `/` Prompts via `ctx.mcp.registerPrompt()` requires `permissions.prompts.add`, and registering `@` Resources via `ctx.mcp.registerResource()` requires `permissions.resources.add`.
+> Registering MCP tools via `ctx.mcp.registerTool()` requires `permissions.tools.add` (and cannot clobber built-in core tools). Removing tools requires declaring target names in `permissions.tools.remove`. Registering CLI commands via `ctx.cli.registerCommand()` requires `permissions.commands.add`. Registering `/` Prompts via `ctx.mcp.registerPrompt()` requires `permissions.prompts.add`, and registering `@` Resources via `ctx.mcp.registerResource()` requires `permissions.resources.add`. Permissions are read strictly from `weavetab.json` (runtime JS exports cannot self-escalate permissions), and `manifest.entry` as well as plugin storage paths under `~/.weavetab/plugins/<name>/` are verified with `fs.realpathSync` containment.
 
 ### Registering `/` Prompts & `@` Resources
 
@@ -219,4 +219,4 @@ npx @weavetab/sdk preflight
 npm test
 ```
 
-Installed plugins mount automatically on server startup and hot-reload across active MCP sessions whenever added, updated, or removed.
+Installed plugins in `~/.weavetab/plugins/` mount automatically on server startup (local workspace `./plugins` discovery requires `WT_ALLOW_WORKSPACE_PLUGINS=1`) and hot-reload across active MCP sessions whenever added, updated, or removed.

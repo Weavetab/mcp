@@ -3,7 +3,6 @@ title: "Desktop & Electron Apps"
 description: "Native CDP automation for VS Code, Discord, Figma, Slack, and any Electron app."
 product: mcp
 section: desktop-automation
-badge: new
 icon: AppWindow
 slug: electron-apps
 ---
@@ -31,15 +30,9 @@ AI Agent (MCP) ──► withSecurity()
 
 ---
 
-## Interactive App Configurator
-
-Build your `electron` block in the [Desktop app configurator](/mcp/desktop) — presets for Discord, VS Code, Figma, Slack and more, path / port / advanced formats, plus a copy-ready agent setup prompt. Then paste the block into your global `~/.weavetab/config.json`.
-
----
-
 ## 1. Configuring Desktop Apps in `config.json`
 
-Add an `"electron"` object to your global `~/.weavetab/config.json` (the only config file Weavetab reads):
+Add an `"electron"` (or `"apps"`) object to your global `~/.weavetab/config.json` (the only config file Weavetab reads):
 
 ```json
 {
@@ -70,11 +63,13 @@ Add an `"electron"` object to your global `~/.weavetab/config.json` (the only co
 
 ## 2. Security & Profile Isolation
 
-Weavetab enforces enterprise-grade sandbox separation for all desktop applications:
+Weavetab enforces strict sandbox separation for all desktop applications:
 
-1. **Dedicated User Profiles**: Automated sessions are assigned isolated data profiles under `~/.weavetab-system/apps/<appName>/`.
-2. **Real AppData Protection**: Weavetab strictly enforces `assertNotRealElectronProfile` — attempting to target your primary OS user data directories (`%APPDATA%`, `~/Library/Application Support`, or `~/.config`) is blocked to protect your personal logins and local databases from accidental automation corruption.
-3. **Lock & Mutex Isolation**: Dedicated lockfiles (`~/.weavetab-system/locks/<appName>.lock`) ensure concurrent agent operations never conflict.
+1. **Dedicated User Profiles & XDG Isolation**: Automated sessions are assigned isolated data profiles under `~/.weavetab-system/apps/<appName>/`, and child Electron processes receive `XDG_CONFIG_HOME` and `XDG_DATA_HOME` pointed to `profileDir`.
+2. **Real AppData Protection (`realpathSync`)**: Weavetab strictly enforces `assertNotRealElectronProfile` using `fs.realpathSync` — attempting to target your primary OS user data directories (`%APPDATA%`, `%LOCALAPPDATA%`, `~/Library/Application Support`, `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, or `~/.config`) is blocked to protect your personal logins and local databases from accidental automation corruption.
+3. **Executable Validation & Flag Stripping**: Electron executable paths are validated against `..` traversal and script extensions (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.sh`), spawned without `shell: true`, and `appCfg.args` are filtered to strip `--user-data-dir`, `--remote-debugging-port`, `--remote-debugging-address`, `--remote-allow-origins`, and `--disable-web-security` before appending mandatory Weavetab flags (`--user-data-dir`, `--remote-debugging-port`, `--remote-debugging-address=127.0.0.1`).
+4. **Lock & Re-entrant Mutex Isolation**: Dedicated atomic lockfiles (`~/.weavetab-system/locks/.weavetab.electron.<appName>.lock`) and `AsyncLocalStorage` re-entrant mutexes ensure concurrent agent operations never deadlock or conflict (`clearLock` preserves active mutexes).
+5. **Headless Compatibility**: Setting `"headless": true` in `~/.weavetab/config.json` passes `--headless=new` when Weavetab launches a configured Electron/Chromium app binary, and skips on-page ask-bridge polling cleanly.
 
 ---
 
@@ -86,6 +81,11 @@ Weavetab automatically allows and whitelist-bypasses desktop internal protocols:
 - `discord://` / `slack://` (Deep-links)
 - `devtools://` / `chrome://` / `about:`
 - `file:///` (Local files)
+
+### Electron-Safe Tool Behavior
+- **Non-HTTP URL parsing**: `browser_click`, `browser_type`, and `browser_navigate` parse `file://`, `app://`, and `about:blank` safely without throwing `Invalid URL` errors, and `browser_navigate` skips web cookie-banner auto-clicks in Electron sessions.
+- **Keyboard & Viewport safety**: `browser_key` skips web form-submit fallbacks on `Enter` in Electron windows, and `browser_viewport` clears touch/media overrides safely without breaking Electron shells.
+- **App matching & Burst propagation**: `browser_detect` matches configured `app` names case-insensitively, and `browser_burst` propagates `app` into post-batch ActionMap caching.
 
 ---
 

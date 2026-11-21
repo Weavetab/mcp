@@ -13,7 +13,7 @@ slug: ide-cursor
 
 | Scope | Path |
 |---|---|
-| **Global** | `~/.cursor/mcp_config.json` |
+| **Global** | `~/.cursor/mcp.json` |
 | **Project** | `.cursor/mcp.json` (in project root) |
 
 ## Configuration

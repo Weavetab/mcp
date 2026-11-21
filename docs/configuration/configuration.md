@@ -73,7 +73,6 @@ export interface Config {
   pdfDir: string;
   snapshotDir: string;
   recordingDir: string;
-  designDir: string;
 
   // UI & Overlay
   devMode: DevModeConfig;

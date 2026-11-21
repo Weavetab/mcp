@@ -21,21 +21,20 @@ npm install -D @weavetab/sdk@latest
 
 # Verify installation
 weavetab --version
-# → @weavetab/mcp 2.6.3
+# → @weavetab/mcp 2.6.4
 ```
 
 ## System Requirements
 
-- **Node.js** >= 18.0.0 (Node 20 or 22 LTS recommended)
+- **Node.js** >= 20.19.0 (`^20.19.0 || ^22.12.0 || >=23`)
 - **Chromium-based browser** (Google Chrome, Microsoft Edge, Brave, or Chromium)
-- *Optional:* Firefox or Safari Technology Preview via `browserType` config
+- *Optional:* Firefox (experimental) via `browserType: "firefox"` config
 - *Optional for Desktop Automation:* Any Electron application (Discord, VS Code, Figma, Obsidian, Postman, etc.)
 
-## CLI Binary Aliases
+## CLI Binary
 
 ```bash
-weavetab          # standard binary
-Weavetab          # case-insensitive alias
+weavetab
 ```
 
 ## What Gets Configured

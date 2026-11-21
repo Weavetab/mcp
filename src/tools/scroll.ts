@@ -7,8 +7,7 @@
 import CDP from "chrome-remote-interface";
 import { buildActionMap, findBestMatch, safeSelector } from "../cdp/walker.js";
 import { getCachedActionMap, cacheActionMap } from "../state/cache.js";
-import { computeDelta, storeSnapshot } from "../state/delta.js";
-import { waitForDOMStable } from "../sensors/guard.js";
+import { storeSnapshot } from "../state/delta.js";
 import { sessionRegistry } from "../state/session.js";
 import { logAction } from "../audit/logger.js";
 
@@ -36,9 +35,7 @@ export interface ScrollResult {
 // Track scroll frequency
 let recentScrolls: number[] = [];
 
-// helper for realistic human timing
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-const randomBetween = (min: number, max: number) => Math.random() * (max - min) + min;
 
 function applyEasing(t: number, type: string): number {
   switch (type) {
@@ -90,8 +87,7 @@ export async function browserScroll(
 
   // ── Scroll a specific element into view ────────────────────────────────────
   if (id || label) {
-    const { sendToExtension } = await import("../cdp/helpers.js");
-    await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'scrolling to element...' } });
+    await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'scrolling to element...' } }).catch(() => {});
     let map = getCachedActionMap(targetId, url);
     if (!map) {
       const _emptyMap: import('../cdp/walker.js').ActionMap = { url, title: '', elements: [], targetId };
@@ -153,7 +149,13 @@ export async function browserScroll(
         expression: `(function(sel) {
           const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
           if (!el) return null;
-          const rect = el.getBoundingClientRect();
+          let rect = el.getBoundingClientRect();
+          const cx = rect.left + rect.width / 2;
+          const cy = rect.top + rect.height / 2;
+          if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) {
+            el.scrollIntoView({ block: 'center', inline: 'center' });
+            rect = el.getBoundingClientRect();
+          }
           return {
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2
@@ -204,7 +206,7 @@ export async function browserScroll(
     }).catch(() => null);
     const vp = viewportRes?.result?.value ? JSON.parse(viewportRes.result.value as string) : { x: 400, y: 400 };
 
-    await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `scrolling page ${direction}` } });
+    await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `scrolling page ${direction}` } }).catch(() => {});
 
     for (let i = 0; i < profile.steps; i++) {
       const t = (i + 1) / profile.steps;

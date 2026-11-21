@@ -275,7 +275,7 @@ describe("Plugin Hot-Swap Runtime (PluginRuntime)", () => {
       {
         name: "wt-hook-surface-test",
         version: "1.0.0",
-        permissions: { prompts: { add: true }, resources: { add: true } },
+        permissions: { prompts: { add: true }, resources: { add: true }, hooks: { onBeforeAction: true } },
       },
       `
       module.exports = {
@@ -389,5 +389,113 @@ describe("Plugin Hot-Swap Runtime (PluginRuntime)", () => {
 
     await runtime.unloadPlugin("wt-cache-test");
     fs.rmSync(pluginDir, { recursive: true, force: true });
+  });
+
+  it("loads and hot-reloads ESM ('type: module') plugins with isolated config, logger, and inputSchema", async () => {
+    const fakeServer = makeFakeMcpServer();
+    const surface = createSurface(fakeServer, () => ({}) as any, () => {});
+    const runtime = new PluginRuntime({
+      server: fakeServer,
+      config: { agentId: "global-agent", role: "operator" } as any,
+      surface,
+      verifiedPackages: new Set(["wt-esm-test"]),
+      callbacks: {
+        withSecurity: async (_cfg, _t, fn) => fn({ Runtime: { evaluate: async () => ({ result: { value: "ok" } }) } }, { globalOnly: true } as any),
+        createTabProxy: () => ({ isAvailable: () => true }),
+        normalizeToolResult: (res) => res,
+        wrapError: (e) => ({ isError: true, error: String(e) }),
+      },
+    });
+    runtime.snapshotBaseline();
+
+    const esmDir = fs.mkdtempSync(path.join(os.tmpdir(), "wt-esm-test-"));
+    fs.writeFileSync(
+      path.join(esmDir, "package.json"),
+      JSON.stringify({ name: "wt-esm-test", version: "1.0.0", type: "module", main: "dist/index.js" }),
+      "utf-8"
+    );
+    fs.writeFileSync(
+      path.join(esmDir, "weavetab.json"),
+      JSON.stringify({
+        name: "wt-esm-test",
+        entry: "dist/index.js",
+        defaultConfig: { greeting: "hello" },
+        permissions: { tools: { add: true } },
+      }),
+      "utf-8"
+    );
+    fs.mkdirSync(path.join(esmDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(esmDir, "dist", "index.js"),
+      `
+      const bootMarker = await Promise.resolve("v1");
+      export default {
+        name: "wt-esm-test",
+        tools: [
+          {
+            name: "esm_echo",
+            description: "ESM tool",
+            inputSchema: {
+              type: "object",
+              properties: { who: { type: "string" } },
+              required: ["who"]
+            },
+            handler: async (args, ctx) => ({
+              ver: bootMarker,
+              greeting: ctx.config.greeting,
+              hasGlobalLeak: Boolean(ctx.config.globalOnly),
+              hasLogger: typeof ctx.logger?.info === "function",
+              hasTab: ctx.tab?.isAvailable() === true,
+              who: args.who
+            })
+          }
+        ]
+      };
+      `,
+      "utf-8"
+    );
+
+    try {
+      const ok = await runtime.loadPlugin(esmDir);
+      assert.strictEqual(ok, true);
+      assert.ok(fakeServer._registeredTools["esm_echo"]);
+
+      const r1 = await fakeServer._registeredTools["esm_echo"].handler({ who: "fy2ne" });
+      assert.strictEqual(r1.ver, "v1");
+      assert.strictEqual(r1.greeting, "hello");
+      assert.strictEqual(r1.hasGlobalLeak, false);
+      assert.strictEqual(r1.hasLogger, true);
+      assert.strictEqual(r1.hasTab, true);
+      assert.strictEqual(r1.who, "fy2ne");
+
+      // Rewrite ESM entry on disk and hot-reload (must bust ESM cache)
+      fs.writeFileSync(
+        path.join(esmDir, "dist", "index.js"),
+        `
+        const bootMarker = await Promise.resolve("v2");
+        export default {
+          name: "wt-esm-test",
+          tools: [
+            {
+              name: "esm_echo",
+              description: "ESM tool",
+              handler: async () => ({ ver: bootMarker })
+            }
+          ]
+        };
+        `,
+        "utf-8"
+      );
+
+      await runtime.loadPlugin(esmDir);
+      const r2 = await fakeServer._registeredTools["esm_echo"].handler({});
+      assert.strictEqual(r2.ver, "v2");
+
+      await runtime.unloadPlugin("wt-esm-test");
+    } finally {
+      fs.rmSync(esmDir, { recursive: true, force: true });
+      const storageDir = path.join(os.homedir(), ".weavetab", "plugins", "wt-esm-test");
+      try { fs.rmSync(storageDir, { recursive: true, force: true }); } catch {}
+    }
   });
 });

@@ -74,18 +74,21 @@ export async function browserPdf(
     fs.mkdirSync(pdfsDir, { recursive: true });
   }
 
-  // Strip directory components from the filename (path traversal prevention).
-  // Mirrors snapshot.ts:42 which already uses path.basename correctly.
   const rawName = options.filename || `capture_${Date.now()}.pdf`;
-  const filename = path.basename(rawName);
+  let filename = path.basename(rawName);
+  if (!filename || filename === "." || filename === "..") {
+    filename = `capture_${Date.now()}.pdf`;
+  }
+  if (!filename.toLowerCase().endsWith(".pdf")) filename += ".pdf";
   const fullPath = path.join(pdfsDir, filename);
-  
-  fs.writeFileSync(fullPath, Buffer.from(data, 'base64'));
 
-  return { 
-    success: true, 
-    path: fullPath, 
-    size: `${(Buffer.from(data, 'base64').length / 1024).toFixed(1)} KB`,
+  const pdfBuf = Buffer.from(data, 'base64');
+  fs.writeFileSync(fullPath, pdfBuf);
+
+  return {
+    success: true,
+    path: fullPath,
+    size: `${(pdfBuf.length / 1024).toFixed(1)} KB`,
     filename
   };
 }

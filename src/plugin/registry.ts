@@ -1,18 +1,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 
 import { WEAVETAB_VERSION } from "../version.js";
-
-const _require = createRequire(import.meta.url);
-function getVersion(): string {
-  try {
-    return _require("../../package.json").version || WEAVETAB_VERSION;
-  } catch {
-    return WEAVETAB_VERSION;
-  }
-}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -46,37 +36,49 @@ export interface PluginCandidate {
 
 export const OFFICIAL_PLUGIN_PREFIX = "@weavetab/plugin-";
 
+export const OFFICIAL_PACKAGES = new Set<string>([
+  "@weavetab/plugin-foo",
+  "@weavetab/plugin-devtools",
+  "@weavetab/plugin-accessibility",
+  "@weavetab/plugin-security",
+  "@weavetab/plugin-recorder",
+  "@weavetab/plugin-performance",
+  "@weavetab/plugin-n8n",
+  "@weavetab/plugin-notion",
+  "@weavetab/plugin-github",
+]);
+
 // The production remote URLs — weavetab.dev (D1-backed) primary, GitHub raw fallback.
 export const REGISTRY_URL = "https://weavetab.dev/api/registry/verified.json";
 
 export const REGISTRY_FALLBACK_URL =
   "https://raw.githubusercontent.com/weavetab/registry/main/verified.json";
 
-// Local override: when this file exists at the root of the repo, we use it instead
-// of the remote URL. This allows full offline/local testing.
 const LOCAL_REGISTRY_PATH = join(__dirname, "..", "..", "..", "registry", "verified.json");
 
-/** In-memory cache so we only fetch once per process. */
 let _verifiedCache: Set<string> | null = null;
-let _cacheExpiry = 0; // unix ms — refresh every 30 min in long-running processes
+let _cacheExpiry = 0;
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
-function extractPackageNames(rawList: unknown[]): Set<string> {
+export function extractPackageNames(rawList: unknown[]): Set<string> {
   const set = new Set<string>();
   for (const item of rawList) {
     if (typeof item === "string" && item.trim()) {
       set.add(item.trim());
     } else if (item && typeof item === "object") {
       const obj = item as Record<string, unknown>;
-      if (typeof obj.id === "string" && obj.id.trim()) set.add(obj.id.trim());
-      if (typeof obj.name === "string" && obj.name.trim()) set.add(obj.name.trim());
-      if (typeof obj.package === "string" && obj.package.trim()) set.add(obj.package.trim());
+      if (typeof obj.package === "string" && obj.package.trim()) {
+        set.add(obj.package.trim());
+      } else if (typeof obj.name === "string" && obj.name.trim()) {
+        set.add(obj.name.trim());
+      }
     }
   }
   return set;
 }
 
 function loadLocalRegistry(): Set<string> | null {
+  if (process.env.WT_LOCAL_REGISTRY !== "1") return null;
   if (!existsSync(LOCAL_REGISTRY_PATH)) return null;
   try {
     const raw = readFileSync(LOCAL_REGISTRY_PATH, "utf-8");
@@ -153,10 +155,14 @@ export function invalidateRegistryCache(): void {
  */
 export function resolvePluginTrust(
   packageName: string,
-  verifiedPackages: Set<string>
+  verifiedPackages: Set<string>,
+  pkgDir?: string
 ): PluginTrustInfo {
-  // Tier 1: Official — @weavetab/plugin-* packages are first-party and trusted.
-  if (packageName.startsWith(OFFICIAL_PLUGIN_PREFIX)) {
+  const normDir = pkgDir ? pkgDir.replace(/\\/g, "/") : "";
+  const isNodeModulesProvenance = !pkgDir || normDir.includes("/node_modules/@weavetab/plugin-");
+  const isOfficialVerified = OFFICIAL_PACKAGES.has(packageName) || verifiedPackages.has(packageName);
+
+  if (packageName.startsWith(OFFICIAL_PLUGIN_PREFIX) && isNodeModulesProvenance && isOfficialVerified) {
     return {
       tier: "official",
       label: "Official",
@@ -188,18 +194,26 @@ export function resolvePluginTrust(
 // NPM Registry Existence & Candidate Resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Checks if a package exists on the npm registry via a fast HEAD request.
- */
+export function encodeNpmPackageName(pkgName: string): string {
+  return pkgName.startsWith("@")
+    ? `@${encodeURIComponent(pkgName.slice(1))}`
+    : encodeURIComponent(pkgName);
+}
+
+export function stripNpmVersion(spec: string): { name: string; version?: string } {
+  const trimmed = spec.trim();
+  const atIdx = trimmed.startsWith("@") ? trimmed.indexOf("@", 1) : trimmed.indexOf("@");
+  if (atIdx <= 0) return { name: trimmed };
+  return { name: trimmed.slice(0, atIdx), version: trimmed.slice(atIdx + 1) || undefined };
+}
+
 export async function checkNpmPackageExists(pkgName: string): Promise<boolean> {
   try {
-    const encodedName = pkgName.startsWith("@")
-      ? `@${encodeURIComponent(pkgName.slice(1))}`
-      : encodeURIComponent(pkgName);
-    const res = await fetch(`https://registry.npmjs.org/${encodedName}`, {
+    const { name } = stripNpmVersion(pkgName);
+    const res = await fetch(`https://registry.npmjs.org/${encodeNpmPackageName(name)}`, {
       method: "HEAD",
       signal: AbortSignal.timeout(3000),
-      headers: { "User-Agent": `Weavetab/${getVersion()}` },
+      headers: { "User-Agent": `Weavetab/${WEAVETAB_VERSION}` },
     });
     return res.status === 200;
   } catch {
@@ -207,64 +221,54 @@ export async function checkNpmPackageExists(pkgName: string): Promise<boolean> {
   }
 }
 
-/**
- * Resolves potential package candidates for an input name.
- * - If name is already explicitly scoped (starts with @), resolves directly.
- * - If short name is provided (e.g. "n8n-wt"), checks both:
- *     1. Official shortcut: @weavetab/plugin-<name>
- *     2. Community package: <name>
- */
 export async function resolvePluginCandidates(
   inputName: string,
   verifiedPackages: Set<string>
 ): Promise<PluginCandidate[]> {
-  const trimmed = inputName.trim();
+  const { name: baseName, version } = stripNpmVersion(inputName);
+  const withVer = (pkg: string) => (version ? `${pkg}@${version}` : pkg);
 
-  // If already full scoped package name, resolve directly
-  if (trimmed.startsWith("@")) {
-    const trust = resolvePluginTrust(trimmed, verifiedPackages);
+  if (baseName.startsWith("@")) {
+    const trust = resolvePluginTrust(baseName, verifiedPackages);
     return [
       {
-        packageName: trimmed,
+        packageName: withVer(baseName),
         tier: trust.tier,
         label: trust.label,
         badge: trust.badge,
         tooltip: trust.tooltip,
-        isOfficialShortcut: trimmed.startsWith(OFFICIAL_PLUGIN_PREFIX),
+        isOfficialShortcut: baseName.startsWith(OFFICIAL_PLUGIN_PREFIX),
       },
     ];
   }
 
-  const officialCandidateName = `${OFFICIAL_PLUGIN_PREFIX}${trimmed}`;
-  const communityCandidateName = trimmed;
+  const officialBase = `${OFFICIAL_PLUGIN_PREFIX}${baseName}`;
+  const communityBase = baseName;
 
-  // Check existence in verified registry or npm
   const [officialOnNpm, communityOnNpm] = await Promise.all([
-    checkNpmPackageExists(officialCandidateName),
-    checkNpmPackageExists(communityCandidateName),
+    checkNpmPackageExists(officialBase),
+    checkNpmPackageExists(communityBase),
   ]);
 
   const candidates: PluginCandidate[] = [];
 
-  // 1. Check Official Candidate
   if (officialOnNpm) {
-    const trust = resolvePluginTrust(officialCandidateName, verifiedPackages);
+    const trust = resolvePluginTrust(officialBase, verifiedPackages);
     candidates.push({
-      packageName: officialCandidateName,
-      tier: "official",
-      label: "Official",
+      packageName: withVer(officialBase),
+      tier: trust.tier,
+      label: trust.label,
       badge: trust.badge,
       tooltip: "Official Weavetab plugin maintained by the core team",
       isOfficialShortcut: true,
     });
   }
 
-  // 2. Check Community Candidate
-  const isCommunityVerified = verifiedPackages.has(communityCandidateName);
+  const isCommunityVerified = verifiedPackages.has(communityBase);
   if (communityOnNpm || isCommunityVerified) {
-    const trust = resolvePluginTrust(communityCandidateName, verifiedPackages);
+    const trust = resolvePluginTrust(communityBase, verifiedPackages);
     candidates.push({
-      packageName: communityCandidateName,
+      packageName: withVer(communityBase),
       tier: trust.tier,
       label: trust.label,
       badge: trust.badge,
@@ -275,23 +279,22 @@ export async function resolvePluginCandidates(
     });
   }
 
-  // If neither was confirmed on npm (e.g. offline / network timeout or private repo),
-  // fallback to providing both possibilities as options
+  // offline / timeout fallback: surface both options
   if (candidates.length === 0) {
-    const officialTrust = resolvePluginTrust(officialCandidateName, verifiedPackages);
-    const communityTrust = resolvePluginTrust(communityCandidateName, verifiedPackages);
+    const officialTrust = resolvePluginTrust(officialBase, verifiedPackages);
+    const communityTrust = resolvePluginTrust(communityBase, verifiedPackages);
 
     candidates.push({
-      packageName: officialCandidateName,
-      tier: "official",
-      label: "Official",
+      packageName: withVer(officialBase),
+      tier: officialTrust.tier,
+      label: officialTrust.label,
       badge: officialTrust.badge,
       tooltip: "Official Weavetab plugin shortcut",
       isOfficialShortcut: true,
     });
 
     candidates.push({
-      packageName: communityCandidateName,
+      packageName: withVer(communityBase),
       tier: communityTrust.tier,
       label: communityTrust.label,
       badge: communityTrust.badge,

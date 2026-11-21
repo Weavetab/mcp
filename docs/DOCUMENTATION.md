@@ -1,21 +1,21 @@
 # Weavetab MCP Documentation
 
-> **Package:** `@weavetab/mcp` | **Version:** 2.6.3 | **License:** AGPLv3 | **Author:** Weavetab (owned by fy2ne)
+> **Package:** `@weavetab/mcp` | **Version:** 2.6.4 | **License:** AGPLv3 | **Author:** Weavetab (owned by fy2ne)
 
 ---
 
 ## Overview
 
-Weavetab is a production-grade, in-process MCP (Model Context Protocol) server providing AI agents with direct control across Chromium browsers and Electron desktop applications. It communicates directly over the Chrome DevTools Protocol (CDP) WebSocket — no WebDriver process, no browser binary download, no cloud middleware.
+Weavetab is an in-process MCP (Model Context Protocol) server providing AI agents with direct control across Chromium browsers and Electron desktop applications. It communicates directly over the Chrome DevTools Protocol (CDP) WebSocket — no WebDriver process, no browser binary download, no cloud middleware.
 
 ### Core Capabilities
 
-- **41 Built-in MCP Tools** across functional categories (Vision, Navigation, Input, Tabs, Mission Execution, Dialog, Wait, Storage, Device, Network, Canvas, Output, Evaluation, Office Documents)
+- **40 Built-in MCP Tools** across functional categories (Vision, Navigation, Input, Tabs, Mission Execution, Dialog, Wait, Storage, Device, Network, Canvas, Output, Evaluation, Office Documents)
 - **Direct CDP WebSocket** — Local in-process transport, zero external driver overhead
-- **Semantic Delta Engine** — 5-10x token reduction via per-tab snapshot diffing
+- **Semantic Delta Engine** — Per-tab snapshot diffing returning only added, modified, or removed elements
 - **Ghost Cursor** — Bézier curve click engine with human acceleration and jitter
 - **Human Typing Engine** — burst-pattern profiling, per-character jitter, natural pauses
-- **Blind Injection** — enterprise-grade credential injection via `secrets.json` with domain scoping, Shadow DOM isolation, and JS property hardening
+- **Blind Injection** — host-isolated credential injection via `secrets.json` with domain scoping, Shadow DOM isolation, and JS property hardening
 - **Self-Learning** — per-domain session memory, knowledge hints, automatic framework detection
 - **Security Stack** — domain blacklist, RBAC (5 roles), rate limiter, loop detection, input filter, root guard
 - **Burst Mode** — chain N actions in 1 MCP call via `browser_burst`
@@ -62,117 +62,116 @@ MCP Client → stdio/WebSocket → WithSecurity Pipeline → CDP WebSocket → C
 
 ---
 
-## Tool Reference (41 Tools)
+## Tool Reference (40 Tools)
 
-All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting + domain policy + RBAC), structured audit logging.
+All tools share: Zod schema validation, `withSecurity()` pipeline (rate limiting + specificity-ordered domain policy + fail-closed RBAC + per-tool timeout budgets), and structured audit logging.
 
-### Vision & Reading (8 tools)
+### Vision & Reading (7 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_map` | DOM enumeration with volatile `w:NN` ref IDs, Set-of-Marks visual grounding (`visual: true` / `"auto"`), entity & card container binding (`┌ Heading`), active modal hoisting (`╔═ ACTIVE DIALOG ═╗`), nav cluster collapsing, delta diffing, and scope filtering (`modal`, `form`, `main`). |
-| `browser_find` | Native CDP text search with single and multi-match (`all: true`, `limit: N`) returning bounding rects and selectors — ~10x cheaper than map |
-| `browser_scrape` | CSS/XPath structured data extraction in 1 CDP call |
-| `browser_inspect` | Computed CSS styles + inline styles + event listener types |
-| `browser_snapshot` | MHTML capture/restore of DOM state + resources |
-| `browser_screenshot` | PNG/JPEG capture via CDP, full-page + clip region, returns base64 data URL (no file pollution) |
-| `browser_console` | Read/clear buffered console logs and exceptions |
-| `browser_extract_design` | Extract design tokens, typography, colors, and clean CSS with pixel fidelity |
+| `browser_map` | DOM enumeration with volatile `w:NN` ref IDs, cached map reuse, `depth: 0` DOM init, Set-of-Marks visual grounding (`visual: true` / `"auto"`), container binding, modal hoisting, nav cluster collapsing, delta diffing, and scope filtering. |
+| `browser_find` | Native CDP text search with single and multi-match (`all: true`, `limit: N`), null-body safety, and secret redaction on matched labels without a full DOM walk |
+| `browser_scrape` | CSS/XPath structured data extraction in 1 CDP call with unified retry preserving `multiple: false`, live `.value`, and secret redaction |
+| `browser_inspect` | Parallel CDP inspection returning computed styles, inline styles, box model, and event listener types with Shadow DOM fallback |
+| `browser_snapshot` | MHTML capture/restore of DOM state + resources with non-destructive CSS capture masking, MHTML secret redaction, verified restore paths, and `pathToFileURL()` |
+| `browser_screenshot` | PNG/JPEG capture via CDP with non-destructive CSS secret masking and accurate scaled dimensions on >1280px viewports (base64 data URL, zero disk I/O) |
+| `browser_console` | Read/clear buffered console logs and exceptions (`0`/`false` preserved, noise filtered across all paths, secrets redacted, 1,000-char entry cap) |
 
 ### Navigation (1 tool)
 
 | Tool | Description |
 |------|-------------|
-| `browser_navigate` | Ultra-low latency navigation (~150-300ms) with non-blocking readyState polling, parallelized metadata, domain blocklist enforcement, and `weavetab://` protocol |
+| `browser_navigate` | Direct CDP navigation with domain blocklist enforcement, Electron-safe defaults (skips web cookie auto-click), guaranteed non-empty title fallback, and `weavetab://` protocol |
 
 ### Input (9 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_click` | Ghost Cursor (Bézier) click with direct visual mark targeting (`mark: N`), intent memory, occlusion detection, and stuck-loop detection |
-| `browser_type` | Human keystroke engine with zero-target `document.activeElement` typing, anti-unfocus click avoidance, jitter, and burst patterns |
-| `browser_type_secret` | Blind Injection from `secrets.json` — domain check before value load, Shadow DOM isolation, JS property hardening |
-| `browser_key` | Native keyboard dispatch with combo hotkeys (`"Ctrl+A"`, `"Cmd+K"`, `"Alt+Tab"`) and zero arbitrary delay |
-| `browser_pointer` | Hover, double-click, drag-and-drop, and multi-level flyout menu traversal via `hover_chain: ["File", "Export As", "PNG"]` |
-| `browser_select` | Native `<select>` dropdown selection — React/Vue safe (prototype setter + events) |
-| `browser_fill` | Smart multi-field form batch completion with input discovery scanner (`scan: true`), flexible field selectors, and Google Sheets `grid_data` |
-| `browser_upload` | Bypass file dialogs via CDP `DOM.setFileInputFiles` |
-| `browser_scroll` | Fast non-blocking directional + element-relative scroll without redundant action map rebuilds |
+| `browser_click` | Ghost Cursor (Bézier) click with visual mark targeting (`mark: N`), intent memory, opt-in `include_map`, Electron URL safety, and stuck-loop detection |
+| `browser_type` | Human keystroke engine with zero-target `document.activeElement` typing, exact ref/selector targeting, anti-unfocus guard, jitter, and burst patterns |
+| `browser_type_secret` | Blind Injection from `secrets.json` — strict domain check blocking empty-hostname URLs (`file://`, `about:blank`), exact ref matching, `target: "focused"`, and DOM property hardening |
+| `browser_key` | Native keyboard dispatch with combo hotkeys (`"Ctrl+A"`, `"Cmd+K"`), printable text payloads, and Electron-safe `Enter` handling |
+| `browser_pointer` | Hover, double-click, drag-and-drop (`buttons: 1`, `end_ref` coordinate verification), and multi-level flyout menu traversal via `hover_chain` |
+| `browser_select` | Native `<select>` and custom ARIA/Radix/Shadcn dropdown selection (single `value` or multi-select `values`) plus text range highlighting (`mode: "text"`, `start`/`end`) |
+| `browser_fill` | Smart multi-field form batch completion with input discovery scanner (`scan: true`), flexible field selectors, and Google Sheets `grid_data` (`AA`+ columns) |
+| `browser_upload` | Bypass file dialogs via CDP `DOM.setFileInputFiles` with cached ActionMap reuse |
+| `browser_scroll` | Fast non-blocking directional + element-relative scroll (auto-scrolls off-screen targets into view) |
 
 ### Tabs & Windows (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_tabs` | Open/switch/close/list/consolidate (dedup)/heal (recover crash). Also list/focus windows |
-| `browser_detect` | Detect installed browsers + CDP feature coverage per engine (Chromium, Firefox, WebKit) |
+| `browser_tabs` | Open/switch/close/list/consolidate (Tab Armor-aware dedup with URL normalization)/heal (recover crash). Also list/focus windows |
+| `browser_detect` | Detect installed browsers + configured desktop apps (case-insensitive `app` match) and CDP feature coverage per engine |
 
 ### Mission Execution (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_burst` | Chain N actions in 1 MCP call. Supports 4 macro steps: `type_and_send`, `navigate_and_read`, `click_and_wait`, `scroll_and_read` |
-| `browser_automation` | Inject persistent self-running scripts — monitoring, polling, background extraction |
+| `browser_burst` | Chain N actions in 1 MCP call. Supports 5 macro steps: `type_and_send`, `navigate_and_read`, `click_and_wait`, `scroll_and_read`, `fill_form` |
+| `browser_automation` | Inject persistent self-running scripts with clean new-document teardown on `stop`, 100-entry mailbox cap, and recursive redaction on `poll` |
 
 ### Dialog & User Interaction (3 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_dialog` | Accept/dismiss JavaScript alert/confirm/prompt dialogs |
-| `browser_thoughts` | Green thought bubbles: feedback (one-way) or question with input (sentence/paragraph modes) |
-| `browser_clipboard` | System clipboard R/W (text, images, or both in one write) |
+| `browser_dialog` | Accept/dismiss JavaScript alert/confirm/prompt dialogs with safe toast escaping and deduplicated listeners |
+| `browser_thoughts` | Agent-to-user HUD cards: feedback (one-way) or question with input (sentence/paragraph, 120s default timeout, bridge cleanup on cancel/timeout) |
+| `browser_clipboard` | System clipboard R/W (text, images, or both in one write), native OS write priority, macOS `Cmd+V` paste, and secret redaction on read |
 
 ### Wait & Timing (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_wait` | Wait for element/text/URL/stable/network/auto — timeout configurable, optional loop counter reset (`force: true`) |
+| `browser_wait` | Wait for element/text/URL/stable/network/auto — accurate timeout status (`success: false` on network timeout) and optional loop counter reset |
 | `browser_captcha` | Autonomous zero-API detection and solving for Cloudflare Turnstile, reCAPTCHA v2/v3, GeeTest, and hCaptcha via CDP mouse physics |
 
 ### Storage & Cookies (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_storage` | localStorage & sessionStorage get/set/clear |
-| `browser_cookies` | Cookies get/list/set/delete |
+| `browser_storage` | Validated `localStorage` & `sessionStorage` get/set/remove/list/clear with secret redaction and 2,000-char value cap on `list` |
+| `browser_cookies` | Cookies get/list/set/delete with secret redaction on read and real CDP delete error reporting |
 
 ### Device & Environment (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_viewport` | Viewport, device emulation, geolocation, timezone override |
-| `browser_emulate` | Network throttling (3G/4G/offline), CPU slowdown, geolocation, timezone, and User-Agent override |
+| `browser_viewport` | Viewport, device emulation, real CDP touch emulation, geolocation, timezone, color scheme (`no-preference` clear), and Electron-safe reset |
+| `browser_emulate` | Validated network throttling presets (3G/4G/offline), CPU slowdown (`>= 1`), geolocation, timezone, color scheme, and User-Agent override |
 
 ### Network (1 tool)
 
 | Tool | Description |
 |------|-------------|
-| `browser_network_intercept` | Mock API responses, block tracking, and retrieve raw protocol network telemetry (TLS/SSL certificate metadata, microsecond timing breakdown, OS-level failure reasons) |
+| `browser_network_intercept` | Escaped glob API mocking, tracking blocks, Response-stage passthrough, clean listener teardown, and raw protocol telemetry (TLS/SSL, timing, OS failures) |
 
 ### Canvas & Visual (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_canvas` | Get image data (base64 PNG) or draw points on canvas |
-| `browser_highlight` | Visual CDP overlay highlight — zero token cost |
+| `browser_canvas` | Get image data (base64 PNG) or draw coordinate drag paths (`buttons: 1`) on canvas |
+| `browser_highlight` | Visual CDP overlay highlight with `textContent` XSS safety and color allowlisting — zero token cost |
 
 ### Output (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `browser_pdf` | Print page to PDF — landscape, scale, page ranges |
-| `browser_recording` | Compile browser screencast frames into video (.webp, .gif, .mp4, .webm) |
+| `browser_pdf` | Print page to PDF — landscape, scale, page ranges, basename traversal guard, auto `.pdf` suffix, and secret masking |
+| `browser_recording` | Compile browser screencast frames into video (`.webp`, `.gif`, `.mp4`, `.webm`) with `sessionId` traversal validation |
 
 ### Evaluation (1 tool)
 
 | Tool | Description |
 |------|-------------|
-| `browser_eval` | Run arbitrary JS via CDP Runtime.evaluate. On `weavetab://` pages, supports building UIs via `wt-dashboard-command` events |
+| `browser_eval` | Run JS via CDP `Runtime.evaluate`, auto-invoke bare zero-arg functions (`() => ...`), and recursively redact secrets across objects/arrays. On `weavetab://` pages, supports `wt-dashboard-command` events |
 
 ### Performance (1 tool)
 
 | Tool | Description |
 |------|-------------|
-| `browser_performance` | Core Web Vitals, memory, navigation timing, and resource timings |
+| `browser_performance` | CDP metrics (`Performance.enable()`), parallel Core Web Vitals (FCP/LCP/CLS) with observer teardown, and single-eval memory/navigation/resource timings |
 
 ### GitHub Automation (Plugin)
 
@@ -182,22 +181,22 @@ GitHub support is no longer a built-in tool. It is provided by the official `@we
 
 | Tool | Description |
 |------|-------------|
-| `browser_checkpoint` | Snapshot and restore browser state (cookies, storage, scroll/URL) into named checkpoints for time-travel and rollback |
+| `browser_checkpoint` | Snapshot and restore browser state (cookies, storage, scroll/URL) into `mode: 0o600` checkpoints with bounded restore load wait |
 | `browser_pattern_learn` | Read, register, and update named workflow patterns and site quirks per origin |
-| `browser_office` | Parse Word (`.docx`), Excel (`.xlsx`), PDF, and CSV files into structured data |
+| `browser_office` | Parse Word (`.docx`), Excel (`.xlsx`), PDF, and CSV files (25MB cap, native `FileReader`, ZIP `word/`/`xl/` sniffing, secret redaction) |
 
 ---
 
 ## Secrets Management
 
-Secrets are stored in structured `secrets.json` files with `chmod 600` enforcement and atomic file writes (temp file + rename).
+Secrets are encrypted at rest with fail-closed AES-256-GCM in structured `secrets.json` files with `0o600` permissions, Windows `icacls` owner-only ACLs, and atomic file writes (temp file + rename).
 
 ### Resolution Order
 
-1. `./.weavetab/secrets.json` (project-scoped, opt-in via `weavetab secrets init --project`)
+1. `./.weavetab/secrets.json` (project-scoped, loaded only when `WT_PROJECT_SECRETS=1` is set or `cwd === os.homedir()`, initialized via `weavetab secrets init --project`)
 2. `~/.weavetab/secrets.json` (global default)
 
-> **Note:** The legacy `.env`-based `EnvSecretProvider` is **deprecated and no longer supported**. All secrets must use `secrets.json`.
+> **Note:** The legacy `.env`-based secret provider has been removed. All secrets must use `secrets.json`.
 
 ### CLI Commands
 
@@ -231,7 +230,7 @@ browser_type_secret({
 })
 ```
 
-The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and audit logs.
+The value is permanently masked as `[REDACTED]` across all subsequent DOM reads, delta diffs, session trails, compiled patterns, and audit logs, and sensitive inputs use non-destructive CSS masking (`-webkit-text-security: disc` / `color: transparent`) during visual captures.
 
 ---
 
@@ -239,8 +238,7 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
 
 ### Config File Locations
 
-- **Global:** `~/.weavetab/config.json`
-- **Project:** `./.weavetab/config.json` (if exists, takes precedence)
+- **Global:** `~/.weavetab/config.json` (the only config file Weavetab reads; secrets additionally support `./.weavetab/secrets.json`)
 
 ### Config Structure
 
@@ -248,13 +246,16 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
 {
   "browserType": "chromium",
   "headless": false,
-  "devMode": true,
+  "devMode": false,
   "maxActionsPerMinute": 60,
-  "role": "admin",
+  "role": "operator",
   "telemetry": false,
   "attachPort": 0,
   "extension": true,
   "cookies": false,
+  "syncDataAcrossBrowsers": false,
+  "actionabilityTimeoutMs": 300,
+  "refCacheTtlMs": 30000,
   "browserFlags": [],
   "policies": [],
   "electron": {
@@ -270,23 +271,27 @@ The value is permanently masked as `[REDACTED]` in all subsequent DOM reads and 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `browserType` | string | "chromium" | Browser to use (chromium, firefox, webkit) |
-| `headless` | boolean | false | Run browser in headless mode |
+| `headless` | boolean | false | Run browser and launched Electron apps in headless mode |
 | `devMode` | boolean | false | Enable HUD overlay and verbose logging |
 | `maxActionsPerMinute` | number | 60 | Rate limit for tool executions |
-| `role` | string | "admin" | RBAC role (admin, operator, viewer, automation, system) |
+| `role` | string | "operator" | RBAC role (admin, operator, viewer, automation, system) |
 | `telemetry` | boolean | false | Enable anonymous usage telemetry |
 | `attachPort` | number | 0 | Chrome DevTools Protocol port |
 | `extension` | boolean | true | Enable Weavetab extension integration |
 | `cookies` | boolean | false | Persist cookies/storage across sessions. When `false`, `document.cookie`, `localStorage`, and `sessionStorage` are all neutered at the browser level (returns empty/null for everything) + a fresh isolated profile is used each session. When `true`, cookies/storage work normally and persist via the profile directory. |
-| `browserFlags` | string[] | `[]` | Extra Chromium command-line flags to append on launch (e.g., `["--disable-web-security"]`). The `--disable-sync` flag is mandatory and cannot be overridden — any conflicting flag is automatically dropped. |
+| `syncDataAcrossBrowsers` | boolean | false | Share the persistent cookie profile directory across Chromium browser binaries (`chromium` / `chrome` / `edge`). |
+| `proxy` | string | — | Outbound browser proxy URL (overridable via `WT_PROXY_URL`). |
+| `actionabilityTimeoutMs` | number | 300 | Actionability readiness timeout in ms (`50`–`15000`). |
+| `refCacheTtlMs` | number | 30000 | Cached `w:NN` ref resolution TTL in ms. |
+| `browserFlags` | string[] | `[]` | Extra Chromium command-line flags to append on launch. Dangerous flags (`--user-data-dir`, `--remote-debugging-port`, `--remote-debugging-address`, `--remote-allow-origins`, `--disable-web-security`) and `--enable-sync` are automatically stripped, and mandatory Weavetab flags are placed after user flags. |
 | `policies` | PolicyEntry[] | `[]` | Domain-level access control policies (see [Domain Policy](#domain-policy) below). Supersedes the legacy `block`/`allow` lists. |
-| `electron` | Record<string, string> | `{}` | Map of registered Electron desktop applications (e.g. Discord, VS Code, Figma, Antigravity, local dev apps) to executable paths or startup commands. |
+| `electron` | Record<string, any> | `{}` | Map of registered Electron desktop applications (path string, port number, or `{ path, port, url, profileDir, args }`). Also accepts `"apps"` alias. |
 
 ---
 
 ## Domain Policy
 
-The `policies` config option provides **fine-grained domain-level access control** that supersedes the legacy `block`/`allow` lists. Policies are checked **in array order** before every tool execution — the first matching pattern wins. If no policy matches, the legacy `block`/`allow` lists are checked as fallback, then access is allowed by default.
+The `policies` config option provides **fine-grained domain-level access control** that supersedes the legacy `block`/`allow` lists. Policies are evaluated **by specificity** (exact match > longest literal domain suffix > wildcard, with array order breaking ties) before every tool execution. Bare domain patterns (e.g. `paypal.com`) match both the exact domain and subdomains (`*.paypal.com`), and trailing FQDN dots are normalized automatically. If no policy matches, `allow` is checked before `block`, then access is allowed by default.
 
 Configure policies in your `config.json` under the top-level `policies` array:
 
@@ -322,19 +327,19 @@ Configure policies in your `config.json` under the top-level `policies` array:
 | Mode | Description |
 |------|-------------|
 | `allow` | Full access to all tools. Explicitly whitelists a domain. |
-| `read-only` | Only observation tools allowed: map, find, scrape, console, eval, inspect, snapshot, pdf, cookies. Blocks write tools (click, type, navigate, etc.). |
+| `read-only` | Only observation tools allowed: `map`, `find`, `scrape`, `console` (`read`), `inspect`, `snapshot` (`capture` confined to `snapshotDir`), `screenshot`, `pdf`, `cookies` (`get`/`list` on same origin), `tabs` (`list`/`list_windows`), `wait`, `pattern_learn` (`get`), and `detect`. Blocks `browser_eval` and all mutation tools. |
 | `deny` | Complete block of all interactions on that domain. |
-| `audit-only` | All tools allowed, but every action is logged for audit trails. |
+| `audit-only` | All tools allowed, with every action logged for audit trails. |
 
 ### Key Differences from `block`/`allow` Lists
 
 | Feature | Legacy `block`/`allow` | `policies` |
 |---------|----------------------|------------|
-| Modes | Only allow or deny | 4 modes: allow, deny, read-only, audit-only |
-| Wildcards | Supported | Supported (`*` wildcard) |
-| Order | No ordering | **First match wins** — order matters |
-| Granularity | Domain only | Domain + per-tool enforcement (read-only blocks writes) |
-| Check timing | At navigation | Every tool execution |
+| Modes | Only allow or deny (`allow` checked before `block`) | 4 modes: allow, deny, read-only, audit-only |
+| Wildcards & Subdomains | Wildcards (`*`) + bare domains match subdomains | Wildcards (`*`) + bare domains match subdomains + trailing-dot normalization |
+| Order | `allow` evaluated before `block` | **Specificity-ordered** (exact > longest literal suffix > wildcard) |
+| Granularity | Domain only | Domain + per-tool and per-action read-only enforcement |
+| Check timing | Every tool execution | Every tool execution (including `browser_burst` steps and `WeavetabOpen`) |
 
 ---
 
@@ -346,7 +351,7 @@ Configure policies in your `config.json` under the top-level `policies` array:
 |------|-------------|
 | `admin` | Full access to all tools |
 | `operator` | Full access to all tools (standard agent role) |
-| `viewer` | Read-only observation tools only (`browser_map`, `browser_find`, `browser_scrape`, `browser_console`, `browser_eval`, `browser_inspect`, `browser_extract_design`, `browser_snapshot`, `browser_screenshot`, `browser_pdf`, `browser_cookies`, `browser_tabs`, `browser_wait`, `browser_pattern_learn`) |
+| `viewer` | Read-only observation tools only (`browser_map`, `browser_find`, `browser_scrape`, `browser_console` [read], `browser_inspect`, `browser_snapshot` [capture in `snapshotDir`], `browser_screenshot`, `browser_pdf`, `browser_cookies` [get/list on same origin], `browser_tabs` [list/list_windows], `browser_wait`, `browser_pattern_learn` [get], `browser_detect`). Excludes `browser_eval`. |
 | `automation` | Full access except `browser_thoughts` (non-interactive CI/CD mode) |
 | `system` | Internal tools only (`browser_thoughts`, `browser_detect`, `browser_performance`, `browser_checkpoint`, `browser_pattern_learn`) |
 
@@ -457,7 +462,7 @@ weavetab plugin add wt-my-tool
 npm install wt-my-tool
 ```
 
-Plugins with a valid `weavetab.json` are automatically discovered on Weavetab startup.
+Installed plugins with a valid `weavetab.json` in `~/.weavetab/plugins/` are automatically discovered on Weavetab startup (with `realpathSync` entry and storage containment and manifest-only permission enforcement; local workspace `./plugins` discovery requires `WT_ALLOW_WORKSPACE_PLUGINS=1`).
 
 ---
 
@@ -495,10 +500,10 @@ Skills are automatically discovered by MCP clients and provide:
 Weavetab natively supports **generic automation of any Electron or Chromium-based desktop application** (e.g. Discord, Slack, VS Code, Antigravity IDE, Figma, Obsidian, Postman, or local developer applications running from source).
 
 ### How It Works Under the Hood
-Electron desktop applications run a bundled Chromium/Blink engine under the hood. When started with Chrome DevTools Protocol debugging enabled (either automatically via Weavetab or via `--remote-debugging-port`), Weavetab connects directly to the desktop app's internal WebSockets and exposes all 41 built-in MCP tools without requiring external drivers or wrappers.
+Electron desktop applications run a bundled Chromium/Blink engine under the hood. When started with Chrome DevTools Protocol debugging enabled (either automatically via Weavetab with isolated `XDG_CONFIG_HOME`/`XDG_DATA_HOME` and filtered flags or via `--remote-debugging-port`), Weavetab connects directly to the desktop app's internal WebSockets and exposes all 40 built-in MCP tools without requiring external drivers or wrappers.
 
 ### Registering Applications
-In `~/.weavetab/config.json` or project-scoped `.weavetab/config.json`:
+In `~/.weavetab/config.json` (under `"electron"` or its `"apps"` alias):
 
 ```json
 {
@@ -562,7 +567,7 @@ Enable `devMode: true` in config for:
 
 ### Audit Logs
 
-Review the latest `~/.weavetab-system/logs/mission_<timestamp>.log` for:
+Review the latest `~/.weavetab-system/logs/mission_<timestamp>.log` (automatically pruned to retain the latest 30 `mission_*` files) for:
 
 - Tool invocation history
 - Error messages and stack traces

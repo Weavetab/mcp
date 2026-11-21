@@ -8,9 +8,7 @@ export interface ConfirmResult {
   after: Record<string, string>;
   attempts: number;
   settleMs: number;
-  /** Confidence score (0-1) based on settle time and stability */
   confidence: number;
-  /** Whether this is a degraded result due to timeout */
   degraded?: boolean;
 }
 
@@ -18,9 +16,7 @@ export interface ConfirmOptions {
   settleMs?: number;
   maxAttempts?: number;
   retryIncrementMs?: number;
-  /** If true, requires explicit DOM confirmation before returning */
   requireConfirmation?: boolean;
-  /** Minimum confidence threshold to consider successful */
   minConfidence?: number;
 }
 
@@ -31,23 +27,17 @@ function shallowEqual(a: Record<string, string>, b: Record<string, string>): boo
   return ka.every(k => a[k] === b[k]);
 }
 
-/**
- * Calculate confidence score based on settle time and attempts
- * Faster settle with fewer attempts = higher confidence
- */
-function calculateConfidence(settleMs: number, attempts: number, maxAttempts: number): number {
-  // Base confidence starts at 1.0 and decreases with attempts and settle time
+export function calculateConfidence(settleMs: number, attempts: number, maxAttempts: number): number {
   let confidence = 1.0;
-  
-  // Penalize multiple attempts
-  const attemptPenalty = (attempts - 1) / maxAttempts * 0.3;
+  const safeMax = Math.max(1, maxAttempts);
+  const safeSettle = Number.isFinite(settleMs) ? settleMs : 500;
+
+  const attemptPenalty = ((Math.max(1, attempts) - 1) / safeMax) * 0.3;
   confidence -= attemptPenalty;
-  
-  // Penalize long settle times (anything over 200ms is slow)
-  const settlePenalty = Math.max(0, (settleMs - 50) / 500) * 0.4;
+
+  const settlePenalty = Math.max(0, (safeSettle - 50) / 500) * 0.4;
   confidence -= settlePenalty;
-  
-  // Ensure confidence stays in [0, 1] range
+
   return Math.max(0, Math.min(1, confidence));
 }
 
@@ -61,68 +51,78 @@ export async function confirmChange(
     checkSuccess?: (after: Record<string, string>) => boolean;
   }
 ): Promise<ConfirmResult> {
-  const passes = options?.verifyPasses ?? [16, 50, 100, 200, 500];
-  const maxAttempts = options?.maxAttempts ?? passes.length;
+  const passes = options?.verifyPasses && options.verifyPasses.length > 0
+    ? options.verifyPasses
+    : [16, 50, 100, 200, 500];
+  const maxAttempts = Math.max(0, options?.maxAttempts ?? passes.length);
   const requireConfirmation = options?.requireConfirmation ?? false;
   const minConfidence = options?.minConfidence ?? 0.5;
 
   const before = options?.precomputedBefore ?? await getState();
-  const startMs = Date.now();
   await action();
 
   let lastAfter = before;
+  let prevSuccessAfter: Record<string, string> | null = null;
+  let lastWait = options?.settleMs ?? (passes[0] ?? 16);
   let degraded = false;
-  
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const wait = attempt < passes.length ? passes[attempt] : (options?.settleMs ?? 16) + attempt * (options?.retryIncrementMs ?? 100);
+    const wait = attempt < passes.length
+      ? passes[attempt]!
+      : (options?.settleMs ?? 16) + attempt * (options?.retryIncrementMs ?? 100);
+    lastWait = wait;
 
     await new Promise(r => setTimeout(r, wait));
     await waitForDOMStable(session, 50, 200).catch(() => {});
 
     const after = await getState();
     lastAfter = after;
-    
-	    logDebug(`[confirmChange] [${wait}ms] Pass ${attempt + 1}: value=${JSON.stringify(after)} (before=${JSON.stringify(before)})`);
 
-    const isSuccess = options?.checkSuccess 
+    logDebug(`[confirmChange] [${wait}ms] Pass ${attempt + 1}: value=${JSON.stringify(after)} (before=${JSON.stringify(before)})`);
+
+    const isSuccess = options?.checkSuccess
       ? options.checkSuccess(after)
       : !shallowEqual(before, after);
 
     const confidence = calculateConfidence(wait, attempt + 1, maxAttempts);
 
     if (isSuccess) {
-      // If requireConfirmation is true, continue to verify stability
-      if (requireConfirmation && attempt < maxAttempts - 1) {
-        continue;
+      if (requireConfirmation) {
+        if (!prevSuccessAfter || !shallowEqual(prevSuccessAfter, after)) {
+          prevSuccessAfter = after;
+          if (attempt < maxAttempts - 1) {
+            continue;
+          }
+        }
       }
-      
-      // Check confidence threshold
+
       if (confidence < minConfidence) {
-        console.warn("[confirmChange] Low confidence (" + confidence + ") below threshold (" + minConfidence + ")");
+        logDebug(`[confirmChange] Low confidence (${confidence}) below threshold (${minConfidence})`);
         degraded = true;
       }
-      
-      return { 
-        applied: true, 
-        before, 
-        after, 
-        attempts: attempt + 1, 
+
+      return {
+        applied: true,
+        before,
+        after,
+        attempts: attempt + 1,
         settleMs: wait,
         confidence,
-        degraded
+        degraded,
       };
+    } else {
+      prevSuccessAfter = null;
     }
   }
-  
-  // If we get here, change was not confirmed
-  const finalConfidence = calculateConfidence(passes[maxAttempts - 1], maxAttempts, maxAttempts);
-  return { 
-    applied: false, 
-    before, 
-    after: lastAfter, 
-    attempts: maxAttempts, 
-    settleMs: passes[maxAttempts - 1],
+
+  const finalConfidence = calculateConfidence(lastWait, Math.max(1, maxAttempts), Math.max(1, maxAttempts));
+  return {
+    applied: false,
+    before,
+    after: lastAfter,
+    attempts: maxAttempts,
+    settleMs: lastWait,
     confidence: finalConfidence,
-    degraded: true
+    degraded: true,
   };
 }

@@ -54,10 +54,16 @@ class HookPipeline {
   registerPluginHooks(pluginName: string, hooks: Partial<PluginHooksRegistry> & Record<string, any>): void {
     if (!hooks) return;
 
-    // 1. Before Action / Before Tool Call
-    const beforeFns = hooks.onBeforeAction || hooks.beforeToolCall;
-    if (beforeFns) {
-      const list = Array.isArray(beforeFns) ? beforeFns : [beforeFns];
+    if (hooks.onBeforeAction) {
+      const list = Array.isArray(hooks.onBeforeAction) ? hooks.onBeforeAction : [hooks.onBeforeAction];
+      for (const fn of list) {
+        if (typeof fn === "function") {
+          this.beforeToolCallHooks.push({ pluginName, fn });
+        }
+      }
+    }
+    if (hooks.beforeToolCall) {
+      const list = Array.isArray(hooks.beforeToolCall) ? hooks.beforeToolCall : [hooks.beforeToolCall];
       for (const fn of list) {
         if (typeof fn === "function") {
           this.beforeToolCallHooks.push({ pluginName, fn });
@@ -160,17 +166,6 @@ class HookPipeline {
   }
 
   /**
-   * Alias for dispatchBeforeToolCall.
-   */
-  async dispatchBeforeAction(
-    toolName: string,
-    args: Record<string, any>,
-    session?: any
-  ): Promise<Record<string, any>> {
-    return this.dispatchBeforeToolCall(toolName, args, session);
-  }
-
-  /**
    * Dispatches afterAction / afterToolCall hooks in sequence.
    * Allows plugins to inspect, transform, or redact tool results.
    */
@@ -194,18 +189,6 @@ class HookPipeline {
       }
     }
     return currentResult;
-  }
-
-  /**
-   * Alias for dispatchAfterToolCall.
-   */
-  async dispatchAfterAction(
-    toolName: string,
-    result: any,
-    session?: any,
-    args?: Record<string, any>
-  ): Promise<any> {
-    return this.dispatchAfterToolCall(toolName, args || {}, result, session);
   }
 
   /**

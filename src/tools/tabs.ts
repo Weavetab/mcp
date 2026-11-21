@@ -8,6 +8,7 @@ import { clearTabCache } from "../state/cache.js";
 import { readLock } from "../cdp/lock.js";
 import { resetLoopCounter } from "../intelligence/trail.js";
 import { getConfigAgentId, getConfigMaxTabs } from "../config/loader.js";
+import { checkDomain } from "../security/blacklist.js";
 
 /** Resolve the active CDP port — live > lock file */
 function resolvePort(_config: Config, appName?: string): number {
@@ -148,6 +149,28 @@ export async function WeavetabOpen(
   reuse = true,
   appName?: string
 ): Promise<{ success: true; tabId: string; url: string; reused?: boolean }> {
+  const trimmedUrl = (url || "").trim();
+  if (!trimmedUrl) {
+    throw new Error("[!] URL is required to open a tab.");
+  }
+  const lowerUrl = trimmedUrl.toLowerCase();
+  if (lowerUrl !== "about:blank" && !lowerUrl.startsWith("weavetab:")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmedUrl);
+    } catch {
+      throw new Error(`[!] Invalid URL: ${trimmedUrl}`);
+    }
+    const proto = parsed.protocol.toLowerCase();
+    if (proto !== "http:" && proto !== "https:" && proto !== "weavetab:") {
+      throw new Error(`[!] Blocked protocol '${proto}'. Only http:, https:, weavetab:, and about:blank are allowed.`);
+    }
+    const domainCheck = checkDomain(parsed.href, "browser_navigate", config);
+    if (!domainCheck.allowed) {
+      throw new Error(`[!] ${domainCheck.reason}`);
+    }
+  }
+
   let resolvedAppName = appName;
   if (!resolvedAppName) {
     // Only inherit the sticky Electron app when no web-browser session is active
@@ -345,11 +368,13 @@ export async function WeavetabConsolidate(config: Config, appName?: string): Pro
   const activeTargetId = sessionRegistry.getActive(getConfigAgentId(config), appName)?.targetId;
 
   for (const page of pages) {
-    if (page.id === activeTargetId) {
-      seenUrls.add(page.url);
+    const norm = normalizeUrl(page.url || "");
+    const protectedTab = lockedTabIds.has(page.id) || (semanticScores.get(page.id) ?? 10) >= 70;
+    if (page.id === activeTargetId || protectedTab) {
+      if (norm) seenUrls.add(norm);
       continue;
     }
-    if (seenUrls.has(page.url) && page.url !== "about:blank" && page.url !== "") {
+    if (seenUrls.has(norm) && norm !== "about:blank" && norm !== "") {
       // Duplicate URL — close it
       try {
         await CDP.Close({ host: "127.0.0.1", port, id: page.id });
@@ -360,8 +385,8 @@ export async function WeavetabConsolidate(config: Config, appName?: string): Pro
         lockedTabIds.delete(page.id);
         closedDuplicates++;
       } catch { /* skip */ }
-    } else {
-      seenUrls.add(page.url);
+    } else if (norm) {
+      seenUrls.add(norm);
     }
   }
 

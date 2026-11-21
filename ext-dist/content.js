@@ -51,32 +51,31 @@ function __wt_safeAppendToBody(el) {
 // ── HUD MOUNT LAYER (Phase 1: Closed Shadow DOM + Iframe Architecture) ─────
 // Reload-proof, agent-invisible, real-time visual system
 (function mountHUD() {
-  // Guard: exit gracefully on chrome:// pages (content scripts blocked)
+  if (window !== window.top) return;
   if (location.protocol.startsWith('chrome')) return;
 
+  const hudOrigin = new URL(browserAPI.runtime.getURL('')).origin;
   let host = null;
   let shadow = null;
   let iframe = null;
   let hudState = {};
 
-  // Create mount point with closed shadow DOM
   function createMount() {
-    if (host && document.documentElement.contains(host)) return;
+    if ((host && document.documentElement.contains(host)) || document.getElementById('__wt_hud_host')) return;
 
     host = document.createElement('weavetab-host');
+    host.id = '__wt_hud_host';
     host.setAttribute('data-wt-internal', 'true');
     host.setAttribute('aria-hidden', 'true');
     host.style.cssText = 'all:initial !important;position:fixed !important;left:0 !important;top:0 !important;width:0 !important;height:0 !important;z-index:2147483647 !important;pointer-events:none !important;background:transparent !important;opacity:1 !important;transform:none !important;filter:none !important;';
     __wt_safeAppendToBody(host);
 
-    // Closed shadow root — ref lives ONLY here, never on window
     shadow = host.attachShadow({ mode: 'closed' });
 
     iframe = document.createElement('iframe');
     iframe.src = browserAPI.runtime.getURL('hud/index.html');
     iframe.id = 'wt-hud-iframe';
     iframe.setAttribute('allowtransparency', 'true');
-    // FIX: Start hidden. Expand only after receiving state to prevent white flash.
     Object.assign(iframe.style, {
       position: 'fixed',
       top: '0',
@@ -85,74 +84,53 @@ function __wt_safeAppendToBody(el) {
       height: '0',
       border: 'none',
       background: 'transparent',
+      backgroundColor: 'transparent',
       pointerEvents: 'none',
       zIndex: '2147483647',
       visibility: 'hidden',
       opacity: '0',
-      colorScheme: 'light dark'
+      colorScheme: 'normal'
     });
     shadow.appendChild(iframe);
 
-    // REHYDRATE: send state to iframe, but DO NOT make visible yet to avoid white flash.
     iframe.onload = function() {
       browserAPI.storage.local.get('wt-hud-state', function(result) {
         hudState = result['wt-hud-state'] || {};
-        if (iframe.contentWindow) {
-          iframe.contentWindow.postMessage({ type: 'REHYDRATE', state: hudState }, browserAPI.runtime.getURL(''));
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'REHYDRATE', state: hudState }, hudOrigin);
         }
       });
     };
-
-    // Listen for HUD state changes from the iframe to toggle visibility
-    window.addEventListener('message', function(e) {
-      if (e.data && e.data.type === 'HUD_STATE_CHANGED' && e.source === iframe.contentWindow) {
-        const visible = e.data.state && e.data.state.hudVisible !== false;
-        if (visible) {
-          iframe.style.width = '100vw';
-          iframe.style.height = '100vh';
-          iframe.style.visibility = 'visible';
-          iframe.style.opacity = '1';
-        } else {
-          iframe.style.width = '0';
-          iframe.style.height = '0';
-          iframe.style.visibility = 'hidden';
-          iframe.style.opacity = '0';
-        }
-      }
-    });
   }
 
-  // Navigation guard: re-mount if host is removed (SPA/bfcache safe)
   const observer = new MutationObserver(function() {
-    if (!document.documentElement.contains(host)) {
+    if (!host || !document.documentElement.contains(host)) {
       createMount();
-    }
-    if (window.__wt_visualComponents && window.__wt_visualComponents.cursor && !document.getElementById('__Weavetab_cursor_host')) {
-      if (typeof __wt_recoverVisuals === 'function') __wt_recoverVisuals();
     }
   });
   observer.observe(document.documentElement, { childList: true });
-
-  // Real-time event relays (Agent only)
-  // Removed physical mousemove, click, and keydown listeners to prevent lag and interference with agent visuals.
 
   let scrollTicking = false;
   document.addEventListener('scroll', function() {
     if (!scrollTicking && iframe && iframe.contentWindow) {
       window.requestAnimationFrame(function() {
-        iframe.contentWindow.postMessage({
-          type: 'RT_SCROLL',
-          y: window.scrollY,
-          ratio: window.scrollY / document.body.scrollHeight
-        }, '*');
+        const sh = (document.body || document.documentElement)?.scrollHeight || 1;
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({
+            type: 'RT_SCROLL',
+            y: window.scrollY,
+            ratio: window.scrollY / sh
+          }, hudOrigin);
+        }
         scrollTicking = false;
       });
       scrollTicking = true;
     }
   }, { passive: true });
 
-  // ── MASTER VISUALS TOGGLE SYSTEM ───────────────────────────
   let __wt_masterVisualsEnabled = true;
+  let __wt_userMasterVisuals = true;
+  window.__wt_masterVisualsEnabled = true;
 
   function __wt_applyMasterVisuals(enabled) {
     __wt_masterVisualsEnabled = !!enabled;
@@ -171,14 +149,14 @@ function __wt_safeAppendToBody(el) {
       }
     }
 
-    const hudEl = document.getElementById('Weavetab-hud');
-    if (hudEl) {
-      hudEl.style.display = 'none';
-    }
-
-    const hudHost = document.querySelector('weavetab-host');
+    const hudHost = document.getElementById('__wt_hud_host');
     if (hudHost) {
       hudHost.style.display = __wt_masterVisualsEnabled ? 'block' : 'none';
+    }
+
+    const rootHost = document.getElementById('Weavetab-root');
+    if (rootHost) {
+      rootHost.style.display = __wt_masterVisualsEnabled ? 'block' : 'none';
     }
 
     const indicatorEl = document.getElementById('wt-controlled-indicator') || document.querySelector('.wt-controlled-indicator') || document.getElementById('__Weavetab_controlled_indicator');
@@ -193,74 +171,81 @@ function __wt_safeAppendToBody(el) {
       });
     }
   }
+  window.__wt_setSuppressed = function(suppress) {
+    __wt_applyMasterVisuals(suppress ? false : __wt_userMasterVisuals);
+  };
+  window.__wt_forwardHud = function(msg) {
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage(msg, hudOrigin);
+    }
+  };
 
   try {
     browserAPI.storage.local.get(['wt_master_visuals'], function(res) {
-      if (res && res.wt_master_visuals === false) {
-        __wt_applyMasterVisuals(false);
-      } else {
-        __wt_applyMasterVisuals(true);
-      }
+      __wt_userMasterVisuals = !(res && res.wt_master_visuals === false);
+      __wt_applyMasterVisuals(__wt_userMasterVisuals);
     });
 
     browserAPI.storage.onChanged.addListener(function(changes, area) {
       if (area === 'local' && changes.wt_master_visuals !== undefined) {
-        __wt_applyMasterVisuals(changes.wt_master_visuals.newValue !== false);
+        __wt_userMasterVisuals = changes.wt_master_visuals.newValue !== false;
+        __wt_applyMasterVisuals(__wt_userMasterVisuals);
       }
     });
   } catch(e) {}
 
-  // Ghost CDP cursor relay from background
   browserAPI.runtime.onMessage.addListener(function(msg) {
+    if (!msg || !msg.type) return;
+    if (msg.type === 'Weavetab_GROUP_STATE' || msg.type === 'Weavetab_STATE') {
+      __wt_handleWeavetabMsg(msg, true);
+      return;
+    }
     if (msg.type === 'WT_TOGGLE_MASTER_VISUALS') {
-      __wt_applyMasterVisuals(msg.enabled);
+      __wt_userMasterVisuals = msg.enabled !== false;
+      __wt_applyMasterVisuals(__wt_userMasterVisuals);
     }
     if (msg.type === 'GHOST_CURSOR_MOVE') {
       if (typeof msg.x === 'number' && typeof msg.y === 'number') {
         moveCursor(msg.x, msg.y, msg.phase);
       }
       if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: 'RT_CURSOR_MOVE', x: msg.x, y: msg.y, phase: msg.phase }, '*');
+        iframe.contentWindow.postMessage({ type: 'RT_CURSOR_MOVE', x: msg.x, y: msg.y, phase: msg.phase }, hudOrigin);
       }
     }
-    if (msg.type === 'TOOL_CALL_EVENT' && iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage({ type: 'TOOL_CALL_EVENT', payload: msg.payload }, '*');
-    }
-    // Scripted pill toggle — relay to HUD iframe
     if (msg.type === 'WT_SCRIPTED_PILL_TOGGLE' && iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage({ type: 'WT_SCRIPTED_PILL_TOGGLE', enabled: msg.enabled }, '*');
+      iframe.contentWindow.postMessage({ type: 'WT_SCRIPTED_PILL_TOGGLE', enabled: msg.enabled }, hudOrigin);
     }
-    // Handle agent thoughts in middle-down HUD
+    if (msg.type === 'WT_HUD_UPDATE' && iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({
+        type: 'WT_HUD_UPDATE',
+        state: msg.state || msg.action || msg.badge,
+        detail: msg.detail || msg.groupState,
+        action: msg.action,
+        badge: msg.badge,
+        badgeColor: msg.badgeColor,
+        groupState: msg.groupState
+      }, hudOrigin);
+    }
     if (msg.type === 'WT_THOUGHT' || msg.type === 'Weavetab_THOUGHT') {
       __wt_showThought(msg.text, msg);
     }
     if (msg.type === 'WT_CLEAR_THOUGHT' || msg.type === 'Weavetab_CLEAR_THOUGHT') {
       __wt_removeThought();
     }
-    // Handle incoming user notes from the extension
     if (msg.type === 'WT_USER_NOTE_INJECT' || msg.type === 'WT_USER_NOTE') {
-      window.__wt_chat_queue = window.__wt_chat_queue || [];
       let formattedMsg = msg.text || '';
       if (msg.snipe) {
         formattedMsg = `[USER AREA ANNOTATION ATTACHED (${msg.snipe.mode})]: ` + formattedMsg;
       }
-      window.__wt_chat_queue.push(formattedMsg);
-
-      // Unblock pending ask_bridge polling loops immediately
-      window.__wt_ask_bridge = window.__wt_ask_bridge || {};
-      if (window.__wt_ask_bridge.resolve) {
-        window.__wt_ask_bridge.resolve({
-          success: true,
-          response: formattedMsg,
-          status: 'answered'
-        });
-        window.__wt_ask_bridge = {};
-      }
-
-      // Display on-page glassmorphism notification banner if master visuals are enabled
       if (window.__wt_masterVisualsEnabled !== false) {
         __wt_showUserNoteVisualBanner(formattedMsg);
       }
+    }
+    if (msg.type === 'TOGGLE_HUD' && iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'TOGGLE_HUD' }, hudOrigin);
+    }
+    if (msg.type === 'TOGGLE_DEBUG' && iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'TOGGLE_DEBUG' }, hudOrigin);
     }
   });
 
@@ -296,114 +281,55 @@ function __wt_safeAppendToBody(el) {
     }, 4000);
   }
 
-  // State persistence bridge: listen for state changes from iframe
   window.addEventListener('message', function(e) {
-    // Forward relevant events to the extension background
-    if (e.data && (
-      e.data.type === 'WT_TOOL_CALL' ||
-      e.data.type === 'WT_PLAN_UPDATE' ||
-      e.data.type === 'WT_THOUGHT' ||
-      e.data.type === 'TOOL_CALL_EVENT' ||
-      e.data.type === 'Weavetab_CONFIG' ||
-      e.data.type === 'WT_CONFIG_UPDATE'
-    )) {
-      __wt_safeSendMessage(e.data);
+    if (e.source === window) {
+      if (e.data && (
+        e.data.type === 'WT_TOOL_CALL' ||
+        e.data.type === 'WT_PLAN_UPDATE' ||
+        e.data.type === 'WT_THOUGHT' ||
+        e.data.type === 'WT_HUD_UPDATE' ||
+        e.data.type === 'Weavetab_CONFIG' ||
+        e.data.type === 'WT_CONFIG_UPDATE'
+      )) {
+        __wt_safeSendMessage(e.data);
+      }
+      if (e.data && e.data.type === '__WT_ALERT_STATE') {
+        __wt_safeSendMessage({ type: e.data.waiting ? 'TAB_ALERT_WAITING' : 'TAB_ALERT_CLEARED' });
+      }
+      return;
     }
 
-    
-    if (e.origin !== browserAPI.runtime.getURL('').slice(0, -1)) return;
-    if (e.data.type === 'HUD_STATE_CHANGED') {
-      hudState = { ...hudState, ...e.data.state };
-      browserAPI.storage.local.set({ 'wt-hud-state': hudState });
+    if (iframe && e.source === iframe.contentWindow && e.origin === hudOrigin) {
+      if (e.data && e.data.type === 'HUD_STATE_CHANGED') {
+        const st = e.data.state || {};
+        if ('debugMenuVisible' in st) {
+          iframe.style.pointerEvents = st.debugMenuVisible ? 'auto' : 'none';
+        }
+        if ('hudVisible' in st) {
+          const visible = st.hudVisible !== false;
+          iframe.style.display = visible ? 'block' : 'none';
+          if (visible) {
+            iframe.style.width = '100vw';
+            iframe.style.height = '100vh';
+            iframe.style.visibility = 'visible';
+            iframe.style.opacity = '1';
+          } else {
+            iframe.style.width = '0';
+            iframe.style.height = '0';
+            iframe.style.visibility = 'hidden';
+            iframe.style.opacity = '0';
+          }
+        }
+        hudState = { ...hudState, ...st };
+        browserAPI.storage.local.set({ 'wt-hud-state': hudState });
+      }
     }
   });
 
-  // Listen for toggle command from background
-  browserAPI.runtime.onMessage.addListener(function(msg) {
-    console.log('[Weavetab Content] Received message:', msg.type);
-    if (msg.type === 'TOGGLE_HUD' && iframe && iframe.contentWindow) {
-      iframe.contentWindow.postMessage({ type: 'TOGGLE_HUD' }, '*');
-    }
-    if (msg.type === 'TOGGLE_DEBUG' && iframe && iframe.contentWindow) {
-      console.log('[Weavetab Content] Forwarding TOGGLE_DEBUG to iframe');
-      iframe.contentWindow.postMessage({ type: 'TOGGLE_DEBUG' }, '*');
-    }
-  });
-
-  // Initial mount
   createMount();
 })();
 
-// ── UNIFIED VISUAL SYSTEM INITIALIZATION ─────────────────────────
-// Ensures all visual components initialize in correct order and persist across reloads
-window.__wt_visualsReady = false;
-window.__wt_visualComponents = {
-  cursor: false,
-  feedback: false,
-  debug: false
-};
-window.__wt_zIndexCounter = 2147483640; // Start near max z-index
-
-function __wt_initVisuals() {
-  if (window.__wt_visualsReady) return;
-
-  // Initialize cursor first
-  if (!window.__wt_visualComponents.cursor && window.__weaveCursor_instance) {
-    window.__wt_visualComponents.cursor = true;
-  }
-
-  // Check for WeaveTab OS panel (todo list + chat)
-  if (!window.__wt_visualComponents.feedback && document.getElementById('wt-main-container')) {
-    window.__wt_visualComponents.feedback = true;
-  }
-
-  // Check for debug overlay
-  if (!window.__wt_visualComponents.debug && document.getElementById('wt-debug-overlay')) {
-    window.__wt_visualComponents.debug = true;
-  }
-
-  // Mark as ready when cursor and panel are initialized
-  if (window.__wt_visualComponents.cursor && window.__wt_visualComponents.feedback) {
-    window.__wt_visualsReady = true;
-  }
-}
-
-// Health check every 5 seconds to recover missing components
-setInterval(function() {
-  __wt_initVisuals();
-  __wt_recoverVisuals();
-}, 5000);
-
-// Visual recovery - detect and fix missing/broken components
-function __wt_recoverVisuals() {
-  // Recover cursor if missing
-  if (window.__wt_visualComponents && window.__wt_visualComponents.cursor && !document.getElementById('__Weavetab_cursor_host')) {
-    console.warn('[Weavetab] Cursor host missing, reinitializing...');
-    if (window.__weaveCursor_instance && window.__weaveCursor_instance.destroy) {
-      window.__weaveCursor_instance.destroy();
-    }
-    __weaveCursor = new WeaveCursor();
-    window.__weaveCursor_instance = __weaveCursor;
-    window.__wt_visualComponents.cursor = true;
-  }
-
-  // Recover WeaveTab OS panel if missing
-  if (window.__wt_visualComponents.feedback && !document.getElementById('wt-main-container')) {
-    console.warn('[Weavetab] WeaveTab OS panel missing, this is handled by page reload');
-  }
-
-  // Fix z-index conflicts
-  var wtElements = document.querySelectorAll('[data-wt-ignore]');
-  wtElements.forEach(function(el) {
-    if (el.style.zIndex && parseInt(el.style.zIndex) < 2147483640) {
-      el.style.zIndex = ++window.__wt_zIndexCounter;
-    }
-  });
-}
-
 // ── STALE ELEMENT CLEANUP ─────────────────────────────────────
-// Removes old UI elements from previous server/extension sessions.
-// Observer stays active for the full page lifetime (SPA-safe).
 (function cleanupOldUI() {
   var OLD_IDS = [
     'wt-ghost-cursor','wt-ghost-bubble','wt-ask-panel','wt-cur-canvas',
@@ -416,21 +342,23 @@ function __wt_recoverVisuals() {
     }
   }
   removeOld();
-  // Persistent observer — never disconnects so SPA re-renders stay clean
-  var obs = new MutationObserver(function() { removeOld(); });
+  var obs = new MutationObserver(function() {
+    removeOld();
+    obs.disconnect();
+  });
   if (document.documentElement) {
     obs.observe(document.documentElement, { childList: true, subtree: true });
+    obs.disconnect();
   } else {
     document.addEventListener('DOMContentLoaded', function() {
-      if (document.documentElement) obs.observe(document.documentElement, { childList: true, subtree: true });
-    });
+      removeOld();
+    }, { once: true });
   }
 })();
 
 // ── UI DESIGN SYSTEM (inject once, styles.css handles visuals) ─
 (function injectWeavetabUI() {
   if (document.getElementById('wt-ui-styles')) return;
-  // Guard marker so we only run once
   const m = document.createElement('meta');
   m.id = 'wt-ui-styles';
   (document.head || document.documentElement || document.body).appendChild(m);
@@ -441,22 +369,6 @@ let __wt_activeBubble = null;
 let __wt_bubbleTimer = null;
 let __wt_typewriterTimer = null;
 let __wt_feedbackSticky = false;
-let __wt_thoughtBirth = 0;
-let __wt_thoughtQueue = [];
-let __wt_lastRemoveTime = 0;
-let __wt_toolActive = false;
-
-function __wt_fadeOutBubble(callback) {
-  if (!__wt_activeBubble) { if (callback) callback(); return; }
-  var bub = __wt_activeBubble;
-  bub.style.transition = 'opacity 0.15s ease-out, transform 0.15s ease-out';
-  bub.style.opacity = '0';
-  bub.style.transform = 'translateX(-50%) translateY(6px)';
-  setTimeout(function() {
-    bub.remove();
-    if (callback) callback();
-  }, 150);
-}
 
 function __wt_destroyBubble() {
   if (__wt_bubbleTimer) { clearTimeout(__wt_bubbleTimer); __wt_bubbleTimer = null; }
@@ -473,7 +385,6 @@ function __wt_destroyBubble() {
   } else {
     __wt_activeBubble = null;
   }
-  __wt_lastRemoveTime = Date.now();
 }
 
 // ── MIDDLE-DOWN THOUGHT & PRESENCE HUD ─────────────────────────────
@@ -489,7 +400,7 @@ function __wt_highlightAnchor(anchor) {
       const stripped = anchor.slice(2);
       sel = `[data-wt-id="${stripped}"]`;
     }
-    const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+    const el = document.querySelector(sel) || shadowQuery(sel);
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) return;
@@ -582,7 +493,10 @@ function __wt_showThought(text, options) {
   }
 
   const cleanText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const anchorBadge = anchor ? `<span style="color:#2b70ff;font-size:10px;font-family:monospace;font-weight:600;margin-left:4px;">@${anchor.replace(/&/g,'&amp;')}</span>` : '';
+  const cleanAnchor = anchor
+    ? anchor.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    : '';
+  const anchorBadge = cleanAnchor ? `<span style="color:#2b70ff;font-size:10px;font-family:monospace;font-weight:600;margin-left:4px;">@${cleanAnchor}</span>` : '';
 
   if (isQuestion) {
     const timeoutSec = (opts.timeout || (opts.ask && opts.ask.timeout) || 20);
@@ -685,31 +599,17 @@ function __wt_showThought(text, options) {
       setTimeout(() => { if (input) input.focus(); }, 80);
     }
   } else {
-    // Auto-fade timer for feedback
-    const autoDuration = Math.max(3800, Math.min(8000, text.length * 50));
+    const autoDuration = typeof opts.durationMs === 'number' && opts.durationMs > 0
+      ? Math.min(60000, opts.durationMs)
+      : Math.max(3800, Math.min(8000, text.length * 50));
     __wt_thoughtHudTimer = setTimeout(() => {
       __wt_removeThought();
     }, autoDuration);
   }
 }
 
-function __wt_renderThought(text, options) {
-  __wt_showThought(text, options);
-}
-
-function __wt_processThoughtQueue() {
-  if (__wt_thoughtQueue.length > 0) {
-    var next = __wt_thoughtQueue.shift();
-    setTimeout(function() { __wt_showThought(next.text, next.options); }, 200);
-  }
-}
-
 function __wt_showQuestion(text, inputType, timeoutSeconds) {
   __wt_showThought(text, { action: 'question', timeout: timeoutSeconds || 20 });
-}
-
-function __wt_removeAsk() {
-  __wt_removeThought();
 }
 
 // ── SHARED OVERLAY CONTAINER ────────────────────────────────────
@@ -720,6 +620,10 @@ const __wt_shadowStyles = `
   animation: __wt_ripple 0.55s ease-out forwards;
 }
 @keyframes __wt_ripple { from { transform: scale(0.3); opacity: 1; } to { transform: scale(2.2); opacity: 0; } }
+@keyframes __wt_ripple_expand {
+  from { transform: scale(1); opacity: 0.95; }
+  to { transform: scale(5.5); opacity: 0; }
+}
 @keyframes __wt_xray_pulse {
   0% { opacity: 0; transform: scale(0.94); }
   18% { opacity: 1; transform: scale(1.02); }
@@ -780,270 +684,6 @@ function shadowQuery(selector) {
   }
   return searchRoot(document);
 }
-window.__Weavetab = {
-  version: '2.5.0',
-  suppressVisuals: false,
-  shadowQuery: shadowQuery,
-
-  // ── CDP Co-Processor Helpers ──────────────────────────────────────────────
-  // Call these via Runtime.evaluate instead of doing expensive CDP-side work.
-  // All return plain JSON-serializable values.
-
-  /** Scroll position, viewport size, and page dimensions in one call. */
-  getScrollInfo: function() {
-    var vv = window.visualViewport || {};
-    var body = document.body || document.documentElement;
-    return {
-      scrollX: Math.round(window.scrollX),
-      scrollY: Math.round(window.scrollY),
-      viewportW: Math.round(vv.width || window.innerWidth),
-      viewportH: Math.round(vv.height || window.innerHeight),
-      pageW: Math.round(body.scrollWidth),
-      pageH: Math.round(body.scrollHeight),
-      maxScrollX: Math.round(Math.max(0, body.scrollWidth - window.innerWidth)),
-      maxScrollY: Math.round(Math.max(0, body.scrollHeight - window.innerHeight)),
-      scrollRatio: body.scrollHeight > 0 ? +(window.scrollY / body.scrollHeight).toFixed(3) : 0
-    };
-  },
-
-  /**
-   * Wait until no DOM mutations occur for `quietMs` milliseconds.
-   * Resolves to true when stable, false on timeout (default 5000ms).
-   * CDP calls this and awaits — replaces dumb sleep() calls.
-   */
-  waitForStable: function(quietMs, timeoutMs) {
-    quietMs = quietMs || 300;
-    timeoutMs = timeoutMs || 5000;
-    return new Promise(function(resolve) {
-      var timer = null;
-      var deadline = setTimeout(function() {
-        obs.disconnect();
-        resolve(false);
-      }, timeoutMs);
-      function reset() {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(function() {
-          clearTimeout(deadline);
-          obs.disconnect();
-          resolve(true);
-        }, quietMs);
-      }
-      var obs = new MutationObserver(reset);
-      obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
-      reset(); // start the quiet timer immediately
-    });
-  },
-
-  /**
-   * Resolve a data-wt-id directly from the live index — much faster than
-   * doing a full accessibility tree walk.
-   * Returns { id, x, y, rect, tag, label, viewport, isVisible } or null.
-   */
-  getElementByWtId: function(id) {
-    var idx = window.__wt_liveIndex;
-    if (!idx) return null;
-    var entry = null;
-    for (var i = 0; i < idx.length; i++) {
-      if (idx[i].id === String(id)) { entry = idx[i]; break; }
-    }
-    if (!entry) return null;
-    // Refresh coordinates from DOM if element still exists
-    var el = document.querySelector('[data-wt-id="' + entry.id + '"]');
-    if (el) {
-      var r = el.getBoundingClientRect();
-      entry.x = Math.round(r.left + r.width / 2);
-      entry.y = Math.round(r.top + r.height / 2);
-      entry.rect = { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
-    }
-    return entry;
-  },
-
-  /**
-   * Dump all form field current values — lets agent verify form state cheaply.
-   * Returns array of { name, id, type, value, tag }.
-   */
-  getFormValues: function() {
-    var results = [];
-    var els = document.querySelectorAll('input, select, textarea');
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (el.hasAttribute('data-wt-ignore')) continue;
-      var val = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
-      results.push({
-        name: el.name || el.id || null,
-        id: el.id || null,
-        wtId: el.getAttribute('data-wt-id') || null,
-        type: el.type || el.tagName.toLowerCase(),
-        tag: el.tagName.toLowerCase(),
-        value: val,
-        placeholder: el.placeholder || null
-      });
-    }
-    return results;
-  },
-
-  /**
-   * Check visibility of a selector — uses the live IntersectionObserver data
-   * maintained by the MutationObserver. Much faster than a full DOM query.
-   * Returns { found, visible, occluded, x, y, rect } or null.
-   */
-  checkVisible: function(selector) {
-    var el = document.querySelector(selector) || shadowQuery(selector);
-    if (!el) return { found: false };
-    var r = el.getBoundingClientRect();
-    var vv = window.visualViewport || {};
-    var vw = vv.width || window.innerWidth;
-    var vh = vv.height || window.innerHeight;
-    var inViewport = r.width > 0 && r.height > 0 && r.top < vh && r.bottom > 0 && r.left < vw && r.right > 0;
-    var topEl = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    var occluded = topEl !== el && !el.contains(topEl);
-    return {
-      found: true,
-      visible: inViewport,
-      occluded: occluded,
-      x: Math.round(r.left + r.width / 2),
-      y: Math.round(r.top + r.height / 2),
-      rect: { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
-    };
-  },
-
-  /**
-   * Return the live element index, optionally filtered.
-   * filter: 'visible' | 'all' (default 'visible')
-   * Much faster than browser_map for simple lookups.
-   */
-  getLiveIndex: function(filter) {
-    var idx = window.__wt_liveIndex || [];
-    if (filter === 'all') return idx;
-    // Default: visible viewport only
-    return idx.filter(function(e) { return e.viewport === 'visible' || e.isVisible; });
-  },
-
-  /**
-   * Pop and return the next user feedback message from the queue.
-   * MCP calls this between tool calls to check for user interrupts.
-   * Returns { text, ts, tabId } or null if queue is empty.
-   * Non-destructive — call popUserFeedback() to consume, peekUserFeedback() to inspect.
-   */
-  popUserFeedback: function() {
-    // Read from localStorage queue (written by submitFeedback + persisted by background)
-    try {
-      var raw = localStorage.getItem('__wt_chat_queue_persist');
-      if (!raw) return null;
-      var arr = JSON.parse(raw);
-      if (!arr || !arr.length) return null;
-      var item = arr.shift();
-      localStorage.setItem('__wt_chat_queue_persist', JSON.stringify(arr));
-      return item;
-    } catch(e) { return null; }
-  },
-
-  /**
-   * Check if a blocking dialog (alert/confirm/prompt) is pending on this tab.
-   * Agent should check this before clicking if it suspects a dialog might block.
-   * Returns { pending: bool, ts: number } — reads from extension storage via background relay.
-   */
-  getAlertState: function() {
-    // Sync check via a DOM marker set by alert wrapper
-    return { pending: !!(window.__wt_alertPending), ts: Date.now() };
-  },
-};
-window.__Weavetab_shadowQuery = shadowQuery;
-
-function isOccluded(el) {
-  const rect = el.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
-  const topEl = document.elementFromPoint(cx, cy);
-  return topEl !== el && !el.contains(topEl);
-}
-
-window.__Weavetab_getCoords = function(selector) {
-  const el = document.querySelector(selector) || shadowQuery(selector);
-
-  if (!el) return null;
-
-  const rect = el.getBoundingClientRect();
-  const vv = window.visualViewport;
-
-  return {
-    x: rect.left + rect.width / 2 + vv.offsetLeft,
-    y: rect.top  + rect.height / 2 + vv.offsetTop,
-    raw: { left: rect.left, top: rect.top, w: rect.width, h: rect.height },
-    occluded: isOccluded(el),
-    visible: rect.width > 0 && rect.height > 0
-              && rect.top < vv.height && rect.bottom > 0
-  };
-};
-
-function getStableSelector(el) {
-  if (el.id) return `#${el.id}`;
-  const path = [];
-  while (el.parentNode) {
-    let index = 1;
-    let sibling = el.previousElementSibling;
-    while (sibling) {
-      if (sibling.tagName === el.tagName) index++;
-      sibling = sibling.previousElementSibling;
-    }
-    path.unshift(`${el.tagName.toLowerCase()}:nth-of-type(${index})`);
-    el = el.parentNode;
-  }
-  return path.join(' > ');
-}
-
-window.__Weavetab_fullMap = function() {
-  const map = [];
-  let idCounter = 1;
-  function crawl(root, depth = 0) {
-    for (const el of root.querySelectorAll(
-      'a,button,input,select,textarea,[role],[onclick],[tabindex]'
-    )) {
-      if (el.hasAttribute('data-wt-ignore')) continue;
-      const rect = el.getBoundingClientRect();
-      // Always include form elements (input/textarea/select/button) regardless of rect size
-      // — canvas-heavy pages can occlude them and getBoundingClientRect returns 0
-      const isEssential = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName);
-      if (rect.width === 0 && !isEssential) continue;
-      let id = el.getAttribute('data-wt-id');
-      if (!id) {
-        id = String(idCounter++);
-        el.setAttribute('data-wt-id', id);
-      }
-      map.push({
-        id: id,
-        tag: el.tagName.toLowerCase(),
-        text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0,80),
-        role: el.getAttribute('role'),
-        selector: `[data-wt-id="${id}"]`,
-        coords: { x: rect.left + rect.width/2, y: rect.top + rect.height/2 },
-        inShadow: depth > 0
-      });
-      if (el.shadowRoot) crawl(el.shadowRoot, depth + 1);
-    }
-  }
-  crawl(document);
-  return map;
-};
-
-// ── CONSOLE BUFFERING ───────────────────────────────────────────
-const __consoleBuffer = [];
-let __consoleCursor = 0;
-
-['log','warn','error','info','debug'].forEach(level => {
-  const orig = console[level];
-  console[level] = (...args) => {
-    __consoleBuffer.push({ level, time: Date.now(), text: args.join(' ') });
-    orig.apply(console, args);
-  };
-});
-
-window.__Weavetab_readConsole = function({ since = 'last', level = null } = {}) {
-  const from = since === 'last' ? __consoleCursor : 0;
-  const entries = __consoleBuffer.slice(from);
-  __consoleCursor = __consoleBuffer.length;
-  return level ? entries.filter(e => e.level === level) : entries;
-};
 
 // ── BLUE SVG WEAVE CURSOR ───────────────────────────────────────
 // Shadow-DOM-isolated, hardware-accelerated SVG cursor with smooth interpolation
@@ -1155,7 +795,7 @@ class WeaveCursor {
     this._playingQueue = false;
 
     __wt_safeAppendToBody(this._host);
-    this._startLoop();
+    this._render(performance.now());
   }
 
   destroy() {
@@ -1170,12 +810,19 @@ class WeaveCursor {
 
   setState(state) {
     this._state = state || 'idle';
+    if (this._visible && !this._animFrame) {
+      this._startLoop();
+    }
   }
 
   setVisible(visible) {
     if (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) {
       this._visible = false;
       this._cursor.style.opacity = '0';
+      if (this._animFrame) {
+        cancelAnimationFrame(this._animFrame);
+        this._animFrame = null;
+      }
       if (this._trailCtx && this._trailCanvas) {
         this._trailCtx.clearRect(0, 0, this._trailCanvas.width, this._trailCanvas.height);
       }
@@ -1183,6 +830,10 @@ class WeaveCursor {
     }
     this._visible = visible;
     this._cursor.style.opacity = visible ? '1' : '0';
+    if (!visible && this._animFrame) {
+      cancelAnimationFrame(this._animFrame);
+      this._animFrame = null;
+    }
   }
 
   moveTo(x, y) {
@@ -1279,6 +930,16 @@ class WeaveCursor {
         this._render(currentTime);
       }
 
+      const settled = !this._playingQueue &&
+        Math.abs(this._targetX - this._lerpX) < 0.1 &&
+        Math.abs(this._targetY - this._lerpY) < 0.1 &&
+        this._trailPoints.length === 0;
+
+      if (!this._visible || (typeof __wt_masterVisualsEnabled !== 'undefined' && !__wt_masterVisualsEnabled) || settled) {
+        this._animFrame = null;
+        return;
+      }
+
       this._animFrame = requestAnimationFrame(draw);
     };
     if (this._animFrame) cancelAnimationFrame(this._animFrame);
@@ -1348,8 +1009,8 @@ class WeaveCursor {
   }
 }
 
-// Instantiate the active cursor
-let __weaveCursor = new WeaveCursor();
+// Instantiate the active cursor only in top frame
+let __weaveCursor = window === window.top ? new WeaveCursor() : null;
 window.__weaveCursor_instance = __weaveCursor;
 
 function moveCursor(x, y, state) {
@@ -1383,20 +1044,15 @@ function ripple(x, y) {
 }
 
 // ── X-RAY SPOTLIGHT OVERLAY (Phase 5.2) ────────────────────────
-// Flashes glowing halos around top interactive elements when the
-// semantic map is scanned (GET_SEMANTIC_MAP message).
-let __xrayActive = false;
 const __xrayOverlays = [];
 
 function clearXRay() {
   for (const el of __xrayOverlays) el.remove();
   __xrayOverlays.length = 0;
-  __xrayActive = false;
 }
 
 function activateXRay(elements) {
   clearXRay();
-  __xrayActive = true;
 
   // Colour spectrum for visual richness
   const colours = [
@@ -1404,28 +1060,12 @@ function activateXRay(elements) {
     '#EF4444', '#06B6D4', '#F97316', '#8B5CF6',
   ];
 
-  // Architecture change: Use live index for visual overlay
-  // The live index maintains up-to-date coordinates and visibility info
-  const liveIndex = window.__wt_liveIndex || [];
-  const top = elements.slice(0, 12); // highlight top 12 nodes
-  
+  const top = elements.slice(0, 12);
+
   top.forEach((item, i) => {
-    // Try to get element from live index first for accurate coordinates
-    const liveEntry = liveIndex.find(e => e.id === item.id || e.selector === item.selector);
-    
-    let rect;
-    let el;
-    
-    if (liveEntry && liveEntry.rect) {
-      // Use coordinates from live index (more accurate, already computed)
-      rect = liveEntry.rect;
-      el = document.querySelector(item.selector) || shadowQuery(item.selector);
-    } else {
-      // Fallback to querying DOM
-      el = document.querySelector(item.selector) || shadowQuery(item.selector);
-      if (!el) return;
-      rect = el.getBoundingClientRect();
-    }
+    const el = document.querySelector(item.selector) || shadowQuery(item.selector);
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
     
     if (rect.width === 0 || rect.height === 0) return;
 
@@ -1514,288 +1154,6 @@ function activateXRay(elements) {
   (document.head || document.documentElement).appendChild(style);
 })();
 
-// ── READING GLOW ────────────────────────────────────────────────
-let __wt_readingGlow = null;
-
-function __wt_showReadingGlow() {
-  if (__wt_readingGlow) return;
-  var el = document.createElement('div');
-  el.id = 'wt-reading-glow';
-  el.setAttribute('data-wt-ignore', '');
-  el.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646;border:4px solid;border-image:linear-gradient(135deg, #3b82f6, #8b5cf6, #10b981) 1;animation:wt-reading-pulse 3.5s ease-in-out forwards;';
-  __wt_safeAppendToBody(el);
-  __wt_readingGlow = el;
-  setTimeout(__wt_hideReadingGlow, 3500);
-}
-
-function __wt_hideReadingGlow() {
-  if (__wt_readingGlow) { __wt_readingGlow.remove(); __wt_readingGlow = null; }
-}
-
-// ── SEMANTIC DOM MAP ────────────────────────────────────────────
-// Architecture change: Passive/extension-side ID assignment with live index
-// The MutationObserver continuously assigns data-wt-id to interactive elements
-// and maintains a live index that CDP can read lazily
-
-// Live index - always up-to-date, accessible via window.__wt_liveIndex
-window.__wt_liveIndex = [];
-window.__wt_nextId = 1;
-
-// IntersectionObserver for real occlusion detection (not just display:none)
-const intersectionObserver = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    const el = entry.target;
-    const id = el.getAttribute('data-wt-id');
-    if (id) {
-      const indexEntry = window.__wt_liveIndex.find(e => e.id === id);
-      if (indexEntry) {
-        indexEntry.isVisible = entry.isIntersecting;
-        indexEntry.intersectionRatio = entry.intersectionRatio;
-      }
-    }
-  }
-}, { threshold: [0, 0.25, 0.5, 0.75, 1.0] });
-
-// Function to assign data-wt-id to an element and add to live index
-function assignIdAndIndex(el) {
-  if (el.hasAttribute('data-wt-ignore')) return;
-  if (el.hasAttribute('data-wt-id')) return; // Already assigned
-
-  const id = String(window.__wt_nextId++);
-  el.setAttribute('data-wt-id', id);
-  el.__wt_id = id;
-
-  const rect = el.getBoundingClientRect();
-  const inViewport = (
-    rect.bottom > 0 && rect.right > 0 &&
-    rect.top < window.innerHeight && rect.left < window.innerWidth
-  );
-  const viewportPos = inViewport ? "visible" : (rect.top >= window.innerHeight ? "below" : "above");
-
-  // Check for event listeners
-  const hasClickListener = el.onclick !== null || 
-                           el.addEventListener !== undefined && 
-                           (el._listeners?.click?.length > 0);
-
-  const indexEntry = {
-    id: id,
-    tag: el.tagName.toLowerCase(),
-    role: el.getAttribute('role') || el.tagName.toLowerCase(),
-    label: el.getAttribute('aria-label') || el.textContent?.trim().slice(0, 60) || '',
-    placeholder: el.getAttribute('placeholder') || '',
-    selector: getStableSelector(el),
-    x: Math.round(rect.left + rect.width / 2),
-    y: Math.round(rect.top + rect.height / 2),
-    viewport: viewportPos,
-    href: el.href || null,
-    isVisible: inViewport,
-    intersectionRatio: inViewport ? 1.0 : 0.0,
-    hasClickListener: hasClickListener,
-    rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-  };
-
-  window.__wt_liveIndex.push(indexEntry);
-
-  // Observe for intersection changes
-  try {
-    intersectionObserver.observe(el);
-  } catch (e) {
-    // Element might not be observable
-  }
-}
-
-// Function to update an existing entry in the live index
-function updateIndexEntry(el) {
-  const id = el.getAttribute('data-wt-id');
-  if (!id) return;
-
-  const indexEntry = window.__wt_liveIndex.find(e => e.id === id);
-  if (!indexEntry) return;
-
-  const rect = el.getBoundingClientRect();
-  const inViewport = (
-    rect.bottom > 0 && rect.right > 0 &&
-    rect.top < window.innerHeight && rect.left < window.innerWidth
-  );
-  const viewportPos = inViewport ? "visible" : (rect.top >= window.innerHeight ? "below" : "above");
-
-  indexEntry.x = Math.round(rect.left + rect.width / 2);
-  indexEntry.y = Math.round(rect.top + rect.height / 2);
-  indexEntry.viewport = viewportPos;
-  indexEntry.isVisible = inViewport;
-  indexEntry.rect = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-  indexEntry.label = el.getAttribute('aria-label') || el.textContent?.trim().slice(0, 60) || '';
-}
-
-// Function to remove an entry from the live index
-function removeIndexEntry(el) {
-  const id = el.getAttribute('data-wt-id');
-  if (!id) return;
-
-  const index = window.__wt_liveIndex.findIndex(e => e.id === id);
-  if (index !== -1) {
-    window.__wt_liveIndex.splice(index, 1);
-  }
-
-  try {
-    intersectionObserver.unobserve(el);
-  } catch (e) {
-    // Element might not be observable
-  }
-}
-
-// MutationObserver for continuous ID assignment and index maintenance
-const idAssignmentObserver = new MutationObserver((mutations) => {
-  for (const mutation of mutations) {
-    // Handle added nodes
-    for (const node of mutation.addedNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        // Check if the node itself is interactive
-        const interactiveSelector = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="combobox"], [role="searchbox"], [role="menuitem"], [role="tab"], [tabindex]:not([tabindex="-1"])';
-        if (node.matches && node.matches(interactiveSelector)) {
-          assignIdAndIndex(node);
-        }
-        // Check descendants
-        const descendants = node.querySelectorAll ? node.querySelectorAll(interactiveSelector) : [];
-        for (const desc of descendants) {
-          assignIdAndIndex(desc);
-        }
-      }
-    }
-
-    // Handle removed nodes
-    for (const node of mutation.removedNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.getAttribute && node.getAttribute('data-wt-id')) {
-          removeIndexEntry(node);
-        }
-        const descendants = node.querySelectorAll ? node.querySelectorAll('[data-wt-id]') : [];
-        for (const desc of descendants) {
-          removeIndexEntry(desc);
-        }
-      }
-    }
-
-    // Handle attribute changes (position, visibility, etc.)
-    if (mutation.type === 'attributes' && mutation.target.getAttribute) {
-      const target = mutation.target;
-      if (target.getAttribute('data-wt-id')) {
-        updateIndexEntry(target);
-      }
-    }
-  }
-});
-
-// Start observing when DOM is ready
-function startIdAssignment() {
-  const interactiveSelector = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="combobox"], [role="searchbox"], [role="menuitem"], [role="tab"], [tabindex]:not([tabindex="-1"])';
-  
-  // Assign IDs to existing interactive elements
-  const existing = document.querySelectorAll(interactiveSelector);
-  for (const el of existing) {
-    assignIdAndIndex(el);
-  }
-
-  // Start observing for changes
-  if (document.body) {
-    idAssignmentObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['style', 'class', 'hidden', 'aria-hidden']
-    });
-  } else {
-    document.addEventListener('DOMContentLoaded', () => {
-      const existing = document.querySelectorAll(interactiveSelector);
-      for (const el of existing) {
-        assignIdAndIndex(el);
-      }
-      idAssignmentObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class', 'hidden', 'aria-hidden']
-      });
-    });
-  }
-}
-
-// Start the ID assignment system
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', startIdAssignment);
-} else {
-  startIdAssignment();
-}
-
-// Legacy buildSemanticMap function for backward compatibility
-// Now reads from the live index instead of rebuilding
-let cachedMap = null;
-const legacyObserver = new MutationObserver(() => {
-  cachedMap = null;
-});
-// FIX: document.body may be null at document_start; defer observe until body exists
-if (document.body) {
-  legacyObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
-} else {
-  document.addEventListener('DOMContentLoaded', function() {
-    if (document.body) legacyObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
-  }, { once: true });
-}
-
-function buildSemanticMap() {
-  if (cachedMap) return cachedMap;
-
-  // Read from the live index maintained by the MutationObserver
-  cachedMap = window.__wt_liveIndex.map(entry => ({
-    id: entry.id,
-    tag: entry.tag,
-    role: entry.role,
-    label: entry.label,
-    placeholder: entry.placeholder,
-    selector: entry.selector,
-    x: entry.x,
-    y: entry.y,
-    viewport: entry.viewport,
-    href: entry.href,
-    coords: { x: entry.x, y: entry.y }
-  }));
-
-  return cachedMap;
-}
-
-// ── HUD ─────────────────────────────────────────────────────────
-const hudHistory = [];
-const hud = (() => {
-  const el = document.createElement('div');
-  el.id = 'Weavetab-hud';
-  el.setAttribute('data-wt-ignore', '');
-  Object.assign(el.style, {
-    position: 'fixed', bottom: '24px', right: '24px',
-    transform: 'translateY(8px)',
-    color: '#a1a1aa',
-    font: '11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
-    borderRadius: '8px',
-    opacity: '0', pointerEvents: 'none',
-    zIndex: '2147483640',
-    maxWidth: '400px',
-    display: 'flex', flexDirection: 'column-reverse', gap: '4px',
-    transition: 'opacity 0.2s, transform 0.2s',
-    textAlign: 'right',
-  });
-  __wt_safeAppendToBody(el);
-  return el;
-})();
-
-function updateHUD(action, detail) {
-  if (window.self !== window.top) return;
-  // Tool call entries display strictly inside the Sidepanel TOOL CALLS section.
-  // Suppress on-page bottom-right HUD popup overlay.
-  if (hud) {
-    hud.style.display = 'none';
-    hud.style.opacity = '0';
-  }
-}
-
 // ── ACTIVE TAB INDICATOR ─────────────────────────────────────────
 class ControlledTabIndicator {
   constructor() {
@@ -1866,29 +1224,38 @@ class ControlledTabIndicator {
   }
 }
 
-const controlledIndicator = new ControlledTabIndicator();
+const controlledIndicator = window === window.top ? new ControlledTabIndicator() : null;
 
 // ── MESSAGE BRIDGE ──────────────────────────────────────────────
-// Shared handler for both CustomEvent (MAIN world dispatch) and
-// postMessage (cross-world: MAIN → ISOLATED) communication channels.
 var __wt_lastCursor = { x: -9999, y: -9999 };
 var __wt_processedMsgIds = new Set();
 
-function __wt_handleWeavetabMsg(msg) {
+function __wt_handleWeavetabMsg(msg, fromBackground) {
   if (!msg) return;
-  if (Array.isArray(msg)) { msg.forEach(m => __wt_handleWeavetabMsg(m)); return; }
+  if (Array.isArray(msg)) { msg.forEach(m => __wt_handleWeavetabMsg(m, fromBackground)); return; }
   if (msg._id) { if (__wt_processedMsgIds.has(msg._id)) return; __wt_processedMsgIds.add(msg._id); if (__wt_processedMsgIds.size > 100) __wt_processedMsgIds.clear(); }
+
+  if (msg.type === 'Weavetab_SUPPRESS_VISUALS') {
+    if (typeof window.__wt_setSuppressed === 'function') {
+      window.__wt_setSuppressed(!!msg.suppress);
+    }
+    return;
+  }
 
   if (msg.type === 'Weavetab_STATE') {
     if (msg.cursor) {
       __wt_lastCursor = { x: msg.cursor.x, y: msg.cursor.y };
-      if (msg.cursor.waypoints && msg.cursor.duration_ms) {
+      if (msg.cursor.waypoints && msg.cursor.duration_ms && __weaveCursor) {
         __weaveCursor.setWaypoints(msg.cursor.waypoints, msg.cursor.duration_ms);
       }
       moveCursor(msg.cursor.x, msg.cursor.y, msg.state);
     }
     else if (msg.state) { moveCursor(__wt_lastCursor.x, __wt_lastCursor.y, msg.state); }
-    if (msg.ripple) ripple(msg.ripple.x, msg.ripple.y);
+    if (msg.ripple) {
+      const rx = msg.ripple.x ?? msg.ripple.cx;
+      const ry = msg.ripple.y ?? msg.ripple.cy;
+      if (typeof rx === 'number' && typeof ry === 'number') ripple(rx, ry);
+    }
 
     if (msg.userFeedback === true && msg.feedbackText) {
       __wt_feedbackSticky = true;
@@ -1899,45 +1266,51 @@ function __wt_handleWeavetabMsg(msg) {
     }
 
     if (msg.hud) {
-      updateHUD(msg.hud.action, msg.hud.detail);
       var a = (msg.hud.action || '').trim();
-      if (a === 'reading the page...') {
-        __weaveCursor.setState('reading');
-      } else if (a === 'Mission Running') {
-        __wt_toolActive = true;
-        __weaveCursor.setState('eval');
-      } else if (a.startsWith('[OK]')) {
-        __weaveCursor.setState('idle');
-        __wt_toolActive = false;
-      } else if (a.startsWith('[ERR]')) {
-        __weaveCursor.setState('stuck');
-        __wt_toolActive = false;
-        setTimeout(function(){ __weaveCursor.setState('idle'); }, 3000);
+      if (__weaveCursor) {
+        if (a === 'reading the page...') {
+          __weaveCursor.setState('reading');
+        } else if (a === 'Mission Running') {
+          __weaveCursor.setState('eval');
+        } else if (a.startsWith('[OK]')) {
+          __weaveCursor.setState('idle');
+        } else if (a.startsWith('[ERR]')) {
+          __weaveCursor.setState('stuck');
+          setTimeout(function(){ if (__weaveCursor) __weaveCursor.setState('idle'); }, 3000);
+        }
+      }
+      if (typeof window.__wt_forwardHud === 'function') {
+        window.__wt_forwardHud({ type: 'WT_HUD_UPDATE', state: msg.hud.action, detail: msg.hud.detail });
       }
     }
-    if (msg.cursor || msg.hud) {
+    if ((msg.cursor || msg.hud) && controlledIndicator) {
       controlledIndicator.show('#3B82F6');
     }
   }
 
-  // Pure thought event from browser_thoughts tool only
   if (msg.type === 'WT_THOUGHT' || msg.type === 'Weavetab_THOUGHT') {
     __wt_showThought(msg.text, msg);
   }
   if (msg.type === 'WT_CLEAR_THOUGHT' || msg.type === 'Weavetab_CLEAR_THOUGHT') {
     __wt_removeThought();
   }
-
-  // Handle plan updates via sendToExtension channel
-  if (msg.type === 'Weavetab_STATE' && msg.plan) {
-    const p = msg.plan;
-    if (p.action === 'hide') {
-      if (window.__wt_plan) window.__wt_plan('hide', '', []);
-    } else {
-      if (window.__wt_plan) window.__wt_plan(p.action || 'create', p.goal || '', p.tasks || []);
+  if (msg.type === 'WT_HUD_UPDATE') {
+    const hudPayload = {
+      type: 'WT_HUD_UPDATE',
+      state: msg.state || msg.action || msg.badge,
+      detail: msg.detail || msg.groupState,
+      action: msg.action,
+      badge: msg.badge,
+      badgeColor: msg.badgeColor,
+      groupState: msg.groupState
+    };
+    if (typeof window.__wt_forwardHud === 'function') {
+      window.__wt_forwardHud(hudPayload);
+    }
+    if (!fromBackground) {
+      __wt_safeSendMessage(hudPayload);
     }
   }
-
 
   if (msg.type === 'WT_USER_NOTE_INJECT') {
     window.__wt_user_notes = window.__wt_user_notes || [];
@@ -1945,9 +1318,35 @@ function __wt_handleWeavetabMsg(msg) {
   }
 
   if (msg.type === 'GET_SEMANTIC_MAP') {
-    const map = window.__Weavetab_fullMap();
+    const map = [];
+    let idCounter = 1;
+    function crawl(root, depth = 0) {
+      for (const el of root.querySelectorAll('a,button,input,select,textarea,[role],[onclick],[tabindex]')) {
+        if (el.hasAttribute('data-wt-ignore')) continue;
+        const rect = el.getBoundingClientRect();
+        const isEssential = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName);
+        if (rect.width === 0 && !isEssential) continue;
+        let id = el.getAttribute('data-wt-id');
+        if (!id) {
+          id = String(idCounter++);
+          el.setAttribute('data-wt-id', id);
+        }
+        map.push({
+          id,
+          tag: el.tagName.toLowerCase(),
+          text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80),
+          role: el.getAttribute('role'),
+          selector: `[data-wt-id="${id}"]`,
+          coords: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+          inShadow: depth > 0
+        });
+      }
+      for (const node of root.querySelectorAll('*')) {
+        if (node.shadowRoot) crawl(node.shadowRoot, depth + 1);
+      }
+    }
+    crawl(document);
     if (window.__wt_user_notes && window.__wt_user_notes.length > 0) {
-      // Keep notes for 2 minutes
       window.__wt_user_notes = window.__wt_user_notes.filter(n => Date.now() - n.time < 120000);
       const notesMap = window.__wt_user_notes.map((note, i) => ({
         id: `user-msg-${i}`,
@@ -1963,104 +1362,61 @@ function __wt_handleWeavetabMsg(msg) {
     window.dispatchEvent(new CustomEvent('Weavetab-msg-out', { detail: { id: msg.id, data: map } }));
   }
 
-  if (msg.type === 'RESOLVE_EXTENSION_URL') {
-    var url = '';
-    try { url = browserAPI.runtime.getURL((msg.page || 'dashboard') + '.html'); } catch(e) {}
-    window.dispatchEvent(new CustomEvent('Weavetab-msg-out', { detail: { id: msg.id, data: url } }));
-  }
-
   if (msg.type === 'Weavetab_CONFIG') {
     window.__wt_devMode = !!msg.devMode;
     window.dispatchEvent(new CustomEvent('wt-config-sync'));
-    __wt_safeSendMessage(msg);
+    if (!fromBackground) __wt_safeSendMessage(msg);
   }
 
   if (msg.type === 'Weavetab_GROUP_STATE') {
-    __wt_safeSendMessage(msg);
-    // Only ever blue dot — no yellow. Idle state = no dot.
+    if (!fromBackground) __wt_safeSendMessage(msg);
     const dotColor = (msg.state === 'idle') ? null : '#3B82F6';
-    if (dotColor) {
+    if (dotColor && controlledIndicator) {
       controlledIndicator.show(dotColor);
     }
     updateFaviconDot(msg.state, msg.isActive);
-    // Parked tabs: clear thought bubble and reading glow
     if (msg.isActive === false) {
       __wt_removeThought();
-      __wt_hideReadingGlow();
     }
     if (msg.state === 'idle') {
-      __wt_hideReadingGlow();
       __wt_destroyBubble();
       __wt_feedbackSticky = false;
-      __wt_processThoughtQueue();
       restoreOriginalFavicon();
-      // Hide the persistent indicator bar when idle
-      controlledIndicator.hide();
-      __weaveCursor.setState('idle');
+      if (controlledIndicator) controlledIndicator.hide();
+      if (__weaveCursor) __weaveCursor.setState('idle');
     } else if (msg.state === 'weaving') {
-      // Show persistent blue bar while agent works
-      controlledIndicator.showPersistent('#3B82F6');
-      __weaveCursor.setState('eval');
+      if (controlledIndicator) controlledIndicator.showPersistent('#3B82F6');
+      if (__weaveCursor) __weaveCursor.setState('eval');
     } else if (msg.state === 'stuck') {
-      // Still show blue bar (not red) when stuck
-      controlledIndicator.showPersistent('#3B82F6');
-      __weaveCursor.setState('stuck');
+      if (controlledIndicator) controlledIndicator.showPersistent('#3B82F6');
+      if (__weaveCursor) __weaveCursor.setState('stuck');
     }
-  }
-
-
-  if (msg.type === 'Weavetab_THOUGHT') {
-    __wt_showThought(msg.text, { active: msg.active });
   }
 
   if (msg.type === 'Weavetab_ASK') {
-    // Legacy support — route to new unified question system
-    console.log('[Weavetab] Received ASK request (legacy):', msg.question);
     __wt_showQuestion(msg.question, 'sentence', msg.timeout || 120);
     window.dispatchEvent(new CustomEvent('Weavetab-msg-out', { detail: { id: msg.id, data: { status: 'shown' } } }));
   }
-
-  if (msg.type === 'Weavetab_CLEAR_THOUGHT') {
-    __wt_removeThought();
-    __wt_hideReadingGlow();
-    __wt_processThoughtQueue();
-  }
-
-  if (msg.type === 'Weavetab_RELOAD_EXTENSION') {
-    __wt_safeSendMessage({ type: 'RELOAD_EXTENSION' });
-  }
 }
 
-// Channel 1: CustomEvent from MAIN world (used by fallback + sendToExtension)
 window.addEventListener('Weavetab-msg-in', (e) => {
-  __wt_handleWeavetabMsg(e.detail);
+  __wt_handleWeavetabMsg(e.detail, false);
 });
 
-// Channel 2: postMessage from MAIN world (cross-world MV3 bridge)
 window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
   if (event.data && event.data.type === 'Weavetab-msg-in' && event.data.data) {
-    __wt_handleWeavetabMsg(event.data.data);
-  }
-  // ── User feedback relay: WeaveTab OS panel → background storage queue ────
-  // When the user types in the chat panel and hits Send, submitFeedback() fires
-  // a __WT_FEEDBACK postMessage. We relay it to the background so it lands in
-  // chrome.storage.local and window.__Weavetab.popUserFeedback() can return it.
-  if (event.data && event.data.type === '__WT_FEEDBACK' && event.data.text) {
-    try {
-      if (browserAPI.runtime && browserAPI.runtime.id) {
-        browserAPI.runtime.sendMessage({ type: 'USER_FEEDBACK', text: event.data.text }).catch(function(){});
-      }
-    } catch(e) {}
+    __wt_handleWeavetabMsg(event.data.data, false);
   }
 });
 
 // ── FAVICON STATUS DOT INDICATOR ───────────────────────────────
 let wtFaviconObserver = null;
-
 let __wt_faviconStaleTimer = null;
 
 function updateFaviconDot(state, isActive) {
   if (__wt_faviconStaleTimer) { clearTimeout(__wt_faviconStaleTimer); __wt_faviconStaleTimer = null; }
+  if (!document.head) return;
 
   if (state === 'idle' || !state || isActive === false) {
     if (wtFaviconObserver) {
@@ -2071,31 +1427,28 @@ function updateFaviconDot(state, isActive) {
     return;
   }
 
-  // Always use blue — never red or yellow for favicon dot
   const color = '#3B82F6';
 
   if (!wtFaviconObserver) {
     wtFaviconObserver = new MutationObserver(() => {
+      if (!document.head) return;
       wtFaviconObserver.disconnect();
       applyFaviconDot(color);
-      wtFaviconObserver.observe(document.head, { childList: true, subtree: true });
     });
   } else {
     wtFaviconObserver.disconnect();
   }
 
   applyFaviconDot(color);
-  wtFaviconObserver.observe(document.head, { childList: true, subtree: true });
 
-  // Set stale timer: clear dot + hide glow if no message for 30s
   __wt_faviconStaleTimer = setTimeout(function() {
     restoreOriginalFavicon();
-    __wt_hideReadingGlow();
     __wt_destroyBubble();
   }, 30000);
 }
 
 function restoreOriginalFavicon() {
+  if (wtFaviconObserver) wtFaviconObserver.disconnect();
   const customLink = document.getElementById('wt-custom-favicon');
   if (customLink) customLink.remove();
 
@@ -2157,29 +1510,29 @@ function drawDot(ctx, color) {
 function drawFallbackIcon(ctx, color) {
   ctx.clearRect(0, 0, 32, 32);
   ctx.beginPath();
-  ctx.arc(16, 16, 11, 0, 2 * Math.PI);
-  ctx.fillStyle = '#1E1F22';
+  ctx.roundRect(1, 1, 30, 30, 7);
+  ctx.fillStyle = '#005EFA';
   ctx.fill();
-  ctx.strokeStyle = '#3C3F45';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
 
-  ctx.beginPath();
-  ctx.arc(16, 16, 6, 0, 2 * Math.PI);
-  ctx.fillStyle = '#7C3AED';
-  ctx.fill();
+  ctx.save();
+  ctx.scale(32 / 1024, 32 / 1024);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fill(new Path2D('M 687.274 243.883 C 672.944 247.059, 659.952 258.654, 655.324 272.396 C 654.137 275.922, 653.590 279.927, 653.125 288.513 C 652.785 294.797, 652.579 300.319, 652.668 300.783 C 652.787 301.412, 644.659 301.729, 620.711 302.028 C 591.207 302.395, 587.994 302.558, 581.237 304.018 C 564.823 307.564, 549.671 315.579, 537.486 327.162 C 529.751 334.514, 524.041 342.406, 518.883 352.871 C 511.505 367.840, 509.561 378.819, 509.561 405.531 L 509.561 421.799 489.829 421.799 C 472.552 421.799, 469.403 421.975, 464.531 423.222 C 451.620 426.524, 440.854 435.043, 435.316 446.338 C 430.895 455.355, 430.196 459.791, 430.181 478.919 L 430.169 495.260 398.231 495.621 C 369.003 495.952, 365.742 496.112, 359.798 497.509 C 341.998 501.691, 327.995 508.857, 316.005 519.920 C 306.561 528.633, 298.843 539.685, 294.256 551.063 C 288.324 565.777, 287.262 572.739, 287.262 596.917 C 287.262 607.385, 287.018 615.977, 286.721 616.009 C 286.424 616.042, 276.598 616.308, 264.888 616.599 L 243.596 617.128 237.915 619.439 C 231.794 621.929, 230.107 622.980, 224.368 627.878 C 217.588 633.665, 211.671 643.815, 210.101 652.350 C 209.000 658.334, 209.019 742.238, 210.122 747.453 C 213.427 763.072, 226.231 775.767, 242.295 779.350 C 250.009 781.071, 344.422 781.088, 352.736 779.371 C 367.630 776.294, 379.406 765.945, 384.837 751.159 C 386.211 747.420, 386.431 744.918, 386.805 728.903 L 387.225 710.859 429.447 710.491 C 469.874 710.140, 471.949 710.056, 478.245 708.527 C 511.682 700.410, 536.744 678.244, 548.484 646.401 C 552.676 635.032, 553.788 626.953, 553.777 607.926 L 553.767 590.881 559.632 590.394 C 562.857 590.127, 567.446 589.406, 569.827 588.793 C 583.509 585.274, 595.717 573.520, 600.100 559.646 L 601.945 553.804 601.945 507.325 C 601.945 476.172, 601.682 459.583, 601.148 457.019 C 599.744 450.290, 595.384 442.041, 590.439 436.754 C 581.955 427.684, 572.564 423.193, 559.903 422.149 L 553.588 421.628 553.588 401.941 C 553.588 384.037, 553.724 381.806, 555.095 377.306 C 558.760 365.278, 567.332 355.043, 578.208 349.712 C 587.965 344.929, 589.420 344.750, 622.696 344.238 L 652.468 343.780 652.468 356.743 C 652.468 364.881, 652.845 371.679, 653.482 375.007 C 656.339 389.941, 668.035 402.780, 683.142 407.567 C 688.136 409.149, 688.717 409.168, 733.304 409.168 C 774.155 409.168, 778.848 409.048, 783.015 407.897 C 796.594 404.145, 807.842 393.785, 812.807 380.459 L 814.480 375.967 814.695 328.170 C 814.933 275.382, 815.000 276.331, 810.325 266.622 C 807.355 260.452, 798.181 251.082, 792.126 248.034 C 782.218 243.046, 784.448 243.243, 735.830 243.052 C 700.383 242.912, 690.920 243.075, 687.274 243.883 M 368.992 538.801 C 352.080 541.619, 338.162 553.230, 332.284 569.424 C 329.878 576.053, 329.015 585.231, 329.267 601.514 L 329.485 615.588 340.311 616.006 C 352.109 616.462, 355.362 617.131, 361.945 620.451 C 373.178 626.115, 380.374 634.433, 384.872 646.950 C 385.864 649.711, 386.452 653.756, 386.768 659.976 L 387.225 668.998 421.508 669.204 C 443.289 669.334, 457.997 669.123, 461.838 668.623 C 479.336 666.348, 495.971 654.026, 504.201 637.242 C 509.114 627.223, 509.678 624.277, 510.092 606.458 L 510.455 590.831 488.536 590.526 C 467.134 590.230, 466.479 590.177, 460.787 588.298 C 450.469 584.892, 441.867 578.045, 436.465 568.939 C 432.359 562.017, 430.805 556.306, 430.357 546.481 L 429.970 538.000 401.380 538.085 C 385.656 538.131, 371.080 538.454, 368.992 538.801'), 'evenodd');
+  ctx.restore();
 
   drawDot(ctx, color);
 }
 
 function setFaviconHref(dataUrl) {
+  if (!document.head) return;
+  if (wtFaviconObserver) wtFaviconObserver.disconnect();
   let customLink = document.getElementById('wt-custom-favicon');
   if (!customLink) {
     customLink = document.createElement('link');
     customLink.id = 'wt-custom-favicon';
     customLink.rel = 'icon';
     customLink.type = 'image/png';
-    (document.head || document.documentElement).appendChild(customLink);
+    document.head.appendChild(customLink);
   }
   customLink.href = dataUrl;
 
@@ -2192,336 +1545,7 @@ function setFaviconHref(dataUrl) {
       link.href = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
     }
   });
+  if (wtFaviconObserver && document.head) {
+    wtFaviconObserver.observe(document.head, { childList: true, subtree: true });
+  }
 }
-
-
-
-// ── SIDE PANEL REMOVED (Replaced by pure middle-down Thought HUD) ──
-
-(function initAreaSnipeEngine() {
-  let isSnipeActive = false;
-  let currentSnipeMode = 'dom_target';
-  let overlayEl = null;
-  let marqueeBox = null;
-  let sizeBadge = null;
-  let headerPill = null;
-  let startX = 0, startY = 0;
-  let isDragging = false;
-
-  function createOverlay(mode) {
-    if (overlayEl) overlayEl.remove();
-    currentSnipeMode = mode || 'dom_target';
-
-    overlayEl = document.createElement('div');
-    overlayEl.id = 'wt-snipe-overlay';
-    overlayEl.setAttribute('data-wt-ignore', 'true');
-    overlayEl.style.cssText = `
-      position: fixed; inset: 0; z-index: 2147483647;
-      background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(2px);
-      cursor: crosshair; user-select: none;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    `;
-
-    headerPill = document.createElement('div');
-    headerPill.style.cssText = `
-      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
-      background: #18181b; border: 1px solid #3f3f46; color: #f4f4f5;
-      font-size: 11px; font-weight: 500; padding: 6px 16px; border-radius: 20px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.6); pointer-events: none;
-      display: flex; align-items: center; gap: 8px; z-index: 2147483647;
-    `;
-    const modeLabel = currentSnipeMode === 'visual_crop' ? 'Vision Crop' : 'DOM Target';
-    headerPill.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>Drag box to select area</span> <span style="color:#06b6d4;font-weight:600;">[${modeLabel}]</span> <span style="color:#71717a;">(Esc to cancel)</span>`;
-
-    // Marquee selection box matching img1 Gemini/YouTube Chrome UI style
-    marqueeBox = document.createElement('div');
-    marqueeBox.style.cssText = `
-      position: fixed; border: 1px solid rgba(255, 255, 255, 0.45);
-      border-radius: 12px;
-      box-shadow: 0 0 24px 3px rgba(147, 197, 253, 0.45), inset 0 0 20px rgba(147, 197, 253, 0.2);
-      pointer-events: auto; display: none; z-index: 2147483647;
-      background: rgba(0, 0, 0, 0.1);
-    `;
-
-    // Four thick white rounded corner reticles (matching img1)
-    const corners = [
-      'top: -2px; left: -2px; border-top: 4px solid #ffffff; border-left: 4px solid #ffffff; border-top-left-radius: 10px;',
-      'top: -2px; right: -2px; border-top: 4px solid #ffffff; border-right: 4px solid #ffffff; border-top-right-radius: 10px;',
-      'bottom: -2px; left: -2px; border-bottom: 4px solid #ffffff; border-left: 4px solid #ffffff; border-bottom-left-radius: 10px;',
-      'bottom: -2px; right: -2px; border-bottom: 4px solid #ffffff; border-right: 4px solid #ffffff; border-bottom-right-radius: 10px;'
-    ];
-    corners.forEach(styleCss => {
-      const c = document.createElement('div');
-      c.style.cssText = `position: absolute; width: 18px; height: 18px; pointer-events: none; ${styleCss}`;
-      marqueeBox.appendChild(c);
-    });
-
-    // Circular close X button on top-right corner
-    const closeBtn = document.createElement('button');
-    closeBtn.style.cssText = `
-      position: absolute; top: -11px; right: -11px;
-      width: 22px; height: 22px; border-radius: 50%;
-      background: rgba(24, 24, 27, 0.95); border: 1px solid rgba(255, 255, 255, 0.25);
-      color: #f4f4f5; cursor: pointer; display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.6); z-index: 2147483647; transition: transform 0.15s, background 0.15s;
-    `;
-    closeBtn.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-    closeBtn.onclick = function(e) {
-      e.stopPropagation();
-      destroyOverlay();
-    };
-    marqueeBox.appendChild(closeBtn);
-
-    sizeBadge = document.createElement('div');
-    sizeBadge.style.cssText = `
-      position: absolute; bottom: -28px; left: 50%; transform: translateX(-50%);
-      background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); color: #e2e8f0; font-weight: 600;
-      font-size: 10px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 2px 8px; border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 4px 12px rgba(0,0,0,0.5); pointer-events: none;
-      white-space: nowrap;
-    `;
-    marqueeBox.appendChild(sizeBadge);
-
-    overlayEl.appendChild(headerPill);
-    overlayEl.appendChild(marqueeBox);
-    document.documentElement.appendChild(overlayEl);
-
-    isSnipeActive = true;
-  }
-
-  function destroyOverlay() {
-    if (overlayEl) {
-      overlayEl.remove();
-      overlayEl = null;
-    }
-    isSnipeActive = false;
-    isDragging = false;
-  }
-
-  function handleMouseDown(e) {
-    if (!isSnipeActive || e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    isDragging = true;
-    startX = e.clientX;
-    startY = e.clientY;
-
-    marqueeBox.style.left = startX + 'px';
-    marqueeBox.style.top = startY + 'px';
-    marqueeBox.style.width = '0px';
-    marqueeBox.style.height = '0px';
-    marqueeBox.style.display = 'block';
-  }
-
-  function handleMouseMove(e) {
-    if (!isSnipeActive || !isDragging) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const currentX = e.clientX;
-    const currentY = e.clientY;
-
-    const left = Math.min(startX, currentX);
-    const top = Math.min(startY, currentY);
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
-
-    marqueeBox.style.left = left + 'px';
-    marqueeBox.style.top = top + 'px';
-    marqueeBox.style.width = width + 'px';
-    marqueeBox.style.height = height + 'px';
-
-    sizeBadge.textContent = `${width} × ${height} px`;
-  }
-
-  function handleMouseUp(e) {
-    if (!isSnipeActive || !isDragging) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    isDragging = false;
-    const currentX = e.clientX;
-    const currentY = e.clientY;
-
-    const left = Math.min(startX, currentX);
-    const top = Math.min(startY, currentY);
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
-
-    if (width < 10 || height < 10) {
-      destroyOverlay();
-      return;
-    }
-
-    if (currentSnipeMode === 'visual_crop') {
-      captureVisualCrop(left, top, width, height);
-    } else {
-      captureDOMTargets(left, top, width, height);
-    }
-
-    destroyOverlay();
-  }
-
-  function handleKeyDown(e) {
-    if (e.key === 'Escape' && isSnipeActive) {
-      destroyOverlay();
-    }
-    if (e.altKey && (e.key === 's' || e.key === 'S')) {
-      e.preventDefault();
-      createOverlay('dom_target');
-    }
-  }
-
-  window.addEventListener('mousedown', handleMouseDown, true);
-  window.addEventListener('mousemove', handleMouseMove, true);
-  window.addEventListener('mouseup', handleMouseUp, true);
-  window.addEventListener('keydown', handleKeyDown, true);
-
-  // ── Mode 1: DOM Element Intersector ──────────────────────────────────────
-  function captureDOMTargets(left, top, width, height) {
-    const right = left + width;
-    const bottom = top + height;
-    const elements = [];
-
-    const allEls = document.querySelectorAll('button, input, select, textarea, a, h1, h2, h3, h4, h5, h6, p, table, tr, td, th, div, span, [role]');
-    allEls.forEach((el) => {
-      if (el.hasAttribute('data-wt-ignore') || el.closest('#wt-snipe-overlay')) return;
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) return;
-
-      const overlaps = !(r.right < left || r.left > right || r.bottom < top || r.top > bottom);
-      if (overlaps) {
-        const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 100);
-        if (text || ['INPUT', 'BUTTON', 'A', 'SELECT', 'TEXTAREA'].includes(el.tagName)) {
-          elements.push({
-            tag: el.tagName.toLowerCase(),
-            selector: getStableSelector(el),
-            ref: el.getAttribute('data-wt-id') || null,
-            text: text,
-            role: el.getAttribute('role') || null,
-            rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
-          });
-        }
-      }
-    });
-
-    const uniqueElements = elements.slice(0, 15);
-
-    __wt_safeSendMessage({
-      type: 'WT_SNIPE_COMPLETED',
-      payload: {
-        mode: 'dom_target',
-        elements: uniqueElements,
-        boundingRect: { x: left, y: top, width, height }
-      }
-    });
-  }
-
-  // ── Mode 2: Visual WebP Crop ─────────────────────────────────────────────
-  function captureVisualCrop(left, top, width, height) {
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-
-      const htmlContent = document.documentElement.outerHTML;
-      const dataSvg = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="${window.innerWidth}" height="${window.innerHeight}">
-          <foreignObject width="100%" height="100%">
-            <div xmlns="http://www.w3.org/1999/xhtml">
-              ${htmlContent}
-            </div>
-          </foreignObject>
-        </svg>
-      `;
-
-      const img = new Image();
-      const blob = new Blob([dataSvg], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-
-      img.onload = function() {
-        ctx.drawImage(img, left, top, width, height, 0, 0, width, height);
-        URL.revokeObjectURL(url);
-        const webpBase64 = canvas.toDataURL('image/webp', 0.75);
-
-        __wt_safeSendMessage({
-          type: 'WT_SNIPE_COMPLETED',
-          payload: {
-            mode: 'visual_crop',
-            cropImage: webpBase64,
-            boundingRect: { x: left, y: top, width, height }
-          }
-        });
-      };
-      img.onerror = function() {
-        captureDOMTargets(left, top, width, height);
-      };
-      img.src = url;
-    } catch(e) {
-      captureDOMTargets(left, top, width, height);
-    }
-  }
-
-  // Listen for snipe trigger from background
-  browserAPI.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'WT_START_SNIPE') {
-      createOverlay(msg.mode || 'dom_target');
-    }
-    if (msg.type === 'WT_SNIPE_INJECT' && msg.entry) {
-      const noteStr = typeof msg.entry === 'string' ? msg.entry : JSON.stringify(msg.entry);
-      try {
-        if (!window.__wt_chat_queue) window.__wt_chat_queue = [];
-        window.__wt_chat_queue.push(noteStr);
-      } catch(e) {}
-
-      try {
-        const existing = JSON.parse(localStorage.getItem('__wt_chat_queue_persist') || '[]');
-        existing.push(msg.entry);
-        localStorage.setItem('__wt_chat_queue_persist', JSON.stringify(existing));
-      } catch(e) {}
-
-      const bridge = document.getElementById('__wt_ask_bridge');
-      if (bridge) {
-        bridge.dataset.status = 'submitted';
-        bridge.dataset.result = msg.entry.text || 'Annotation submitted';
-      }
-    }
-  });
-
-})();
-
-// ── ALERT / ACTION-REQUIRED TAB INDICATOR ─────────────────────
-(function initAlertDetector() {
-  if (window.self !== window.top) return;
-  // Expose on window so window.__Weavetab.getAlertState() can read it from CDP MAIN world
-  window.__wt_alertPending = false;
-  var _alert = window.alert;
-  window.alert = function(msg) {
-    window.__wt_alertPending = true;
-    __wt_safeSendMessage({ type: 'TAB_ALERT_WAITING' });
-    var r = _alert.apply(this, arguments);
-    window.__wt_alertPending = false;
-    __wt_safeSendMessage({ type: 'TAB_ALERT_CLEARED' });
-    return r;
-  };
-  var _confirm = window.confirm;
-  window.confirm = function(msg) {
-    window.__wt_alertPending = true;
-    __wt_safeSendMessage({ type: 'TAB_ALERT_WAITING' });
-    var r = _confirm.apply(this, arguments);
-    window.__wt_alertPending = false;
-    __wt_safeSendMessage({ type: 'TAB_ALERT_CLEARED' });
-    return r;
-  };
-  var _prompt = window.prompt;
-  window.prompt = function(msg, def) {
-    window.__wt_alertPending = true;
-    __wt_safeSendMessage({ type: 'TAB_ALERT_WAITING' });
-    var r = _prompt.apply(this, arguments);
-    window.__wt_alertPending = false;
-    __wt_safeSendMessage({ type: 'TAB_ALERT_CLEARED' });
-    return r;
-  };
-})();

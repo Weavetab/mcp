@@ -27,6 +27,7 @@ export interface RecordingOptions {
   /** If false, keeps the WeaveTab UI overlay visible in the recording.
    * Default: true — overlay is hidden from screencasts so agent never records itself. */
   hideOverlay?: boolean;
+  app?: string;
 }
 
 interface RecordingState {
@@ -38,11 +39,16 @@ interface RecordingState {
   frameCount: number;
   dir: string;
   active: boolean;
+  hideOverlay: boolean;
 }
 
 const activeRecordings = new Map<string, RecordingState>();
 let screencastListener: ((frame: any) => void) | null = null;
 let currentSession: CDP.Client | null = null;
+
+function isValidSessionId(id: string): boolean {
+  return /^[a-zA-Z0-9._-]+$/.test(id) && !id.includes("..");
+}
 
 function recordingDir(sessionId: string, config: Config): string {
   return path.join(getOutputDir("recordings", config), sessionId);
@@ -70,6 +76,9 @@ export async function browserRecording(
 
   if (action === "start") {
     if (!sessionId) return { success: false, error: "browser_recording start requires a 'sessionId'" };
+    if (!isValidSessionId(sessionId)) {
+      return { success: false, error: `Invalid recording sessionId '${sessionId}' (use alphanumeric, '.', '_', '-' only; no path traversal)` };
+    }
 
     if (activeRecordings.has(sessionId)) {
       return { success: false, error: `Recording '${sessionId}' is already active` };
@@ -78,8 +87,9 @@ export async function browserRecording(
     const dir = recordingDir(sessionId, config);
     fs.mkdirSync(dir, { recursive: true });
 
-    const active = sessionRegistry.getActive(config.agentId);
+    const active = sessionRegistry.getActive(config.agentId, options.app);
     const targetId = active ? active.targetId : "default";
+    const hideOverlay = options.hideOverlay !== false;
 
     const state: RecordingState = {
       sessionId,
@@ -90,6 +100,7 @@ export async function browserRecording(
       frameCount: 0,
       dir,
       active: true,
+      hideOverlay,
     };
 
     activeRecordings.set(sessionId, state);
@@ -97,7 +108,6 @@ export async function browserRecording(
 
     const page = session.Page as any;
 
-    // Register screencast frame handler
     if (screencastListener && currentSession) {
       (currentSession as any).removeListener("Page.screencastFrame", screencastListener);
     }
@@ -129,11 +139,15 @@ export async function browserRecording(
       everyNthFrame: 1,
     }).catch((e: Error) => {
       activeRecordings.delete(sessionId);
+      if (screencastListener) {
+        try { (session as any).removeListener("Page.screencastFrame", screencastListener); } catch {}
+        screencastListener = null;
+      }
+      currentSession = null;
       throw new Error(`Failed to start screencast: ${e.message}`);
     });
 
-    // Always hide overlay during recording (default true; set hideOverlay: false to skip)
-    if (options.hideOverlay !== false) {
+    if (hideOverlay) {
       await hideWeaveTabOverlay(session);
     }
 
@@ -151,8 +165,10 @@ export async function browserRecording(
     try {
       await (session.Page as any).stopScreencast().catch(() => {});
     } catch { /* ignore */ }
-    
-    await restoreWeaveTabOverlay(session);
+
+    if (state.hideOverlay) {
+      await restoreWeaveTabOverlay(session);
+    }
 
     if (screencastListener && currentSession) {
       (currentSession as any).removeListener("Page.screencastFrame", screencastListener);

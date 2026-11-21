@@ -1,9 +1,11 @@
 import CDP from "chrome-remote-interface";
 import type { Config } from "../../config/loader.js";
-import { getOutputDir } from "../../config/loader.js";
+import { getOutputDir, getConfigAgentId } from "../../config/loader.js";
 import fs from "fs";
 import path from "path";
 import { logAction, logDebug } from "../../audit/logger.js";
+import { SessionSecretTracker } from "../../security/secrets.js";
+import { sessionRegistry } from "../../state/session.js";
 // @ts-ignore
 import { parse as parseCsv } from "csv-parse/sync";
 // @ts-ignore
@@ -32,6 +34,8 @@ export interface OfficeParseResult {
   truncated?: boolean;
 }
 
+const MAX_FETCH_BYTES = 25 * 1024 * 1024;
+
 /** Fetch a URL inside the browser's context using fetch(), return base64-encoded bytes + MIME type. */
 async function cdpFetchAsBase64(
   session: CDP.Client,
@@ -41,12 +45,21 @@ async function cdpFetchAsBase64(
     try {
       const resp = await fetch(${JSON.stringify(url)}, { credentials: 'include' });
       if (!resp.ok) return JSON.stringify({ error: 'HTTP ' + resp.status + ' ' + resp.statusText });
+      const cl = Number(resp.headers.get('content-length') || 0);
+      if (cl > ${MAX_FETCH_BYTES}) return JSON.stringify({ error: 'Document exceeds 25MB limit (' + cl + ' bytes)' });
       const mime = resp.headers.get('content-type') || 'application/octet-stream';
       const buf = await resp.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-      const b64 = btoa(binary);
+      if (buf.byteLength > ${MAX_FETCH_BYTES}) return JSON.stringify({ error: 'Document exceeds 25MB limit (' + buf.byteLength + ' bytes)' });
+      const b64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const res = String(reader.result || '');
+          const idx = res.indexOf(',');
+          resolve(idx >= 0 ? res.slice(idx + 1) : res);
+        };
+        reader.onerror = () => reject(new Error('FileReader base64 failed'));
+        reader.readAsDataURL(new Blob([buf]));
+      });
       return JSON.stringify({ base64: b64, mimeType: mime });
     } catch (e) {
       return JSON.stringify({ error: e.message || String(e) });
@@ -92,6 +105,8 @@ function sniffExtension(buffer: Buffer, mimeType: string): string | null {
   if (buffer.length < 4) return null;
   if (buffer.subarray(0, 4).toString("latin1") === "%PDF") return ".pdf";
   if (buffer.readUInt32LE(0) === 0x04034b50) {
+    if (buffer.includes("word/")) return ".docx";
+    if (buffer.includes("xl/")) return ".xlsx";
     if (mimeType.includes("wordprocessingml") || mimeType.includes("msword")) return ".docx";
     return ".xlsx";
   }
@@ -188,6 +203,13 @@ export async function browserOfficeParse(
     return { success: false, source: "", type: "unknown", error: "Provide either 'url' (remote document) or 'filename' (local download)." };
   }
 
+  const targetId = sessionRegistry.getActive(getConfigAgentId(config))?.targetId ?? "default";
+  const redactOut = (res: OfficeParseResult): OfficeParseResult => ({
+    ...res,
+    ...(res.content !== undefined ? { content: SessionSecretTracker.redact(targetId, res.content) } : {}),
+    ...(res.data !== undefined ? { data: SessionSecretTracker.redactValue(targetId, res.data) } : {}),
+  });
+
   // ── URL mode: fetch in-browser via CDP Runtime.evaluate ───────────────────
   if (url) {
     logAction("browser_office_parse", "url", `Fetching ${url}`);
@@ -212,7 +234,7 @@ export async function browserOfficeParse(
     logDebug(`[Office] URL fetch: ${url} → ${ext} (${buffer.length} bytes, mime=${mimeType})`);
     logAction("browser_office_parse", ext, `Parsing ${url} (${buffer.length} bytes)`);
 
-    return parseBuffer(buffer, ext, url, max_rows, max_chars);
+    return redactOut(await parseBuffer(buffer, ext, url, max_rows, max_chars));
   }
 
   // ── Filename mode: legacy local file parsing ───────────────────────────────
@@ -252,7 +274,7 @@ export async function browserOfficeParse(
       }
     }
     logAction("browser_office_parse", resolvedExt, `Parsing local file ${filename}`);
-    return parseBuffer(buffer, resolvedExt, filename, max_rows, max_chars);
+    return redactOut(await parseBuffer(buffer, resolvedExt, filename, max_rows, max_chars));
   }
 
   return { success: false, source: "", type: "unknown", error: "Unreachable" };

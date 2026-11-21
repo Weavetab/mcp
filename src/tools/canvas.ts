@@ -73,7 +73,7 @@ async function resolveCanvasViaCDP(
         y: rect.top,
         dataUrl: this.toDataURL('image/png')
       });
-    }()`,
+    }`,
     returnByValue: true,
   });
 
@@ -190,7 +190,7 @@ export async function browserCanvas(
     for (let i = 1; i < points.length; i++) {
       const ptX = offsetX + points[i].x;
       const ptY = offsetY + points[i].y;
-      await Input.dispatchMouseEvent({ type: "mouseMoved", x: ptX, y: ptY, button: "left" });
+      await Input.dispatchMouseEvent({ type: "mouseMoved", x: ptX, y: ptY, button: "left", buttons: 1 });
       await new Promise(r => setTimeout(r, 10));
     }
 

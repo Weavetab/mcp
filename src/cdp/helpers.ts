@@ -2,8 +2,6 @@ import { logDebug } from "../audit/logger.js";
 import CDP from "chrome-remote-interface";
 import { SessionSecretTracker } from "../security/secrets.js";
 
-// ─── Message queue with backpressure ──────────────────────────────────────────
-
 interface QueuedMessage {
   id: string;
   message: object;
@@ -13,21 +11,23 @@ interface QueuedMessage {
 }
 
 const MAX_QUEUE_SIZE = 50;
-const BATCH_INTERVAL_MS = 10;  // Reduced from 20ms for faster message delivery
+const BATCH_INTERVAL_MS = 10;
 
-const messageQueues = new Map<string, QueuedMessage[]>();
-const queueTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const messageQueues = new WeakMap<CDP.Client, QueuedMessage[]>();
+const queueTimers = new WeakMap<CDP.Client, ReturnType<typeof setTimeout>>();
 
-async function drainQueue(session: CDP.Client, targetId: string): Promise<void> {
-  const queue = messageQueues.get(targetId);
+async function drainQueue(session: CDP.Client): Promise<void> {
+  const queue = messageQueues.get(session);
   if (!queue || queue.length === 0) return;
 
   const batch = queue.splice(0, Math.min(queue.length, 10));
   const messages = batch.map((q, i) => {
     const msg = q.message as Record<string, unknown>;
-    // Add dedup _id using queue entry's id (unique) so content.js __wt_processedMsgIds works
-    if (typeof msg === 'object' && msg !== null) {
-      msg._id = q.id + (i > 0 ? '-' + i : '');
+    if (typeof msg === "object" && msg !== null) {
+      return {
+        ...msg,
+        _id: q.id + (i > 0 ? "-" + i : ""),
+      };
     }
     return msg;
   });
@@ -47,32 +47,34 @@ async function drainQueue(session: CDP.Client, targetId: string): Promise<void> 
     batch.forEach(q => {
       q.attempts++;
       if (q.attempts < 3) {
-        queue.push(q); // re-queue for retry
+        queue.push(q);
       } else {
         q.resolve(false);
       }
     });
   }
 
-  // Schedule next drain if messages remain
   if (queue.length > 0) {
-    const timer = setTimeout(() => drainQueue(session, targetId), BATCH_INTERVAL_MS);
-    queueTimers.set(targetId, timer);
+    const timer = setTimeout(() => drainQueue(session), BATCH_INTERVAL_MS);
+    timer.unref();
+    queueTimers.set(session, timer);
   } else {
-    const t = queueTimers.get(targetId);
-    if (t) { clearTimeout(t); queueTimers.delete(targetId); }
+    const t = queueTimers.get(session);
+    if (t) {
+      clearTimeout(t);
+      queueTimers.delete(session);
+    }
   }
 }
 
-function enqueueMessage(session: CDP.Client, targetId: string, message: object): Promise<boolean> {
+function enqueueMessage(session: CDP.Client, message: object): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    let queue = messageQueues.get(targetId);
+    let queue = messageQueues.get(session);
     if (!queue) {
       queue = [];
-      messageQueues.set(targetId, queue);
+      messageQueues.set(session, queue);
     }
 
-    // Backpressure: if queue is full, reject oldest message to make room
     if (queue.length >= MAX_QUEUE_SIZE) {
       const dropped = queue.shift();
       if (dropped) {
@@ -90,30 +92,17 @@ function enqueueMessage(session: CDP.Client, targetId: string, message: object):
     };
     queue.push(qMsg);
 
-    // Start drain timer if not already running
-    if (!queueTimers.has(targetId)) {
-      const timer = setTimeout(() => drainQueue(session, targetId), BATCH_INTERVAL_MS);
-      queueTimers.set(targetId, timer);
+    if (!queueTimers.has(session)) {
+      const timer = setTimeout(() => drainQueue(session), BATCH_INTERVAL_MS);
+      timer.unref();
+      queueTimers.set(session, timer);
     }
   });
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-function getTargetId(session: CDP.Client): string {
-  return (session as any)._targetId || (session as any).targetId || "default";
-}
-
-/**
- * sendToExtension is the only bridge to communicate from Node (CLI)
- * to the Weavetab Chrome Extension via CDP executeScript.
- * Messages are queued and batched with backpressure.
- * Returns true if the message was queued, false if dropped.
- */
 export async function sendToExtension(session: CDP.Client, message: object): Promise<boolean> {
   try {
-    const targetId = getTargetId(session);
-    return await enqueueMessage(session, targetId, message);
+    return await enqueueMessage(session, message);
   } catch (e) {
     logDebug("[Weavetab] Failed to sendToExtension", e);
     return false;
@@ -135,8 +124,7 @@ export async function getFromExtension<T = any>(session: CDP.Client, message: ob
             };
             window.addEventListener('Weavetab-msg-out', listener);
             window.dispatchEvent(new CustomEvent('Weavetab-msg-in', { detail: Object.assign({}, ${JSON.stringify(message)}, { id }) }));
-            
-            // Fallback timeout — 100ms fail-fast (reduced from 150ms)
+
             setTimeout(() => {
               window.removeEventListener('Weavetab-msg-out', listener);
               resolve("null");
@@ -151,7 +139,6 @@ export async function getFromExtension<T = any>(session: CDP.Client, message: ob
       if (result && result.value && result.value !== "null") {
         return JSON.parse(result.value as string);
       }
-      // Got null — if we have retries left, try again
       if (attempt < retries) {
         logDebug(`[Weavetab] Extension did not respond (attempt ${attempt + 1}/${retries + 1}), retrying...`);
         continue;
@@ -167,35 +154,31 @@ export async function getFromExtension<T = any>(session: CDP.Client, message: ob
   return null;
 }
 
+export const OVERLAY_HIDE_SELECTORS = [
+  "#wt-shadow-host",
+  "weavetab-host",
+  "#Weavetab-root",
+  "[data-wt-overlay]",
+  "[data-Weavetab-overlay]",
+  "#__Weavetab_cursor_host",
+  "[data-wt-internal]",
+  "[data-wt-ignore]",
+  ".wt-bubble",
+  "#__wt_ask_bridge",
+  "#wt-debug-overlay",
+  "#wt-main-container",
+];
+
 export async function hideWeaveTabOverlay(session: CDP.Client): Promise<void> {
   await session.Runtime.evaluate({
     expression: `(function(){
       var existing = document.getElementById('__wt_hide_overlay_styles');
-      if (existing) return; // already hidden
+      if (existing) return;
       var style = document.createElement('style');
       style.id = '__wt_hide_overlay_styles';
-      // Cover ALL Weavetab overlay elements so they never appear in screenshots/PDFs/snapshots:
-      //  - [id^="Weavetab-"]    : Weavetab-root shadow host, any legacy Weavetab- elements
-      //  - [id^="__Weavetab_"]  : __Weavetab_cursor_host (ghost cursor)
-      //  - [id^="wt-"]          : wt-* legacy element IDs
-      //  - [data-wt-internal]   : HUD iframe host (closed shadow DOM mount)
-      //  - [data-wt-ignore]     : any element flagged as agent-invisible
-      //  - .wt-bubble           : thought bubble / action text popups
-      //  - #__wt_ask_bridge     : question input bridge element
-      //  - #wt-debug-overlay    : debug overlay panel
-      //  - #wt-main-container   : WeaveTab OS panel (todos + chat)
-      style.textContent = [
-        '[id^="Weavetab-"]',
-        '[id^="__Weavetab_"]',
-        '[id^="wt-"]',
-        '[data-wt-internal]',
-        '[data-wt-ignore]',
-        '.wt-bubble',
-        '#__wt_ask_bridge',
-        '#wt-debug-overlay',
-        '#wt-main-container',
-      ].join(', ') + ' { display: none !important; visibility: hidden !important; opacity: 0 !important; }';
-      document.head.appendChild(style);
+      style.textContent = ${JSON.stringify(OVERLAY_HIDE_SELECTORS.join(", ") + " { display: none !important; visibility: hidden !important; opacity: 0 !important; }")};
+      var mount = document.head || document.documentElement;
+      if (mount) mount.appendChild(style);
     })()`,
     returnByValue: false,
   }).catch(() => {});
@@ -211,7 +194,7 @@ export async function restoreWeaveTabOverlay(session: CDP.Client): Promise<void>
   }).catch(() => {});
 }
 
-// ─── Secret Hardening & Containment Helpers ──────────────────────────────────
+export const showWeaveTabOverlay = restoreWeaveTabOverlay;
 
 export async function applySecretHardening(
   session: CDP.Client,
@@ -222,10 +205,8 @@ export async function applySecretHardening(
     try {
       const el = this;
       if (!el) return;
-      // Mark as secret
       try { el.setAttribute('data-wt-secret', 'true'); } catch (_) {}
-      
-      // 1. Redact direct .value access via instance-level property override
+
       const proto = Object.getPrototypeOf(el);
       const origDesc = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
       if (origDesc) {
@@ -236,8 +217,7 @@ export async function applySecretHardening(
           enumerable: true
         });
       }
-      
-      // 2. Defeat array spread, iteration, and coercion
+
       try {
         Object.defineProperty(el, Symbol.iterator, {
           value: function* () { yield '[REDACTED]'; },
@@ -247,15 +227,12 @@ export async function applySecretHardening(
           value: function() { return '[REDACTED]'; },
           configurable: true
         });
-        // Defeat JSON.stringify / structuredClone leaks
         Object.defineProperty(el, 'toJSON', {
           value: function() { return '[REDACTED]'; },
           configurable: true
         });
       } catch(_) {}
-    } catch (e) {
-      // fail silently so as not to disrupt the page execution
-    }
+    } catch (e) {}
   }`;
 
   if (objectId) {
@@ -318,91 +295,88 @@ export async function registerAndHardenSecretField(
   }
 }
 
+export const MASK_SECRET_FIELDS_EXPR = `(function() {
+  var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+
+  function queryAllDeep(root, matchFn, out) {
+    if (!out) out = [];
+    var elements = root.querySelectorAll('*');
+    for (var i = 0; i < elements.length; i++) {
+      var el = elements[i];
+      if (matchFn(el)) out.push(el);
+      if (el.shadowRoot) {
+        queryAllDeep(el.shadowRoot, matchFn, out);
+      }
+    }
+    return out;
+  }
+
+  function isSecretNode(el) {
+    if (!el || !el.tagName) return false;
+    if (el.hasAttribute && el.hasAttribute('data-wt-secret')) return true;
+    var tag = el.tagName.toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+      var t = (el.getAttribute('type') || '').toLowerCase();
+      var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      var name = (el.getAttribute('name') || '').toLowerCase();
+      var id = (el.getAttribute('id') || '').toLowerCase();
+      var aria = (el.getAttribute('aria-label') || '').toLowerCase();
+      return t === 'password' || ac.includes('password') || secretRegex.test(name) || secretRegex.test(id) || secretRegex.test(aria);
+    }
+    return false;
+  }
+
+  var els = queryAllDeep(document, isSecretNode, []);
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (el.dataset.wtCapOrigStyle === undefined) {
+      el.dataset.wtCapOrigStyle = el.getAttribute('style') || '';
+    }
+    el.style.setProperty('-webkit-text-security', 'disc', 'important');
+    el.style.setProperty('color', 'transparent', 'important');
+    el.style.setProperty('text-shadow', 'none', 'important');
+  }
+})()`;
+
+export const RESTORE_SECRET_FIELDS_EXPR = `(function() {
+  function queryAllDeep(root, out) {
+    if (!out) out = [];
+    var elements = root.querySelectorAll('*');
+    for (var i = 0; i < elements.length; i++) {
+      var el = elements[i];
+      if (el.dataset && el.dataset.wtCapOrigStyle !== undefined) {
+        out.push(el);
+      }
+      if (el.shadowRoot) {
+        queryAllDeep(el.shadowRoot, out);
+      }
+    }
+    return out;
+  }
+
+  var els = queryAllDeep(document, []);
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    var orig = el.dataset.wtCapOrigStyle;
+    if (orig) {
+      el.setAttribute('style', orig);
+    } else {
+      el.removeAttribute('style');
+    }
+    delete el.dataset.wtCapOrigStyle;
+  }
+})()`;
+
 export async function maskSecretFieldsForCapture(session: CDP.Client): Promise<void> {
   await session.Runtime.evaluate({
-    expression: `(function() {
-      var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
-      
-      function queryAllDeep(root, matchFn) {
-        var matched = [];
-        var elements = root.querySelectorAll('*');
-        for (var i = 0; i < elements.length; i++) {
-          var el = elements[i];
-          if (matchFn(el)) matched.push(el);
-          if (el.shadowRoot) {
-            matched = matched.concat(queryAllDeep(el.shadowRoot, matchFn));
-          }
-        }
-        return matched;
-      }
-
-      function isSecretNode(el) {
-        if (!el || !el.tagName) return false;
-        if (el.hasAttribute && el.hasAttribute('data-wt-secret')) return true;
-        var tag = el.tagName.toLowerCase();
-        if (tag === 'input' || tag === 'textarea') {
-          var t = (el.getAttribute('type') || '').toLowerCase();
-          var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
-          var name = (el.getAttribute('name') || '').toLowerCase();
-          var id = (el.getAttribute('id') || '').toLowerCase();
-          var aria = (el.getAttribute('aria-label') || '').toLowerCase();
-          return t === 'password' || ac.includes('password') || secretRegex.test(name) || secretRegex.test(id) || secretRegex.test(aria);
-        }
-        return false;
-      }
-
-      var els = queryAllDeep(document, isSecretNode);
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        el.__wt_cap_val_backup = el.value;
-        try { el.value = ''; } catch(e) {}
-        if (el.isContentEditable) {
-          el.__wt_cap_txt_backup = el.textContent;
-          try { el.textContent = ''; } catch(e) {}
-        }
-        el.__wt_cap_sec_backup = el.style.webkitTextSecurity;
-        try { el.style.webkitTextSecurity = 'disc'; } catch(e) {}
-      }
-    })()`,
+    expression: MASK_SECRET_FIELDS_EXPR,
     returnByValue: false,
   }).catch(() => {});
 }
 
 export async function restoreSecretFieldsAfterCapture(session: CDP.Client): Promise<void> {
   await session.Runtime.evaluate({
-    expression: `(function() {
-      function queryAllDeep(root) {
-        var matched = [];
-        var elements = root.querySelectorAll('*');
-        for (var i = 0; i < elements.length; i++) {
-          var el = elements[i];
-          if (el.__wt_cap_val_backup !== undefined || el.__wt_cap_txt_backup !== undefined || el.__wt_cap_sec_backup !== undefined) {
-            matched.push(el);
-          }
-          if (el.shadowRoot) {
-            matched = matched.concat(queryAllDeep(el.shadowRoot));
-          }
-        }
-        return matched;
-      }
-
-      var els = queryAllDeep(document);
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        if (el.__wt_cap_val_backup !== undefined) {
-          try { el.value = el.__wt_cap_val_backup; } catch(e) {}
-          delete el.__wt_cap_val_backup;
-        }
-        if (el.__wt_cap_txt_backup !== undefined) {
-          try { el.textContent = el.__wt_cap_txt_backup; } catch(e) {}
-          delete el.__wt_cap_txt_backup;
-        }
-        if (el.__wt_cap_sec_backup !== undefined) {
-          try { el.style.webkitTextSecurity = el.__wt_cap_sec_backup; } catch(e) {}
-          delete el.__wt_cap_sec_backup;
-        }
-      }
-    })()`,
+    expression: RESTORE_SECRET_FIELDS_EXPR,
     returnByValue: false,
   }).catch(() => {});
 }

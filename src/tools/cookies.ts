@@ -14,6 +14,9 @@
  */
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
+import { getConfigAgentId } from "../config/loader.js";
+import { SessionSecretTracker } from "../security/secrets.js";
+import { sessionRegistry } from "../state/session.js";
 
 export interface CookieEntry {
   name: string;
@@ -77,6 +80,7 @@ export async function browserCookies(
   _config: Config
 ): Promise<CookiesResult> {
   const action = args.action === "list" ? "get" : args.action;
+  const targetId = sessionRegistry.getActive(getConfigAgentId(_config))?.targetId ?? "default";
   if (action === "get") {
     // Get current page URL for scoping
     const { frameTree } = await session.Page.getFrameTree();
@@ -86,7 +90,7 @@ export async function browserCookies(
 
     let mapped: CookieEntry[] = cookies.map(c => ({
       name: c.name,
-      value: c.value,
+      value: SessionSecretTracker.redact(targetId, c.value),
       domain: c.domain,
       path: c.path,
       expires: c.expires,
@@ -121,18 +125,17 @@ export async function browserCookies(
     if (!args.name) throw new Error("browser_cookies set: 'name' is required");
     if (args.value === undefined) throw new Error("browser_cookies set: 'value' is required");
 
-    // Resolve domain from current page if not provided
     let domain = args.domain;
+    let secure = args.secure;
     let pageUrl = args.url;
-    if (!domain || args.secure === undefined) {
+    if (!domain || secure === undefined) {
       const { frameTree } = await session.Page.getFrameTree();
       pageUrl = pageUrl ?? frameTree.frame.url;
       try {
         const u = new URL(pageUrl);
         if (!domain) domain = u.hostname;
-        // Default secure to true for https pages
-        if (args.secure === undefined && u.protocol === "https:") {
-          args.secure = true;
+        if (secure === undefined && u.protocol === "https:") {
+          secure = true;
         }
       } catch {
         if (!domain) throw new Error("browser_cookies set: could not determine domain — provide 'domain' explicitly.");
@@ -146,7 +149,7 @@ export async function browserCookies(
       path: args.path ?? "/",
       expires: args.expires,
       httpOnly: args.httpOnly ?? false,
-      secure: args.secure ?? false,
+      secure: secure ?? false,
       sameSite: args.sameSite,
     });
 
@@ -172,32 +175,32 @@ export async function browserCookies(
       return { success: true, action: "delete", name: args.name };
     }
 
-    // deleteCookies requires the domain to match exactly how the cookie was
-    // stored (e.g. ".github.com" with a leading dot). Fetch all matching 
-    // cookies and delete each using its exact stored domain and path.
-    try {
-      const { cookies: existing } = await session.Network.getCookies({ urls: [pageUrl] });
-      const matches = existing.filter(c => c.name === args.name);
-      
-      if (matches.length > 0) {
-        for (const cookie of matches) {
-          await session.Network.deleteCookies({
-            name: cookie.name,
-            domain: cookie.domain,
-            path: cookie.path,
-          });
-        }
-      } else {
-        // Fallback: derive hostname; won't work for subdomain cookies but attempts a best-effort deletion.
-        const domain = new URL(pageUrl).hostname;
+    const { cookies: existing } = await session.Network.getCookies({ urls: [pageUrl] });
+    const matches = existing.filter(c => c.name === args.name);
+
+    if (matches.length > 0) {
+      for (const cookie of matches) {
         await session.Network.deleteCookies({
-          name: args.name,
-          domain,
-          path: args.path ?? "/",
+          name: cookie.name,
+          domain: cookie.domain,
+          path: cookie.path,
         });
       }
-    } catch {
-      throw new Error("browser_cookies delete: could not determine domain — provide 'domain' explicitly.");
+    } else {
+      let domain: string;
+      try {
+        domain = new URL(pageUrl).hostname;
+      } catch {
+        throw new Error("browser_cookies delete: could not determine domain — provide 'domain' explicitly.");
+      }
+      if (!domain) {
+        throw new Error("browser_cookies delete: could not determine domain — provide 'domain' explicitly.");
+      }
+      await session.Network.deleteCookies({
+        name: args.name,
+        domain,
+        path: args.path ?? "/",
+      });
     }
 
     return { success: true, action: "delete", name: args.name };

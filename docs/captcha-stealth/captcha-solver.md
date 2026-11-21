@@ -3,7 +3,6 @@ title: "CAPTCHA Solver"
 description: "Autonomous zero-API solver for Turnstile, GeeTest, and reCAPTCHA."
 product: mcp
 section: captcha-stealth
-badge: new
 icon: ShieldAlert
 slug: captcha-solver
 ---
@@ -27,7 +26,7 @@ browser_captcha({ action: "solve", timeout: 60000 })
 | **GeeTest Slider** | GeeTest v3 / v4 puzzle sliders | Bézier velocity drag + momentum overshoot correction | Yes |
 | **Google reCAPTCHA v2** | Checkbox & iframe challenges | Nested cross-origin iframe pointer penetration | Yes |
 | **Google reCAPTCHA v3** | Invisible score-based barriers | High-entropy behavioral simulation bursts | Yes |
-| **Arkose Labs / FunCAPTCHA** | Interactive verification | Synthetic CDP pointer kinematics + rotation solver | Yes |
+| **Arkose Labs / FunCAPTCHA** | Interactive verification | Synthetic CDP pointer kinematics + challenge heuristics | Yes |
 | **hCaptcha** | Checkbox challenges | Cross-domain iframe dispatch + heuristic click | Yes |
 | **Math / Text Challenges** | Inline security prompts | DOM arithmetic evaluation + synthetic input | Yes |
 

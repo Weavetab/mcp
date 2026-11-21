@@ -32,26 +32,32 @@ export function toPluginInputShape(schema: any): Record<string, any> {
     const shape: Record<string, any> = {};
     for (const [key, prop] of Object.entries<any>(schema.properties)) {
       let field: any;
-      switch (prop?.type) {
-        case "number":
-        case "integer":
-          field = z.number();
-          break;
-        case "boolean":
-          field = z.boolean();
-          break;
-        case "array":
-          field = z.array(z.any());
-          break;
-        case "object":
-          field = z.record(z.string(), z.any());
-          break;
-        default:
-          field = z.string();
+      if (Array.isArray(prop?.enum) && prop.enum.length > 0 && prop.enum.every((v: any) => typeof v === "string")) {
+        field = z.enum(prop.enum as [string, ...string[]]);
+      } else {
+        switch (prop?.type) {
+          case "number":
+            field = z.number();
+            break;
+          case "integer":
+            field = z.number().int();
+            break;
+          case "boolean":
+            field = z.boolean();
+            break;
+          case "array":
+            field = z.array(z.any());
+            break;
+          case "object":
+            field = z.record(z.string(), z.any());
+            break;
+          default:
+            field = z.string();
+        }
       }
       if (typeof prop?.description === "string") field = field.describe(prop.description);
-      if (prop?.default !== undefined) field = field.default(prop.default);
       if (!required.includes(key)) field = field.optional();
+      if (prop?.default !== undefined) field = field.default(prop.default);
       shape[key] = field;
     }
     return shape;
@@ -63,7 +69,7 @@ export function toPluginInputShape(schema: any): Record<string, any> {
 // MCP prompt arguments travel as strings, so JSON Schema and descriptor maps are coerced to z.string()
 export function toPromptShape(schema: any): Record<string, any> {
   if (!schema || typeof schema !== "object") return {};
-  if (schema.properties && typeof schema.properties === "object" && !schema._def) {
+  if (schema.properties && typeof schema.properties === "object" && !schema._def && !schema._zod) {
     const required: string[] = Array.isArray(schema.required) ? schema.required : [];
     const shape: Record<string, any> = {};
     for (const [key, prop] of Object.entries<any>(schema.properties)) {

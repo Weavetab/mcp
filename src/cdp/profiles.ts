@@ -1,69 +1,163 @@
 import { logDebug } from "../audit/logger.js";
-/**
- * Weavetab — cdp/profiles.ts
- * Isolated browser session profile resolution with real-browser protection guard.
- * Weavetab NEVER reads from or writes to the user's real browser profile.
- * Weavetab by fy2ne
- */
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
 import { PLATFORM } from "../config/loader.js";
 
-// ─── Real-browser profile isolation guard ────────────────────────────────────
-// These are the known default user data directories for every major browser
-// on all supported platforms. Weavetab will REFUSE to use any of these paths
-// as a session profile. This is an enterprise-critical security guarantee.
-
 const HOME = os.homedir();
 
-// Platform-specific real browser paths
-const REAL_BROWSER_PATHS: string[] = [];
+function resolveRealOrParent(targetPath: string): string {
+  const abs = path.resolve(targetPath);
+  const tailSegments: string[] = [];
+  let cur = abs;
 
-if (PLATFORM === 'win32') {
-  // Windows paths
-  REAL_BROWSER_PATHS.push(
-    path.join(HOME, "AppData", "Local", "Google", "Chrome", "User Data"),
-    path.join(HOME, "AppData", "Local", "Microsoft", "Edge", "User Data"),
-    path.join(HOME, "AppData", "Local", "BraveSoftware", "Brave-Browser", "User Data"),
-    path.join(HOME, "AppData", "Roaming", "Mozilla", "Firefox", "Profiles"),
-    path.join(HOME, "AppData", "Roaming", "Opera Software", "Opera Stable"),
-    path.join(HOME, "AppData", "Local", "Vivaldi", "User Data")
-  );
-} else if (PLATFORM === 'darwin') {
-  // macOS paths
-  REAL_BROWSER_PATHS.push(
-    path.join(HOME, "Library", "Application Support", "Google", "Chrome"),
-    path.join(HOME, "Library", "Application Support", "Microsoft Edge"),
-    path.join(HOME, "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
-    path.join(HOME, "Library", "Application Support", "Firefox", "Profiles"),
-    path.join(HOME, "Library", "Application Support", "Vivaldi")
-  );
-} else {
-  // Linux paths
-  REAL_BROWSER_PATHS.push(
-    path.join(HOME, ".config", "google-chrome"),
-    path.join(HOME, ".config", "microsoft-edge"),
-    path.join(HOME, ".config", "BraveSoftware", "Brave-Browser"),
-    path.join(HOME, ".mozilla", "firefox"),
-    path.join(HOME, ".config", "opera"),
-    path.join(HOME, ".config", "vivaldi")
-  );
+  while (true) {
+    try {
+      if (fs.existsSync(cur)) {
+        const realBase = fs.realpathSync(cur);
+        return tailSegments.length > 0 ? path.join(realBase, ...tailSegments.reverse()) : realBase;
+      }
+    } catch { /* keep walking up */ }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    tailSegments.push(path.basename(cur));
+    cur = parent;
+  }
+  return abs;
 }
 
-/**
- * Asserts that the given profile directory is NOT a real browser profile.
- * Throws a clear security error if it matches any known real-browser path.
- * This prevents Weavetab from ever accidentally accessing user's saved passwords,
- * cookies, history, or personal data from their personal browser.
- */
-function assertNotRealBrowserProfile(profileDir: string): void {
-  const resolved = path.resolve(profileDir).toLowerCase();
+function getRealBrowserPaths(): string[] {
+  const paths: string[] = [];
+  const localAppData = process.env.LOCALAPPDATA || path.join(HOME, "AppData", "Local");
+  const appData = process.env.APPDATA || path.join(HOME, "AppData", "Roaming");
+  const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(HOME, ".config");
 
-  for (const realPath of REAL_BROWSER_PATHS) {
-    const realResolved = path.resolve(realPath).toLowerCase();
-    // Block exact match and any subdirectory of a real browser profile
+  if (PLATFORM === "win32") {
+    const localRoots = Array.from(new Set([path.join(HOME, "AppData", "Local"), localAppData]));
+    const roamingRoots = Array.from(new Set([path.join(HOME, "AppData", "Roaming"), appData]));
+
+    for (const lr of localRoots) {
+      paths.push(
+        path.join(lr, "Google", "Chrome", "User Data"),
+        path.join(lr, "Google", "Chrome Beta", "User Data"),
+        path.join(lr, "Google", "Chrome SxS", "User Data"),
+        path.join(lr, "Google", "Chrome Dev", "User Data"),
+        path.join(lr, "Chromium", "User Data"),
+        path.join(lr, "Microsoft", "Edge", "User Data"),
+        path.join(lr, "Microsoft", "Edge Beta", "User Data"),
+        path.join(lr, "Microsoft", "Edge Dev", "User Data"),
+        path.join(lr, "Microsoft", "Edge SxS", "User Data"),
+        path.join(lr, "BraveSoftware", "Brave-Browser", "User Data"),
+        path.join(lr, "BraveSoftware", "Brave-Browser-Beta", "User Data"),
+        path.join(lr, "BraveSoftware", "Brave-Browser-Nightly", "User Data"),
+        path.join(lr, "Vivaldi", "User Data"),
+        path.join(lr, "Arc", "User Data"),
+        path.join(lr, "Packages", "TheBrowserCompany.Arc_ttt1ap7aakyb4", "LocalCache", "Local", "Arc", "User Data")
+      );
+    }
+    for (const rr of roamingRoots) {
+      paths.push(
+        path.join(rr, "Mozilla", "Firefox", "Profiles"),
+        path.join(rr, "Opera Software", "Opera Stable"),
+        path.join(rr, "Opera Software", "Opera GX Stable")
+      );
+    }
+  } else if (PLATFORM === "darwin") {
+    const appSupport = path.join(HOME, "Library", "Application Support");
+    paths.push(
+      path.join(appSupport, "Google", "Chrome"),
+      path.join(appSupport, "Google", "Chrome Beta"),
+      path.join(appSupport, "Google", "Chrome Canary"),
+      path.join(appSupport, "Google", "Chrome Dev"),
+      path.join(appSupport, "Chromium"),
+      path.join(appSupport, "Microsoft Edge"),
+      path.join(appSupport, "Microsoft Edge Beta"),
+      path.join(appSupport, "Microsoft Edge Dev"),
+      path.join(appSupport, "Microsoft Edge Canary"),
+      path.join(appSupport, "BraveSoftware", "Brave-Browser"),
+      path.join(appSupport, "BraveSoftware", "Brave-Browser-Beta"),
+      path.join(appSupport, "BraveSoftware", "Brave-Browser-Nightly"),
+      path.join(appSupport, "Firefox", "Profiles"),
+      path.join(appSupport, "Vivaldi"),
+      path.join(appSupport, "com.operasoftware.Opera"),
+      path.join(appSupport, "com.operasoftware.OperaGX"),
+      path.join(appSupport, "Arc", "User Data"),
+      path.join(appSupport, "Arc")
+    );
+  } else {
+    const cfgRoots = Array.from(new Set([path.join(HOME, ".config"), xdgConfig]));
+    for (const cr of cfgRoots) {
+      paths.push(
+        path.join(cr, "google-chrome"),
+        path.join(cr, "google-chrome-beta"),
+        path.join(cr, "google-chrome-unstable"),
+        path.join(cr, "chromium"),
+        path.join(cr, "microsoft-edge"),
+        path.join(cr, "microsoft-edge-beta"),
+        path.join(cr, "microsoft-edge-dev"),
+        path.join(cr, "BraveSoftware", "Brave-Browser"),
+        path.join(cr, "BraveSoftware", "Brave-Browser-Beta"),
+        path.join(cr, "opera"),
+        path.join(cr, "vivaldi")
+      );
+    }
+    paths.push(path.join(HOME, ".mozilla", "firefox"));
+  }
+
+  return paths;
+}
+
+export function getRealDesktopAppRoots(): string[] {
+  const roots: string[] = [];
+  const localAppData = process.env.LOCALAPPDATA || path.join(HOME, "AppData", "Local");
+  const appData = process.env.APPDATA || path.join(HOME, "AppData", "Roaming");
+  const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(HOME, ".config");
+  const xdgData = process.env.XDG_DATA_HOME || path.join(HOME, ".local", "share");
+
+  if (PLATFORM === "win32") {
+    roots.push(
+      path.join(HOME, "AppData", "Roaming"),
+      path.join(HOME, "AppData", "Local"),
+      path.join(HOME, "AppData", "LocalLow"),
+      appData,
+      localAppData
+    );
+  } else if (PLATFORM === "darwin") {
+    roots.push(
+      path.join(HOME, "Library", "Application Support"),
+      path.join(HOME, "Library", "Saved Application State"),
+      path.join(HOME, "Library", "Caches")
+    );
+  } else {
+    roots.push(
+      path.join(HOME, ".config"),
+      path.join(HOME, ".local", "share"),
+      path.join(HOME, ".cache"),
+      xdgConfig,
+      xdgData
+    );
+  }
+  return Array.from(new Set(roots));
+}
+
+function isWeavetabIsolatedPath(resolvedPath: string): boolean {
+  const norm = resolvedPath.toLowerCase();
+  const sysRoot = resolveRealOrParent(path.join(HOME, ".weavetab-system")).toLowerCase();
+  const wtRoot = resolveRealOrParent(path.join(HOME, ".weavetab")).toLowerCase();
+  if (norm === sysRoot || norm.startsWith(sysRoot + path.sep)) return true;
+  if (norm === wtRoot || norm.startsWith(wtRoot + path.sep)) return true;
+  if (norm.includes(`${path.sep}.weavetab-system${path.sep}`) || norm.endsWith(`${path.sep}.weavetab-system`)) return true;
+  if (norm.includes(`${path.sep}.weavetab${path.sep}`) || norm.endsWith(`${path.sep}.weavetab`)) return true;
+  return false;
+}
+
+export function assertNotRealProfile(profileDir: string): void {
+  const resolved = resolveRealOrParent(profileDir).toLowerCase();
+  if (isWeavetabIsolatedPath(resolved)) return;
+
+  for (const realPath of getRealBrowserPaths()) {
+    const realResolved = resolveRealOrParent(realPath).toLowerCase();
     if (resolved === realResolved || resolved.startsWith(realResolved + path.sep)) {
       throw new Error(
         `[Weavetab] ✗ SECURITY BLOCK: The profileDir "${profileDir}" points to your real browser data.\n` +
@@ -75,15 +169,14 @@ function assertNotRealBrowserProfile(profileDir: string): void {
   }
 }
 
-// ─── Session profile resolver ─────────────────────────────────────────────────
+export function assertNotRealBrowserProfile(profileDir: string): void {
+  assertNotRealProfile(profileDir);
+}
 
-export function getSessionProfile(cookies: boolean, customProfileDir?: string, syncDataAcrossBrowsers?: boolean, browserPath?: string): string {
-  // If the user specified a custom profile directory, validate and use it
+export function getSessionProfile(_cookies: boolean, customProfileDir?: string, syncDataAcrossBrowsers?: boolean, browserPath?: string): string {
   if (customProfileDir && customProfileDir.trim()) {
     const resolved = path.resolve(customProfileDir.trim());
-
-    // Enterprise safety: refuse to use real browser profiles
-    assertNotRealBrowserProfile(resolved);
+    assertNotRealProfile(resolved);
 
     if (!fs.existsSync(resolved)) {
       fs.mkdirSync(resolved, { recursive: true });
@@ -94,20 +187,14 @@ export function getSessionProfile(cookies: boolean, customProfileDir?: string, s
     return resolved;
   }
 
-  // Default: use Weavetab's fully isolated session profile
-  // This directory is completely separate from the user's real browser data.
   let sessionProfile = path.join(HOME, ".weavetab-system", "session-profile");
-  
+
   if (syncDataAcrossBrowsers === false && browserPath && browserPath !== "auto") {
-    // Isolate profiles per browser executable path
     const hash = crypto.createHash("md5").update(browserPath).digest("hex").slice(0, 8);
-    // e.g. .weavetab-system/session-profile-a1b2c3d4
     sessionProfile = path.join(HOME, ".weavetab-system", `session-profile-${hash}`);
   }
 
-  // Defense-in-depth: even though the hardcoded path should never match a real
-  // browser profile, validate it anyway (belt-and-suspenders).
-  assertNotRealBrowserProfile(sessionProfile);
+  assertNotRealProfile(sessionProfile);
 
   if (!fs.existsSync(sessionProfile)) {
     fs.mkdirSync(sessionProfile, { recursive: true });
@@ -119,66 +206,33 @@ export function getSessionProfile(cookies: boolean, customProfileDir?: string, s
   return sessionProfile;
 }
 
-// ─── Electron App Profile Resolver & Safety Guard ─────────────────────────────
-
 export function sanitizeAppName(appName: string): string {
   const cleaned = appName.trim().replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
   return cleaned || "app";
 }
 
-// Real application data directories that should NEVER be used directly
-const REAL_DESKTOP_APP_ROOTS: string[] = [];
-
-if (PLATFORM === 'win32') {
-  REAL_DESKTOP_APP_ROOTS.push(
-    path.join(HOME, "AppData", "Roaming"),
-    path.join(HOME, "AppData", "Local"),
-    path.join(HOME, "AppData", "LocalLow")
-  );
-} else if (PLATFORM === 'darwin') {
-  REAL_DESKTOP_APP_ROOTS.push(
-    path.join(HOME, "Library", "Application Support"),
-    path.join(HOME, "Library", "Saved Application State"),
-    path.join(HOME, "Library", "Caches")
-  );
-} else {
-  REAL_DESKTOP_APP_ROOTS.push(
-    path.join(HOME, ".config"),
-    path.join(HOME, ".local", "share"),
-    path.join(HOME, ".cache")
-  );
-}
-
-/**
- * Asserts that the given profile directory is NOT a real desktop app's native user data directory.
- * Throws a security block error if it matches root or subdirectory of standard app data paths.
- */
 export function assertNotRealElectronProfile(profileDir: string, appName: string): void {
-  const resolved = path.resolve(profileDir).toLowerCase();
+  const resolved = resolveRealOrParent(profileDir).toLowerCase();
+  if (isWeavetabIsolatedPath(resolved)) return;
 
-  // First check against browser profiles
-  assertNotRealBrowserProfile(resolved);
+  assertNotRealProfile(profileDir);
 
-  // Check against native desktop app data roots
-  for (const rootPath of REAL_DESKTOP_APP_ROOTS) {
-    const rootResolved = path.resolve(rootPath).toLowerCase();
-    
-    // Direct matches or direct children in %APPDATA%/<appName>
-    const appSpecificRealDir = path.join(rootResolved, sanitizeAppName(appName)).toLowerCase();
-    if (resolved === appSpecificRealDir || resolved.startsWith(appSpecificRealDir + path.sep)) {
+  const tmpRoot = resolveRealOrParent(os.tmpdir()).toLowerCase();
+  if (resolved.startsWith(tmpRoot + path.sep)) return;
+
+  for (const rootPath of getRealDesktopAppRoots()) {
+    const rootResolved = resolveRealOrParent(rootPath).toLowerCase();
+    if (resolved === rootResolved || resolved.startsWith(rootResolved + path.sep)) {
       throw new Error(
         `[Weavetab] ✗ SECURITY BLOCK: The profileDir "${profileDir}" points to your real ${appName} desktop app data.\n` +
         `  Weavetab will never read from or write to your personal desktop app data.\n` +
         `  Please use an isolated directory or let Weavetab manage ~/.weavetab-system/apps/${appName}/.\n` +
-        `  Real app data path detected: ${appSpecificRealDir}`
+        `  Real app data path detected: ${rootPath}`
       );
     }
   }
 }
 
-/**
- * Resolves the isolated profile directory for a specific Electron application.
- */
 export function getElectronProfile(appName: string, customProfileDir?: string): string {
   const sanitized = sanitizeAppName(appName);
 
@@ -207,5 +261,3 @@ export function getElectronProfile(appName: string, customProfileDir?: string): 
 
   return appProfileDir;
 }
-
-

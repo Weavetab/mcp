@@ -36,6 +36,7 @@ export async function browserPerformance(
   const out: PerformanceResult = { success: true };
 
   if (sections.has("raw")) {
+    await session.Performance.enable().catch(() => {});
     const { metrics: perfMetrics } = await session.Performance.getMetrics();
     const parsed: Record<string, number> = {};
     for (const m of perfMetrics) parsed[m.name] = m.value;
@@ -48,19 +49,11 @@ export async function browserPerformance(
         const nav = performance.getEntriesByType('navigation')[0];
         const paint = performance.getEntriesByType('paint');
         const fcpEntry = paint.find(x => x.name === 'first-contentful-paint');
-        const vitals = {
-          fcp: fcpEntry ? fcpEntry.startTime : -1,
-          ttfb: nav ? Math.max(0, nav.responseStart - nav.requestStart) : -1,
-          domContentLoaded: nav ? nav.domContentLoadedEventEnd : -1,
-          load: nav ? nav.loadEventEnd : -1,
-          lcp: -1,
-          cls: -1,
-          inp: -1
-        };
-        const collect = (type, field, opts) => new Promise((resolve) => {
-          let value = field === 'cls' ? 0 : 0;
+        const collect = (field, opts) => new Promise((resolve) => {
+          let value = field === 'cls' ? 0 : -1;
+          let obs = null;
           try {
-            const obs = new PerformanceObserver((list) => {
+            obs = new PerformanceObserver((list) => {
               for (const e of list.getEntries()) {
                 if (field === 'lcp') value = Math.max(value, e.startTime || 0);
                 else if (field === 'cls') { if (!e.hadRecentInput) value += e.value || 0; }
@@ -69,12 +62,25 @@ export async function browserPerformance(
             });
             obs.observe(opts);
           } catch {}
-          setTimeout(() => resolve(value), 50);
+          setTimeout(() => {
+            try { if (obs) obs.disconnect(); } catch {}
+            resolve(value);
+          }, 50);
         });
-        vitals.lcp = await collect('largest-contentful-paint', 'lcp', { type: 'largest-contentful-paint', buffered: true });
-        vitals.cls = await collect('layout-shift', 'cls', { type: 'layout-shift', buffered: true });
-        vitals.inp = await collect('event', 'inp', { type: 'event', buffered: true, durationThreshold: 16 });
-        return JSON.stringify(vitals);
+        const [lcp, cls, inp] = await Promise.all([
+          collect('lcp', { type: 'largest-contentful-paint', buffered: true }),
+          collect('cls', { type: 'layout-shift', buffered: true }),
+          collect('inp', { type: 'event', buffered: true, durationThreshold: 16 }),
+        ]);
+        return JSON.stringify({
+          fcp: fcpEntry ? fcpEntry.startTime : -1,
+          ttfb: nav ? Math.max(0, nav.responseStart - nav.requestStart) : -1,
+          domContentLoaded: nav ? nav.domContentLoadedEventEnd : -1,
+          load: nav ? nav.loadEventEnd : -1,
+          lcp,
+          cls,
+          inp
+        });
       })()`,
       returnByValue: true,
       awaitPromise: true,
@@ -82,28 +88,48 @@ export async function browserPerformance(
     try { out.vitals = JSON.parse(result.value as string); } catch { out.vitals = {}; }
   }
 
-  if (sections.has("memory")) {
+  const wantMem = sections.has("memory");
+  const wantNav = sections.has("navigation");
+  const wantRes = sections.has("resources");
+  if (wantMem || wantNav || wantRes) {
     const { result } = await session.Runtime.evaluate({
-      expression: `JSON.stringify(performance.memory ? { usedJSHeapSize: performance.memory.usedJSHeapSize, totalJSHeapSize: performance.memory.totalJSHeapSize, jsHeapSizeLimit: performance.memory.jsHeapSizeLimit } : {})`,
+      expression: `JSON.stringify((function() {
+        var bundle = {};
+        if (${wantMem}) {
+          bundle.memory = performance.memory ? {
+            usedJSHeapSize: performance.memory.usedJSHeapSize,
+            totalJSHeapSize: performance.memory.totalJSHeapSize,
+            jsHeapSizeLimit: performance.memory.jsHeapSizeLimit
+          } : {};
+        }
+        if (${wantNav}) {
+          var n = performance.getEntriesByType('navigation')[0];
+          bundle.navigation = n ? {
+            type: n.type, redirectCount: n.redirectCount, domInteractive: n.domInteractive,
+            domContentLoadedEventEnd: n.domContentLoadedEventEnd, loadEventEnd: n.loadEventEnd,
+            transferSize: n.transferSize, encodedBodySize: n.encodedBodySize, decodedBodySize: n.decodedBodySize
+          } : null;
+        }
+        if (${wantRes}) {
+          bundle.slowest_resources = performance.getEntriesByType('resource')
+            .map(function(r){ return { name: r.name, duration: r.duration, transferSize: r.transferSize, initiatorType: r.initiatorType }; })
+            .sort(function(a, b){ return b.duration - a.duration; })
+            .slice(0, 10);
+        }
+        return bundle;
+      })())`,
       returnByValue: true,
     });
-    try { out.memory = JSON.parse(result.value as string); } catch { out.memory = {}; }
-  }
-
-  if (sections.has("navigation")) {
-    const { result } = await session.Runtime.evaluate({
-      expression: `JSON.stringify((function(){ var n = performance.getEntriesByType('navigation')[0]; if (!n) return null; return { type: n.type, redirectCount: n.redirectCount, domInteractive: n.domInteractive, domContentLoadedEventEnd: n.domContentLoadedEventEnd, loadEventEnd: n.loadEventEnd, transferSize: n.transferSize, encodedBodySize: n.encodedBodySize, decodedBodySize: n.decodedBodySize }; })())`,
-      returnByValue: true,
-    });
-    try { out.navigation = JSON.parse(result.value as string); } catch { out.navigation = null; }
-  }
-
-  if (sections.has("resources")) {
-    const { result } = await session.Runtime.evaluate({
-      expression: `JSON.stringify(performance.getEntriesByType('resource').map(function(r){ return { name: r.name, duration: r.duration, transferSize: r.transferSize, initiatorType: r.initiatorType }; }).sort(function(a, b){ return b.duration - a.duration; }).slice(0, 10))`,
-      returnByValue: true,
-    });
-    try { out.slowest_resources = JSON.parse(result.value as string); } catch { out.slowest_resources = []; }
+    try {
+      const parsed = JSON.parse(result.value as string);
+      if (wantMem) out.memory = parsed.memory ?? {};
+      if (wantNav) out.navigation = parsed.navigation ?? null;
+      if (wantRes) out.slowest_resources = parsed.slowest_resources ?? [];
+    } catch {
+      if (wantMem) out.memory = {};
+      if (wantNav) out.navigation = null;
+      if (wantRes) out.slowest_resources = [];
+    }
   }
 
   return out;

@@ -18,15 +18,15 @@ await session.Page.addScriptToEvaluateOnNewDocument({ source: STEALTH_SCRIPT });
 await session.Runtime.evaluate({ expression: STEALTH_SCRIPT }).catch(() => {});
 ```
 
-Runs **before any page JavaScript executes**. Handles:
+Runs **before any page JavaScript executes** (deduplicated per session via a `WeakSet` and short-circuited when `headless: true`). Handles:
 - **Stealth patches**: `navigator.webdriver` → `undefined`, fake plugin arrays, WebGL/Canvas fingerprint noise
 - **Shadow DOM bootstrap**: `#weavetab-root` host container created in every page
-- **Config binding**: `window.__wt_setConfig`, `window.__wt_config` for live runtime updates
+- **Sanitized config binding**: `window.__wt_setConfig({ devMode })` exposes only the boolean `devMode` flag to page context
 
 ## 2. Manifest V3 Extension
 
-Loaded dynamically with `--load-extension=${extPath}`. Owns:
-- **Ghost Cursor animation** (Bézier curve path rendering via canvas overlay)
-- **Thought bubble HUD** (agent status messages during tool execution)
+Loaded dynamically with `--load-extension=${extPath}`. Mounts exclusively in the top frame (`window === window.top`) with origin-checked HUD `postMessage` and owns:
+- **Ghost Cursor animation** (Bézier curve path rendering via canvas overlay, rAF loop paused when idle/hidden)
+- **Thought bubble HUD** (agent status messages with HTML-escaped anchor badges during tool execution)
 - **Interactive Ask Modal** (user interaction with response queue)
 - **SPA navigation persistence** — survives framework router transitions without flashing

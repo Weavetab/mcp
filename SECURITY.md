@@ -1,6 +1,6 @@
 # Weavetab MCP Security Policy
 
-> **Version:** 2.6.3 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.6.4 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 ---
 
@@ -23,22 +23,21 @@ Weavetab interacts directly with the local Chromium browser instance via the Chr
 
 | Mechanism | Description | Implementation |
 |-----------|-------------|----------------|
-| **Domain Blacklist** | High-risk domains (banking portals, IAM providers, cloud infrastructure consoles) are hard-blocked from navigation and interaction | Hardcoded entries + user-configurable `block`/`allow` lists in `~/.weavetab/config.json` |
-| **Domain Policy Engine** | Per-domain modes: `allow`, `read-only`, `deny`, `audit` | Policies defined as `{ pattern, mode }` entries; read-only mode blocks mutation tools |
-| **Localhost Binding & WS Auth** | Both the CDP endpoint and the MCP `--ws` daemon listener are strictly bound to `127.0.0.1` | `--ws` requires a 256-bit shared secret (`~/.weavetab-system/ws-secret`) via `Authorization: Bearer` or JSON-RPC handshake (`crypto.timingSafeEqual`), plus `Host` and `Origin` header validation to block cross-site WebSocket hijacking and DNS rebinding |
-| **Zero Cloud Dependency** | Weavetab executes entirely on the local machine | No telemetry, analytics, or user data transmitted unless `telemetry: true` is configured |
-| **Rate Limiting** | Configurable actions-per-minute threshold | Mutex-based enforcement prevents runaway agent behavior |
-| **Role-Based Access Control** | Five roles restrict tool access | `admin`, `operator`, `viewer`, `automation`, `system` with permission matrices |
+| **Domain Blacklist** | High-risk domains (banking portals, IAM providers, cloud infrastructure consoles) are blocked from navigation and interaction | Default + user-configurable `block`/`allow` lists (`allow` evaluated before `block`) in `~/.weavetab/config.json` with wildcard matching, bare-domain subdomain matching, and trailing-dot normalization |
+| **Domain Policy Engine** | Specificity-ordered per-domain modes: `allow`, `read-only`, `deny`, `audit-only` | Policies evaluated by specificity (exact match > longest literal suffix > wildcard); `read-only` blocks mutation tools and enforces action-level read-only checks |
+| **Localhost Binding & WS Auth** | Both the CDP endpoint and the MCP `--ws` daemon listener are strictly bound to `127.0.0.1` | `--ws` tracks authentication per-socket with a 5s auth timeout, requires a non-empty 256-bit shared secret (`~/.weavetab-system/ws-secret`, `0o600` + Windows `icacls`), rejects concurrent sockets while active, supports IPv6 `[::1]` Host headers, and validates `Host` and `Origin` |
+| **Zero Cloud Dependency** | Weavetab executes entirely on the local machine | Opt-in UDP telemetry gated strictly on `telemetry: true`, atomic `stats.json` writes, and `0o600` + Windows `icacls` on `telemetry-secret`; audit logs in `~/.weavetab-system/logs/` auto-prune to the latest 30 `mission_*` files |
+| **Rate Limiting** | Configurable actions-per-minute threshold | Sliding-window enforcement across top-level tools and `browser_burst` sub-steps (`retryAfterMs >= 1`) |
+| **Role-Based Access Control** | Five fail-closed roles restrict tool and action access | `admin`, `operator`, `viewer`, `automation`, `system`; `viewer` excludes `browser_eval` and enforces action-level read-only checks on `cookies`, `tabs`, `snapshot`, `console`, and `pattern_learn` |
 | **Root Guard** | Prevents execution as root or superuser at startup | `assertNotRoot()` check on Unix systems |
-| **Shadow DOM UI Isolation** | All injected interfaces run in isolated contexts | Prevents host page script tampering |
-| **Blind Injection** | Secrets injected via `browser_type_secret` are masked to `[REDACTED]` in all subsequent DOM reads and audit logs | Domain scoping, Shadow DOM isolation, JS property hardening |
-| **Secrets Management** | Resolves secrets from project-scoped or global `secrets.json` | `JsonSecretStore` with atomic file writes and `chmod 600` enforcement |
-| **Storage Blocker** | Optional nullification of `localStorage`, `sessionStorage`, and `document.cookie` | Prevents tracking and fingerprinting |
-| **Input Filter** | Strips elements with suspicious labels from DOM snapshots | Removes excessive length, invisible Unicode characters, prompt injection patterns |
-| **Two-Factor Lock Validation** | Browser process lock validated by PID liveness + TCP port connectivity | Prevents stale lock false-positives after crashes |
-| **Atomic Config Writes** | Config files written to temp file then renamed atomically | Prevents partial reads from concurrent processes |
-| **Path Traversal Protection** | `downloadDir` and `profileDir` paths validated to reject `..` traversal | Prevents directory escape attacks |
-| **Proxy Credential Detection** | Proxy URLs with embedded credentials rejected with warning | Users must use environment variables instead |
+| **Extension & Shadow DOM Isolation** | Injected interfaces run in isolated contexts | Top-frame-only MV3 HUD/cursor mounting, origin-checked messaging, `{ devMode }`-only webpage config injection, and removal of webpage-callable privileged relays |
+| **Blind Injection** | Secrets injected via `browser_type_secret` are masked to `[REDACTED]` across DOM reads, delta diffs, session trails, compiled patterns, and audit logs | Domain scoping (trailing-dot normalized, empty-hostname URLs blocked), DOM property hardening, non-destructive CSS capture masking (`-webkit-text-security: disc` / `color: transparent`), and `SessionSecretTracker` |
+| **Secrets Management** | Fail-closed AES-256-GCM encryption at rest | `JsonSecretStore` with atomic writes, `0o600` + Windows `icacls` on `secrets.json` and `secrets-key`, and opt-in `WT_PROJECT_SECRETS=1` for project-scoped `./.weavetab/secrets.json` |
+| **Storage Blocker** | Optional nullification of `localStorage`, `sessionStorage`, and `Document.prototype` `cookie` descriptor | Prevents tracking and fingerprinting |
+| **Input Filter** | Strips elements with suspicious labels from DOM snapshots | Pre-NFKC stripping of invisible chars, bidi overrides (`U+202A–U+202E`, `U+2066–U+2069`), and Unicode Tags (`U+E0000–U+E007F`) while preserving `U+FE0F` and `U+00A0` |
+| **Two-Factor Lock & Re-entrant Mutex** | Browser process lock validated by PID liveness + TCP port connectivity | `AsyncLocalStorage` re-entrant CDP mutex, atomic `.tmp` + `renameSync` lockfiles, and `clearLock` preserving active mutexes |
+| **Atomic Writes & Path Containment** | Config, lock, telemetry, memory, and plugin storage written atomically | `realpathSync` containment on plugin entries/storage and browser profiles, dangerous browser flag stripping (`--user-data-dir`, `--remote-debugging-*`, `--disable-web-security`), and Electron `XDG_CONFIG_HOME`/`XDG_DATA_HOME` isolation |
+| **Proxy Credential Detection** | Proxy URLs with literal credentials rejected before `WT_PROXY_URL` fallback | Prevents credential leakage in process arguments |
 
 ---
 
@@ -58,15 +57,15 @@ The **Blind Injection** architecture specifically ensures that credentials do no
 
 ### Defense-in-Depth Implementation
 
-1. **Storage at Rest**: Secrets in `~/.weavetab/secrets.json` are encrypted using AES-256-GCM with a machine-isolated key in `~/.weavetab-system/secrets-key`.
+1. **Storage at Rest**: Secrets in `~/.weavetab/secrets.json` are encrypted using fail-closed AES-256-GCM with a machine-isolated key in `~/.weavetab-system/secrets-key` (both protected with `0o600` permissions and Windows `icacls` owner-only ACLs).
 2. **In-Process Resolution**: The AI model only receives and passes the key name (`envKey: "MY_KEY"`). The secret value is resolved in memory and injected directly via CDP `Input.insertText`.
 3. **DOM Property Hardening**: Injected elements are tagged `data-wt-secret="true"`, instance `.value` getters are overridden with `[REDACTED]`, and `Symbol.iterator`, `Symbol.toPrimitive`, and `toJSON` are locked.
-4. **In-Memory SessionSecretTracker**: Tracks node IDs and secret substrings per session to redact any coincidental echoes across ActionMaps, delta diffs, or scrape outputs.
+4. **In-Memory SessionSecretTracker**: Tracks node IDs and secret substrings per session (with a `WeakSet` cycle guard) to redact any coincidental echoes across ActionMaps, delta diffs, session trails, compiled patterns, audit logs, or scrape outputs.
 5. **Universal Tool Containment**:
    - `browser_type`: Broad secret regex (`type`, `name`, `id`, `autocomplete`, `aria-label`, PINs, tokens, multi-language variants) auto-hardens target fields and suppresses raw value readbacks.
    - `browser_fill`: Registers secrets in both single and `blast_mode`, redacting return values and scan discovery mode (`scan: true`).
    - `browser_scrape`: Evaluates in-page extraction substituting all attributes of sensitive nodes with `[REDACTED]`.
-   - `browser_screenshot`, `browser_snapshot`, `browser_pdf`: Dynamically blanks/masks sensitive fields during capture and restores them in `finally` blocks.
+   - `browser_screenshot`, `browser_snapshot`, `browser_pdf`: Applies non-destructive inline CSS capture masking (`-webkit-text-security: disc !important; color: transparent !important; text-shadow: none !important;`) during capture and restores original styles in `finally` blocks without clearing live input values.
 
 ### Threats NOT Mitigated
 
@@ -77,10 +76,10 @@ The **Blind Injection** architecture specifically ensures that credentials do no
 
 When `browser_type_secret({ envKey: 'MY_SECRET' })` is called, the `JsonSecretStore` resolves from:
 
-1. `./.weavetab/secrets.json` (project-scoped, opt-in via `weavetab secrets init --project`)
+1. `./.weavetab/secrets.json` (project-scoped, loaded only when `WT_PROJECT_SECRETS=1` is set or `cwd === os.homedir()`, initialized via `weavetab secrets init --project`)
 2. `~/.weavetab/secrets.json` (global default)
 
-The old `EnvSecretProvider` (`.env`-based) is **deprecated and no longer supported**. All secrets must be stored in `secrets.json`. See the [README Secrets Management section](README.md#-secrets-management) for the full CLI workflow.
+The legacy `.env`-based secret provider has been removed. All secrets must be stored in `secrets.json`.
 
 ### Secrets File Format
 
@@ -99,41 +98,41 @@ The old `EnvSecretProvider` (`.env`-based) is **deprecated and no longer support
 
 ## RBAC Role Matrix & Privileged Tool Safeguards
 
-Weavetab defaults to the **`operator`** role. Users who want strict read-only inspection without DOM mutation, clipboard writes, or network interception can switch to the **`viewer`** role in `~/.weavetab/config.json`.
+Weavetab defaults to the **`operator`** role and fails closed on unknown roles. Users who want strict read-only inspection without DOM mutation, script evaluation, clipboard writes, or network interception can switch to the **`viewer`** role in `~/.weavetab/config.json`.
 
 | Tool Category | operator (default) | viewer (least-privilege) | automation | system | admin |
 |---------------|--------------------|--------------------------|------------|--------|-------|
 | DOM Mutation (`click`, `type`, `fill`, `select`, `pointer`, `upload`) | ✅ | ❌ | ✅ | ❌ | ✅ |
-| High-Privilege (`eval`, `cookies`, `storage`, `clipboard`, `network_intercept`, `type_secret`) | ✅ (Audit-logged + Domain Policy guarded) | Read-only subset | ✅ | ❌ | ✅ |
-| Read-only (`map`, `find`, `scrape`, `console`, `inspect`, `snapshot`, `screenshot`, `pdf`, `tabs`, `wait`) | ✅ | ✅ | ✅ | ❌ | ✅ |
-| System (`thoughts`, `detect`, `performance`, `checkpoint`, `pattern_learn`) | ✅ | ❌ | Non-interactive only | ✅ | ✅ |
+| High-Privilege (`eval`, `storage`, `clipboard`, `network_intercept`, `type_secret`) | ✅ (Audit-logged + Domain Policy guarded) | ❌ (`cookies` restricted to same-origin `get`/`list`) | ✅ | ❌ | ✅ |
+| Read-only (`map`, `find`, `scrape`, `console` [read], `inspect`, `snapshot` [capture in `snapshotDir`], `screenshot`, `pdf`, `tabs` [list/list_windows], `wait`, `pattern_learn` [get], `detect`) | ✅ | ✅ | ✅ | Subset (`detect`, `pattern_learn`) | ✅ |
+| System (`thoughts`, `detect`, `performance`, `checkpoint`, `pattern_learn`) | ✅ | `detect`, `pattern_learn` [get] | Non-interactive (`thoughts` blocked) | ✅ | ✅ |
 
 ### Role Definitions
 
 - **operator (Default)** — Standard agent automation role with full tool access governed by domain blocklists (`*.bank.*`, `paypal.com`), rate limiting, and structured audit logging
-- **viewer** — Least-privilege read-only role for auditing and observation without DOM mutation, form submission, or network interception
-- **automation** — Non-interactive CI/CD execution role
+- **viewer** — Least-privilege read-only role for auditing and observation. Excludes `browser_eval` and enforces action-level read-only gating on `browser_cookies` (`get`/`list` on same origin), `browser_tabs` (`list`/`list_windows`), `browser_snapshot` (`capture` confined to `snapshotDir`), `browser_console` (`read`), and `browser_pattern_learn` (`get`).
+- **automation** — Non-interactive CI/CD execution role (`browser_thoughts` blocked)
 - **system** — Restricted to telemetry, diagnostics, and checkpointing
 - **admin** — Unrestricted administrative access
 
 ### High-Privilege Tool Protections (`browser_eval`, `browser_cookies`, `browser_storage`, `browser_clipboard`)
 
 Because Weavetab is a direct browser and desktop automation engine, tools like `browser_eval`, `browser_cookies`, `browser_storage`, and `browser_clipboard` are core primitives rather than accidental exposures. To protect against indirect prompt injection from untrusted web content:
-1. **Pre-Execution Domain Gate**: Every tool call passes through `checkDomain()` before touching CDP. High-risk domains and user-configured `deny` or `read-only` policies block execution immediately.
-2. **Structured Audit Trail**: High-privilege invocations (`browser_eval`, `browser_cookies`, `browser_storage`, `browser_network_intercept`, `browser_type_secret`) are recorded via `logActionStructured()` in `~/.weavetab-system/logs/`.
-3. **Secret Redaction**: `SessionSecretTracker` strips and masks any blind-injected credentials (`[REDACTED]`) from `browser_eval`, `browser_scrape`, `browser_map`, and snapshot outputs so injected secrets cannot be exfiltrated via script evaluation.
+1. **Pre-Execution Domain & Action Gate**: Every tool call (including `browser_detect`, `browser_pattern_learn`, `browser_thoughts`, `browser_dialog`, `page_context` prompt, `WeavetabOpen`, and every sub-step of `browser_burst`) passes through `checkDomain()` and RBAC before touching CDP. High-risk domains and user-configured `deny` or `read-only` policies block execution immediately.
+2. **Structured Audit Trail**: High-privilege invocations (`browser_eval`, `browser_cookies`, `browser_storage`, `browser_network_intercept`, `browser_type_secret`) are recorded via `logActionStructured()` in `~/.weavetab-system/logs/` with automatic retention pruning (latest 30 `mission_*` files).
+3. **Secret Redaction**: `SessionSecretTracker` strips and masks any blind-injected credentials (`[REDACTED]`) from `browser_eval`, `browser_scrape`, `browser_map`, delta diffs, session trails, compiled patterns, and snapshot outputs so injected secrets cannot be exfiltrated via script evaluation.
 
 ---
 
 ## Plugin System Security & 3-Tier Trust Model
 
-The `weavetab plugin add <pkg>` CLI and runtime plugin loader (`src/plugin/loader.ts`, `src/plugin/registry.ts`) enforce a strict 3-tier verification model:
+The `weavetab plugin add <pkg>` CLI and runtime plugin loader (`src/plugin/loader.ts`, `src/plugin/registry.ts`, `src/plugin/storage.ts`) enforce a strict 3-tier verification and containment model:
 
-1. **Tier 1 — Official (`@weavetab/*`)**: Cryptographically trusted first-party packages maintained by the Weavetab team.
+1. **Tier 1 — Official (`@weavetab/*`)**: First-party packages listed in `OFFICIAL_PACKAGES` and installed with provenance verification (`--ignore-scripts` during install). Official plugins still run through the full `withSecurity()` RBAC and domain policy pipeline.
 2. **Tier 2 — Verified Registry**: Community plugins audited and listed in the Weavetab Verified Registry (`registry.json`).
 3. **Tier 3 — Unverified Third-Party Packages**:
    - **Mandatory Interactive Confirmation**: Unverified npm packages display a high-visibility security warning detailing code execution, CDP, and filesystem risks, and **block installation** in non-interactive shells unless explicitly overridden by the user.
-   - **Manifest & Permission Inspection (`weavetab.json`)**: Before activation, `inspectInstalledPackage()` and `normalizePermissions()` validate the plugin's declared permission manifest (`cdp`, `network`, `fs`, `shell`, `ReadOnly`) and engine compatibility without executing runtime code.
+   - **Manifest-Only Permissions & Path Containment (`weavetab.json`)**: Permissions are read strictly from `weavetab.json` (runtime JS exports cannot self-escalate permissions), `manifest.entry` and plugin storage paths are verified via `fs.realpathSync` containment, and workspace `./plugins` discovery requires explicit `WT_ALLOW_WORKSPACE_PLUGINS=1`.
 
 ---
 
@@ -148,8 +147,8 @@ flowchart TD
     Custom -- Match --> Block1[Block: SecurityError]
     Custom -- No Match --> Hard[Hardcoded Blacklist]
     Hard -- Match --> Block2[Block: SecurityError]
-    Hard -- No Match --> Stop[User Stop Check]
-    Stop --> CDP[CDP Execution]
+    Hard -- No Match --> Hook[Hook Pipeline]
+    Hook --> CDP[CDP Execution]
     CDP --> Audit[Audit Log]
     Audit --> Secret[Secret Tool?]
     Secret -- Yes --> Tracker[SessionSecret Tracker<br/>Marks node as secret]

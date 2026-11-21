@@ -21,16 +21,18 @@ const tools = mcp.capabilities?.tools || {};
 const toolEntries = Object.entries(tools);
 
 let markdown = `# Weavetab MCP Tool Reference\n\n`;
-markdown += `> **Version:** ${mcp.version || '2.6.3'} | **Total Tools:** ${toolEntries.length} | **Architecture:** Direct CDP WebSocket\n\n`;
-markdown += `Weavetab provides ${toolEntries.length} production-grade MCP tools organized into functional categories.\n\n`;
+markdown += `> **Version:** ${mcp.version || '2.6.4'} | **Total Tools:** ${toolEntries.length} | **Architecture:** Direct CDP WebSocket\n\n`;
+markdown += `Weavetab provides ${toolEntries.length} built-in MCP tools organized into functional categories.\n\n`;
 markdown += `| Tool Name | Category | Description | Key Features |\n`;
 markdown += `| :--- | :--- | :--- | :--- |\n`;
 
+const escapeCell = (val) => String(val || '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+
 for (const [name, info] of toolEntries) {
-  const category = info.category || 'general';
-  const desc = (info.description || '').replace(/\n/g, ' ');
-  const features = (info.features || []).slice(0, 3).join(', ');
-  markdown += `| \`${name}\` | \`${category}\` | ${desc} | ${features || 'Native CDP'} |\n`;
+  const category = escapeCell(info.category || 'general');
+  const desc = escapeCell(info.description || '');
+  const features = escapeCell((info.features || []).slice(0, 3).join(', ') || 'Native CDP');
+  markdown += `| \`${escapeCell(name)}\` | \`${category}\` | ${desc} | ${features} |\n`;
 }
 
 markdown += `\n---\n\n`;

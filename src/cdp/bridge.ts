@@ -1,37 +1,28 @@
 import { logDebug } from "../audit/logger.js";
-/**
- * Weavetab — cdp/bridge.ts
- * Browser process launcher: sentinel lock, profile resolution, stderr port parsing.
- * V3 — includes 10s stderr timeout, stealth injection.
- * Weavetab by fy2ne
- */
-import { spawn, exec, execSync, execFile } from "node:child_process";
+import { spawn, execSync, execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
-
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config, BrowserEngine } from "../config/loader.js";
 import CDP from "chrome-remote-interface";
-import { readLock, writeLock, clearLock, clearLockIfOwned, isLockValid, isLockPending } from "./lock.js";
-import { getSessionProfile, getElectronProfile, assertNotRealElectronProfile, sanitizeAppName } from "./profiles.js";
+import { readLock, writeLock, clearLock, isLockValid, isLockPending } from "./lock.js";
+import { getSessionProfile, getElectronProfile } from "./profiles.js";
+import { isValidElectronExecutablePath, resolveElectronExecutablePath } from "../desktop/discovery.js";
 import net from "node:net";
 import { getOutputDir, getDownloadDir, getConfigHeadless, getConfigProxy, getConfigDevMode, getConfigBlock, getConfigAllow, getConfigBrowserType, getConfigBrowserPath, getConfigBrowserFlags, getConfigCookies, getConfigProfileDir, getSystemDir, getElectronAppConfig, getConfigExtension } from "../config/loader.js";
-import { createBrowserFingerprint, safelyKillWeavetabProcesses } from "./security.js";
+import { createBrowserFingerprint } from "./security.js";
 
 function withCDPTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer!));
 }
-
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// ─── Browser Auto-Detection ───────────────────────────────────────────────────
 
 export interface BrowserInfo {
   name: string;
@@ -45,123 +36,71 @@ const BROWSER_PRIORITY = [
   "Chromium"
 ];
 
-// ─── Browser Path Validation ──────────────────────────────────────────────────────
-// Validate that the browser path is a known safe browser executable
-function isValidBrowserPath(browserPath: string): boolean {
+const SAFE_BROWSER_BINARIES = new Set([
+  "chrome.exe", "chrome", "google chrome",
+  "brave.exe", "brave", "brave browser", "brave-browser",
+  "msedge.exe", "msedge", "microsoft edge", "microsoft-edge", "microsoft-edge-stable",
+  "chromium.exe", "chromium", "chromium-browser",
+  "google-chrome", "google-chrome-stable",
+  "firefox.exe", "firefox"
+]);
+
+const BLOCKED_SCRIPT_EXTS = new Set([".bat", ".cmd", ".ps1", ".vbs", ".sh", ".js", ".wsf"]);
+const BLOCKED_SHELL_NAMES = new Set([
+  "sh", "bash", "zsh", "dash", "fish",
+  "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
+  "wscript", "wscript.exe", "cscript", "cscript.exe"
+]);
+
+export function isValidBrowserPath(browserPath: string): boolean {
+  if (!browserPath || typeof browserPath !== "string") return false;
+  const trimmed = browserPath.trim();
+  const normalizedPath = trimmed.toLowerCase();
+
+  const forbiddenChars = ["%", ";", "|", "&", "`", "$", "\n", "\r", "\0"];
+  if (forbiddenChars.some((ch) => normalizedPath.includes(ch))) {
+    logDebug(`[SECURITY] Browser path validation failed: forbidden char in path`);
+    return false;
+  }
+
+  const rawSegments = trimmed.split(/[\\/]+/);
+  if (rawSegments.includes("..")) {
+    logDebug(`[SECURITY] Browser path validation failed: traversal segment in path`);
+    return false;
+  }
+
+  const resolved = path.resolve(trimmed);
+  const resolvedLower = resolved.toLowerCase();
+  const baseName = path.basename(resolvedLower);
+  const ext = path.extname(baseName);
+
+  if (BLOCKED_SCRIPT_EXTS.has(ext) || BLOCKED_SHELL_NAMES.has(baseName)) {
+    logDebug(`[SECURITY] Browser path validation failed: blocked script/shell binary`);
+    return false;
+  }
+
+  if (!SAFE_BROWSER_BINARIES.has(baseName)) {
+    logDebug(`[SECURITY] Browser path validation failed: unknown binary ${baseName}`);
+    return false;
+  }
+
   const platform = os.platform();
-  const normalizedPath = browserPath.toLowerCase();
-
-  // Known safe browser binary names
-  const safeBinaries = [
-    'chrome.exe', 'chrome', 'google chrome',
-    'brave.exe', 'brave', 'brave browser',
-    'msedge.exe', 'msedge', 'microsoft edge',
-    'chromium.exe', 'chromium',
-    'firefox.exe', 'firefox',
-    'firefox.app', 'google chrome.app', 'brave browser.app', 'microsoft edge.app'
-  ];
-
-  // Check if the path contains a known browser binary name
-  const hasSafeBinary = safeBinaries.some(binary =>
-    normalizedPath.includes(binary) ||
-    normalizedPath.endsWith(binary)
-  );
-
-  if (!hasSafeBinary) {
-    logDebug(`[SECURITY] Browser path validation failed: unknown binary in path`);
-    return false;
-  }
-
-  // Check for suspicious patterns that might indicate malicious paths
-  const suspiciousPatterns = [
-    '..', // path traversal
-    '%', // URL encoding (suspicious in paths)
-    'cmd.exe', 'powershell.exe', 'bash', 'sh', // shell executables
-    'temp', 'tmp', // temporary directories
-    'download', // downloads directory
-  ];
-
-  const hasSuspiciousPattern = suspiciousPatterns.some(pattern =>
-    normalizedPath.includes(pattern)
-  );
-
-  if (hasSuspiciousPattern) {
-    logDebug(`[SECURITY] Browser path validation failed: suspicious pattern in path`);
-    return false;
-  }
-
-  // On Windows, check that the path is in a known safe location
-  if (platform === 'win32') {
-    const safeLocations = [
-      'program files',
-      'program files (x86)',
-      'localappdata',
-      'programdata',
-      'c:\\users\\'
-    ];
-
-    const isInSafeLocation = safeLocations.some(location =>
-      normalizedPath.includes(location) ||
-      normalizedPath.startsWith('c:\\')
-    );
-
-    if (!isInSafeLocation) {
+  if (platform === "win32") {
+    if (!/^[a-z]:\\/.test(resolvedLower)) {
+      logDebug(`[SECURITY] Browser path validation failed: expected absolute Windows path`);
+      return false;
+    }
+  } else if (platform === "darwin") {
+    if (!resolvedLower.startsWith("/applications/") && !resolvedLower.startsWith("/usr/local/bin/") && !resolvedLower.startsWith("/opt/")) {
       logDebug(`[SECURITY] Browser path validation failed: not in safe location`);
       return false;
     }
-  }
-
-  // On macOS, check that the path is in /Applications
-  if (platform === 'darwin') {
-    if (!normalizedPath.startsWith('/applications/') && !normalizedPath.startsWith('/usr/local/bin/')) {
+  } else if (platform === "linux") {
+    const safeLocations = ["/usr/bin/", "/usr/local/bin/", "/snap/bin/", "/opt/", "/home/", "/usr/share/"];
+    if (!safeLocations.some(location => resolvedLower.startsWith(location))) {
       logDebug(`[SECURITY] Browser path validation failed: not in safe location`);
       return false;
     }
-  }
-
-  // On Linux, check that the path is in a safe location
-  if (platform === 'linux') {
-    const safeLocations = ['/usr/bin/', '/usr/local/bin/', '/snap/bin/', '/opt/'];
-    const isInSafeLocation = safeLocations.some(location => normalizedPath.startsWith(location));
-
-    if (!isInSafeLocation) {
-      logDebug(`[SECURITY] Browser path validation failed: not in safe location`);
-      return false;
-    }
-  }
-
-  return true;
-}
-
-export function isValidElectronExecutablePath(execPath: string): boolean {
-  if (!execPath || typeof execPath !== "string") return false;
-  const normalizedPath = execPath.toLowerCase().trim();
-
-  // Check for suspicious patterns that might indicate command injection or shell escapes
-  const suspiciousPatterns = [
-    '..', // path traversal
-    '%', // URL encoding
-    'cmd.exe', 'powershell.exe', 'bash', 'sh', 'wscript.exe', 'cscript.exe'
-  ];
-
-  if (suspiciousPatterns.some(pattern => normalizedPath.includes(pattern))) {
-    logDebug(`[SECURITY] Electron path validation failed: suspicious pattern in path: ${execPath}`);
-    return false;
-  }
-
-  // Verify that the file actually exists
-  try {
-    if (!fs.existsSync(execPath)) {
-      logDebug(`[SECURITY] Electron path validation failed: file does not exist: ${execPath}`);
-      return false;
-    }
-    const stat = fs.statSync(execPath);
-    if (!stat.isFile()) {
-      logDebug(`[SECURITY] Electron path validation failed: target is not a file: ${execPath}`);
-      return false;
-    }
-  } catch {
-    return false;
   }
 
   return true;
@@ -215,17 +154,13 @@ export function findBrowser(preferred?: string): BrowserInfo | null {
   const platform = os.platform();
 
   if (preferred && (preferred.startsWith("/") || preferred.includes("/") || preferred.includes("\\"))) {
-    const normalizedPath = platform === 'win32'
-      ? preferred.replace(/\\/g, '\\')
-      : preferred.replace(/\\\\/g, '/');
+    if (!isValidBrowserPath(preferred)) {
+      logDebug(`[SECURITY] Configured browser path failed validation: ${preferred}`);
+      return null;
+    }
+    const normalizedPath = path.resolve(preferred.trim());
 
     if (fs.existsSync(normalizedPath)) {
-      // Validate the configured browser path
-      if (!isValidBrowserPath(normalizedPath)) {
-        logDebug(`[SECURITY] Configured browser path failed validation: ${normalizedPath}`);
-        return null;
-      }
-
       const lowerPath = normalizedPath.toLowerCase();
       let browserName = "Custom";
       if (lowerPath.includes("edge") || lowerPath.includes("msedge")) browserName = "Microsoft Edge";
@@ -240,10 +175,11 @@ export function findBrowser(preferred?: string): BrowserInfo | null {
     }
   }
 
-  const list = preferred
+  const prefKey = preferred?.toLowerCase() === "msedge" ? "edge" : preferred?.toLowerCase();
+  const list = prefKey
     ? [
-      ...BROWSER_PRIORITY.filter((name) => name.toLowerCase().includes(preferred.toLowerCase())),
-      ...BROWSER_PRIORITY.filter((name) => !name.toLowerCase().includes(preferred.toLowerCase())),
+      ...BROWSER_PRIORITY.filter((name) => name.toLowerCase().includes(prefKey)),
+      ...BROWSER_PRIORITY.filter((name) => !name.toLowerCase().includes(prefKey)),
     ]
     : BROWSER_PRIORITY;
 
@@ -261,15 +197,18 @@ export function findBrowser(preferred?: string): BrowserInfo | null {
     if (platform === "win32") {
       cmd = "where chrome.exe brave.exe msedge.exe";
     } else if (platform === "darwin") {
-      cmd = "which /Applications/Google\\\\ Chrome.app/Contents/MacOS/Google\\\\ Chrome /Applications/Brave\\\\ Browser.app/Contents/MacOS/Brave\\\\ Browser /Applications/Microsoft\\\\ Edge.app/Contents/MacOS/Microsoft\\\\ Edge";
+      cmd = "which /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome /Applications/Brave\\ Browser.app/Contents/MacOS/Brave\\ Browser /Applications/Microsoft\\ Edge.app/Contents/MacOS/Microsoft\\ Edge";
     } else {
       cmd = "which google-chrome brave-browser microsoft-edge chromium";
     }
 
-    const result = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split("\n")[0];
-    if (result && fs.existsSync(result)) {
-      logDebug(`[Weavetab] Fallback browser found via system: ${result}`);
-      return { name: "System Browser", path: result };
+    const foundLine = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .split(/\r?\n/)[0]
+      ?.trim();
+    if (foundLine && fs.existsSync(foundLine)) {
+      logDebug(`[Weavetab] Fallback browser found via system: ${foundLine}`);
+      return { name: "System Browser", path: foundLine };
     }
   } catch { /* ignore */ }
 
@@ -302,8 +241,11 @@ export function findFirefox(): BrowserInfo | null {
   }
   try {
     const cmd = plat === "win32" ? "where firefox" : "which firefox";
-    const result = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split("\n")[0];
-    if (result && fs.existsSync(result)) return { name: "Firefox", path: result };
+    const foundLine = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .split(/\r?\n/)[0]
+      ?.trim();
+    if (foundLine && fs.existsSync(foundLine)) return { name: "Firefox", path: foundLine };
   } catch { /* ignore */ }
   return null;
 }
@@ -321,39 +263,34 @@ export function probeAllBrowsers(): BrowserInfo[] {
   return results;
 }
 
-// ─── Process killing helper (Cross-platform) ─────────────────────────────
-
-function killProcess(pid: number): void {
+function killProcess(pid: number, tree = false): void {
   const platform = os.platform();
   try {
-    if (platform === 'win32') {
-      execFile('taskkill', ['/F', '/PID', String(pid)], () => { });
+    if (platform === "win32") {
+      const args = tree ? ["/T", "/F", "/PID", String(pid)] : ["/F", "/PID", String(pid)];
+      execFile("taskkill", args, () => {});
     } else {
-      execFile('kill', ['-9', String(pid)], () => { });
+      execFile("kill", ["-9", String(pid)], () => {});
     }
   } catch (e: any) {
     logDebug(`[Weavetab] Exception killing process ${pid}:`, e.message);
   }
 }
 
-// ─── Circuit breaker to prevent repeated failures ─────────────────────────────
-
 const launchFailureCount = new Map<string, number>();
 const CIRCUIT_BREAKER_THRESHOLD = 3;
-const CIRCUIT_BREAKER_RESET_MS = 60_000; // 1 minute
+const CIRCUIT_BREAKER_RESET_MS = 60_000;
 
 function checkCircuitBreaker(profileDir: string): boolean {
   const now = Date.now();
   const failures = launchFailureCount.get(profileDir) || 0;
 
-  // Reset if enough time has passed
   if (failures > 0 && now - (launchFailureCount.get(`${profileDir}_time`) || 0) > CIRCUIT_BREAKER_RESET_MS) {
     launchFailureCount.delete(profileDir);
     launchFailureCount.delete(`${profileDir}_time`);
     return false;
   }
 
-  // Check if threshold exceeded
   if (failures >= CIRCUIT_BREAKER_THRESHOLD) {
     logDebug(`[Weavetab] [!] Circuit breaker triggered: Too many recent launch failures for profile. Waiting ${CIRCUIT_BREAKER_RESET_MS / 1000}s before retry.`);
     return true;
@@ -374,19 +311,15 @@ function recordLaunchSuccess(profileDir: string): void {
   launchFailureCount.delete(`${profileDir}_time`);
 }
 
-// ─── Stealth script: injected before any page JS runs ─────────────────────────
-
 const STEALTH_SCRIPT = `
 (function() {
   'use strict';
 
-  // 1. Spoof navigator.webdriver
   Object.defineProperty(navigator, 'webdriver', {
     get: () => undefined,
     configurable: true,
   });
 
-  // 2. Remove chrome automation props
   if (window.navigator.plugins.length === 0) {
     Object.defineProperty(navigator, 'plugins', {
       get: () => [1, 2, 3, 4, 5],
@@ -394,7 +327,6 @@ const STEALTH_SCRIPT = `
     });
   }
 
-  // 3. Spoof navigator.languages (defaults to en-US if unset)
   if (!navigator.languages || navigator.languages.length === 0) {
     Object.defineProperty(navigator, 'languages', {
       get: () => ['en-US', 'en'],
@@ -402,25 +334,19 @@ const STEALTH_SCRIPT = `
     });
   }
 
-  // 4. Spoof Chrome runtime
   window.chrome = window.chrome || {};
   window.chrome.runtime = window.chrome.runtime || {};
 
-  // 5. Randomize hardwareConcurrency (4–8 cores)
   Object.defineProperty(navigator, 'hardwareConcurrency', {
     get: () => 4 + Math.floor(Math.random() * 4),
     configurable: true,
   });
 
-  // 6. Randomize deviceMemory (4, 8, or 12 GB, weighted toward 8)
   Object.defineProperty(navigator, 'deviceMemory', {
     get: () => [4, 8, 8, 8, 12][Math.floor(Math.random() * 5)],
     configurable: true,
   });
 
-  // 7. WebGL vendor/renderer spoofing — only spoof the two info params,
-  //    pass everything else through untouched. Wrapped in try/catch so a
-  //    missing WebGL context never breaks the page.
   try {
     var _origGetParam = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function(p) {
@@ -445,34 +371,28 @@ const STEALTH_SCRIPT = `
       };
     }
   } catch(e) {}
-
-  // NOTE: Function.prototype.toString proxy removed — it was wrapping
-  // every toString call globally and could break page rendering.
 })();
 `;
-
-// ─── Mandatory security flags (always applied, never overridable) ──────────────
 
 const MANDATORY_FLAGS: ReadonlyArray<string> = Object.freeze([
   "--disable-sync",
 ]);
 
-/**
- * Returns the "key" part of a Chrome flag (everything before the first =).
- * Example: "--disable-sync=foo" → "--disable-sync"
- */
+const FORBIDDEN_USER_FLAG_KEYS = new Set([
+  "--user-data-dir",
+  "--remote-debugging-port",
+  "--remote-debugging-address",
+  "--remote-allow-origins",
+  "--disable-web-security",
+]);
+
 function getFlagKey(flag: string): string {
-  return flag.split("=")[0];
+  return flag.trim().split("=")[0]!.toLowerCase();
 }
 
-/**
- * Filters custom browser flags, dropping any that conflict with mandatory
- * security flags. Handles the --enable-foo / --disable-foo symmetry.
- */
-function filterBrowserFlags(customFlags: string[]): string[] {
+export function filterBrowserFlags(customFlags: string[]): string[] {
   const mandatoryKeys = new Set(MANDATORY_FLAGS.map(getFlagKey));
-  // Add derived conflicting keys (--enable-* for a --disable-* mandatory flag and vice versa)
-  for (const key of mandatoryKeys) {
+  for (const key of Array.from(mandatoryKeys)) {
     if (key.startsWith("--disable-")) {
       mandatoryKeys.add("--enable-" + key.slice("--disable-".length));
     }
@@ -480,19 +400,28 @@ function filterBrowserFlags(customFlags: string[]): string[] {
       mandatoryKeys.add("--disable-" + key.slice("--enable-".length));
     }
   }
-  return customFlags.filter(flag => {
+  for (const fk of FORBIDDEN_USER_FLAG_KEYS) {
+    mandatoryKeys.add(fk);
+  }
+
+  const out: string[] = [];
+  for (let i = 0; i < customFlags.length; i++) {
+    const flag = customFlags[i];
+    if (!flag || typeof flag !== "string") continue;
     const key = getFlagKey(flag);
     if (mandatoryKeys.has(key)) {
       logDebug(`[Weavetab] ⚠ Custom browser flag "${flag}" conflicts with a mandatory security flag. Dropping it.`);
-      return false;
+      if (!flag.includes("=") && FORBIDDEN_USER_FLAG_KEYS.has(key) && i + 1 < customFlags.length && !customFlags[i + 1]?.startsWith("-")) {
+        i++;
+      }
+      continue;
     }
-    return true;
-  });
+    out.push(flag);
+  }
+  return out;
 }
 
-// ─── Launch flags ─────────────────────────────────────────────────────────────
-
-function getLaunchFlags(config: Config, extPath: string): string[] {
+function getLaunchFlags(config: Config, _extPath: string): string[] {
   const plat = os.platform();
   const flags: string[] = [
     "--disable-blink-features=AutomationControlled",
@@ -507,58 +436,45 @@ function getLaunchFlags(config: Config, extPath: string): string[] {
     "--disable-infobars",
   ];
 
-  // Platform-specific flags
   if (plat === "win32") {
-    // Windows: prevent browser from becoming default
-    flags.push("--disable-features=TranslateUI");
-    flags.push("--disable-features=DefaultBrowserGuidance");
+    flags.push("--disable-features=TranslateUI,DefaultBrowserGuidance");
   } else if (plat === "darwin") {
-    // macOS: use mock keychain to prevent password prompts
     flags.push("--use-mock-keychain");
-    // Prevent macOS from showing permission prompts
     flags.push("--disable-mac-overlays");
   } else if (plat === "linux") {
-    // Linux: use basic password store to prevent keyring issues
     flags.push("--password-store=basic");
   }
 
   if (getConfigHeadless(config)) flags.push("--headless=new");
   if (getConfigProxy(config)) flags.push(`--proxy-server=${getConfigProxy(config)}`);
 
-  // devMode: enable verbose remote debugging
   if (getConfigDevMode(config)) {
     flags.push("--enable-logging", "--v=1");
   }
 
-  // Block list → Chrome --host-rules (blocks at DNS level)
-  const blockRules: string[] = [];
-  const blockList = getConfigBlock(config);
-  if (blockList && blockList.length > 0) {
-    for (const domain of blockList) {
-      // Strip wildcards for host-rules format
-      const cleaned = domain.replace(/^\*\./, "");
-      blockRules.push(`MAP ${cleaned} 0.0.0.0`, `MAP *.${cleaned} 0.0.0.0`);
-    }
-  }
-  // Allow list overrides block list
+  const hostRules: string[] = [];
   const allowList = getConfigAllow(config);
   if (allowList && allowList.length > 0) {
     for (const domain of allowList) {
-      blockRules.push(`EXCLUDE ${domain}`, `EXCLUDE *.${domain}`);
+      const cleaned = domain.replace(/^\*\./, "");
+      hostRules.push(`EXCLUDE ${cleaned}`, `EXCLUDE *.${cleaned}`);
     }
   }
-  if (blockRules.length > 0) {
-    flags.push(`--host-resolver-rules=${blockRules.join(", ")}`);
+  const blockList = getConfigBlock(config);
+  if (blockList && blockList.length > 0) {
+    for (const domain of blockList) {
+      const cleaned = domain.replace(/^\*\./, "");
+      hostRules.push(`MAP ${cleaned} 0.0.0.0`, `MAP *.${cleaned} 0.0.0.0`);
+    }
+  }
+  if (hostRules.length > 0) {
+    flags.push(`--host-resolver-rules=${hostRules.join(", ")}`);
   }
 
-  // Mandatory security flags applied AFTER all configurable flags
-  // These cannot be overridden by any config setting
   flags.push(...MANDATORY_FLAGS);
 
   return flags;
 }
-
-// ─── Main launcher ────────────────────────────────────────────────────────────
 
 export async function launchWithBridge(
   config: Config
@@ -608,7 +524,6 @@ export async function launchWithBridge(
   let lastError: Error | null = null;
   const profileDir = getSessionProfile(getConfigCookies(config), getConfigProfileDir(config), config.syncDataAcrossBrowsers, browser.path);
 
-  // Circuit breaker check before attempting launch
   if (checkCircuitBreaker(profileDir)) {
     throw new Error(`[Weavetab] Circuit breaker triggered: Too many recent launch failures. Please wait ${CIRCUIT_BREAKER_RESET_MS / 1000}s before retrying.`);
   }
@@ -616,20 +531,6 @@ export async function launchWithBridge(
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     if (attempt > 1) {
       logDebug(`[Weavetab] [!] Retrying browser launch (attempt ${attempt}/${MAX_ATTEMPTS}) after 1.5s...`);
-      
-      // Auto-recovery for corrupted profiles (e.g., FrameWidgetHost mojo crashes after hard kill).
-      // If we reach the final attempt, nuke the isolated session profile as a last resort to recover.
-      if (attempt === MAX_ATTEMPTS && profileDir.includes(".weavetab-system") && profileDir.includes("session-profile")) {
-        logDebug(`[Weavetab] [!] Wiping potentially corrupted session profile as last resort: ${profileDir}`);
-        try {
-          fs.rmSync(profileDir, { recursive: true, force: true });
-        } catch { /* ignore */ }
-      }
-
-      // Do NOT clear the lock between retries — that creates a ~1500ms window where
-      // another concurrent getOrConnect() sees no lock and races to start a second browser.
-      // Instead, keep the pending lock alive (or write a fresh one) so concurrent calls
-      // wait on it rather than spawning their own instance.
       await writeLock({ pid: process.pid, port: 0, profileDir, browserPath: browser.path, mode: "session", pending: true, timestamp: Date.now() });
       await new Promise(r => setTimeout(r, 1500));
     }
@@ -672,8 +573,8 @@ export async function launchWithBridge(
           throw new Error(`[Weavetab] Extension background script missing: ${backgroundPath}`);
         }
 
-        normalizedExtPath = os.platform() === 'win32'
-          ? extPath.replace(/\//g, '\\')
+        normalizedExtPath = os.platform() === "win32"
+          ? extPath.replace(/\//g, "\\")
           : extPath;
       } else {
         logDebug(`[Weavetab] Browser extension loading disabled via config (extension: false).`);
@@ -683,38 +584,29 @@ export async function launchWithBridge(
         ? getDownloadDir(config).trim()
         : getOutputDir("downloads", config);
 
-      // Normalize paths for cross-platform compatibility
       const platform = os.platform();
-      const normalizedProfileDir = platform === 'win32'
-        ? profileDir.replace(/\//g, '\\')
+      const normalizedProfileDir = platform === "win32"
+        ? profileDir.replace(/\//g, "\\")
         : profileDir;
-      const normalizedDownloadDir = platform === 'win32'
-        ? resolvedDownloadDir.replace(/\//g, '\\')
+      const normalizedDownloadDir = platform === "win32"
+        ? resolvedDownloadDir.replace(/\//g, "\\")
         : resolvedDownloadDir;
 
-      // Clean up stale Chrome SingletonLock from previous session.
-      // On Windows, Browser.close() sometimes doesn't fully release the lock
-      // before Node.js spawns a new Chrome, causing it to start without extensions.
       const singletonLock = path.join(profileDir, "SingletonLock");
       const singletonCookie = path.join(profileDir, "SingletonCookie");
       try { if (fs.existsSync(singletonLock)) fs.unlinkSync(singletonLock); } catch { /* non-fatal */ }
       try { if (fs.existsSync(singletonCookie)) fs.unlinkSync(singletonCookie); } catch { /* non-fatal */ }
 
       if (enableExtension) {
-        // Wipe the MV3 service worker cache before every launch so Chrome always
-        // executes the latest background.js from disk rather than a stale cached
-        // script stored in the profile.
         try {
           const swBase = path.join(profileDir, "Default", "Service Worker");
           const swScriptCache = path.join(swBase, "ScriptCache");
           const swDatabase = path.join(swBase, "Database");
           if (fs.existsSync(swScriptCache)) {
             fs.rmSync(swScriptCache, { recursive: true, force: true });
-            logDebug("[Weavetab] Wiped SW ScriptCache to force background.js reload.");
           }
           if (fs.existsSync(swDatabase)) {
             fs.rmSync(swDatabase, { recursive: true, force: true });
-            logDebug("[Weavetab] Wiped SW Database to force background.js reload.");
           }
         } catch (swErr) {
           logDebug(`[Weavetab] SW cache wipe failed (non-fatal): ${swErr}`);
@@ -722,43 +614,36 @@ export async function launchWithBridge(
       }
 
       const args = [
-        `--remote-debugging-port=${debugPort}`,
-        `--user-data-dir=${normalizedProfileDir}`,
         `--default-download-dir=${normalizedDownloadDir}`,
         ...getLaunchFlags(config, extPath),
         ...filterBrowserFlags(getConfigBrowserFlags(config) || []),
         ...(enableExtension ? [`--load-extension=${normalizedExtPath}`] : []),
+        `--user-data-dir=${normalizedProfileDir}`,
+        `--remote-debugging-port=${debugPort}`,
+        "--remote-debugging-address=127.0.0.1",
         "about:blank",
       ];
 
-      let pid: number | undefined;
-
-      // Cross-platform spawn options
-      const spawnOptions: any = {
-        detached: true,
-        stdio: ["ignore", "ignore", "pipe"],
-      };
-
-      // On macOS, sometimes we need to set the shell to true for .app paths
-      if (platform === 'darwin' && browser.path.includes('.app')) {
-        spawnOptions.shell = true;
-      }
-
-      // Validate browser path before spawning
       if (!isValidBrowserPath(browser.path)) {
         throw new Error(`Security violation: Invalid browser path: ${browser.path}`);
       }
 
-      const proc = spawn(browser.path, args, spawnOptions);
+      const proc = spawn(browser.path, args, {
+        detached: true,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      proc.on("error", (err) => {
+        logDebug(`[Weavetab] Browser spawn error: ${err.message}`);
+      });
       proc.unref();
-      pid = proc.pid;
+      (proc.stderr as any)?.unref?.();
+      const pid = proc.pid;
       logDebug(`[Weavetab] Launching ${browser.name} (PID: ${pid}, port: auto, attempt: ${attempt}).`);
 
       let actualPort: number;
       try {
         actualPort = await resolvePortFromStderr(proc, pid, engine);
       } catch (portErr) {
-        // Kill process just in case it's still alive
         try { if (pid) killProcess(pid); } catch { /* ignore */ }
         clearLock();
         lastError = portErr instanceof Error ? portErr : new Error(String(portErr));
@@ -766,8 +651,11 @@ export async function launchWithBridge(
         continue;
       }
 
-      // Create a browser fingerprint for process identity verification
       const fingerprint = createBrowserFingerprint(pid || 0, actualPort, profileDir, browser.path);
+      const fpPayload = {
+        launchTimestamp: fingerprint.launchTimestamp,
+      };
+
       await writeLock({
         pid,
         port: actualPort,
@@ -776,9 +664,7 @@ export async function launchWithBridge(
         mode: "session",
         pending: true,
         timestamp: Date.now(),
-        fingerprint: {
-          launchTimestamp: fingerprint.launchTimestamp,
-        }
+        fingerprint: fpPayload,
       });
 
       const probePort = actualPort;
@@ -795,25 +681,23 @@ export async function launchWithBridge(
 
       if (!confirmed) {
         logDebug(`[Weavetab] [!] Browser not confirmed after 16s on attempt ${attempt}.`);
-        // Still proceed — browser may be loading slowly
       } else {
         logDebug(`[Weavetab] [OK] ${browser.name} ready on :${actualPort} (attempt ${attempt})`);
 
-        // Verify extension loaded by checking for extension pages if extension is enabled.
-        // MV3 service workers can take 1-3s to initialize after Chrome starts,
-        // so we wait briefly before querying targets.
         if (enableExtension) {
           try {
             await new Promise(r => setTimeout(r, 1500));
             const testSession = await withCDPTimeout(CDP({ host: "127.0.0.1", port: actualPort }), 4000, "CDP connect");
-            const { targetInfos } = await withCDPTimeout(testSession.Target.getTargets(), 4000, "getTargets");
-            const extensionTargets = targetInfos.filter(t => t.type === "service_worker" || (t.type === "page" && t.url.startsWith("chrome-extension://")));
-            await testSession.close();
-
-            if (extensionTargets.length > 0) {
-              logDebug(`[Weavetab] [OK] Extension loaded - found ${extensionTargets.length} extension target(s)`);
-            } else {
-              logDebug(`[Weavetab] [!] Extension may not have loaded - no extension targets found. Check chrome://extensions in the browser.`);
+            try {
+              const { targetInfos } = await withCDPTimeout(testSession.Target.getTargets(), 4000, "getTargets");
+              const extensionTargets = targetInfos.filter(t => t.type === "service_worker" || (t.type === "page" && t.url.startsWith("chrome-extension://")));
+              if (extensionTargets.length > 0) {
+                logDebug(`[Weavetab] [OK] Extension loaded - found ${extensionTargets.length} extension target(s)`);
+              } else {
+                logDebug(`[Weavetab] [!] Extension may not have loaded - no extension targets found.`);
+              }
+            } finally {
+              await testSession.close().catch(() => {});
             }
           } catch (extCheckErr) {
             logDebug(`[Weavetab] [!] Could not verify extension load: ${extCheckErr}`);
@@ -821,7 +705,16 @@ export async function launchWithBridge(
         }
       }
 
-      await writeLock({ pid, port: actualPort, profileDir, browserPath: browser.path, mode: "session", pending: false });
+      await writeLock({
+        pid,
+        port: actualPort,
+        profileDir,
+        browserPath: browser.path,
+        mode: "session",
+        pending: false,
+        timestamp: Date.now(),
+        fingerprint: fpPayload,
+      });
       recordLaunchSuccess(profileDir);
       return { ...browser, port: actualPort, engine: "chromium" };
 
@@ -836,51 +729,49 @@ export async function launchWithBridge(
   throw new Error(`[Weavetab] Browser failed to launch after ${MAX_ATTEMPTS} attempts. Last error: ${lastError?.message ?? "unknown"}`);
 }
 
-
 async function launchNonChromium(config: Config, engine: BrowserEngine): Promise<{ path: string; name: string; port: number; engine: BrowserEngine }> {
-  let browser: { path: string; name: string } | null = null;
+  if (engine === "webkit") {
+    throw new Error("[Weavetab] WebKit CDP launch is not supported. Use browserType: 'chromium' or 'firefox'.");
+  }
 
-  if (engine === "firefox") {
+  const configuredPath = getConfigBrowserPath(config);
+  let browser: { path: string; name: string } | null = null;
+  if (configuredPath && configuredPath !== "auto" && (configuredPath.includes("/") || configuredPath.includes("\\")) && fs.existsSync(configuredPath) && isValidBrowserPath(configuredPath)) {
+    browser = { name: "Firefox", path: path.resolve(configuredPath) };
+  } else {
     browser = findFirefox();
-  } else if (engine === "webkit") {
-    // Safari Technology Preview — experimental
-    const safariPaths = os.platform() === "darwin"
-      ? ["/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"]
-      : [];
-    for (const p of safariPaths) {
-      if (fs.existsSync(p)) { browser = { name: "Safari TP", path: p }; break; }
-    }
   }
 
   if (!browser) {
     throw new Error(
-      `[Weavetab] No ${engine} browser found.\n` +
-      `  Install ${engine === "firefox" ? "Firefox" : "Safari Technology Preview"} and try again.`
+      `[Weavetab] No firefox browser found.\n` +
+      `  Install Firefox and try again.`
     );
   }
 
   const debugPort = 0;
-  const profileDir = getSessionProfile(getConfigCookies(config), getConfigProfileDir(config));
+  const profileDir = getSessionProfile(getConfigCookies(config), getConfigProfileDir(config), config.syncDataAcrossBrowsers, browser.path);
 
   const args: string[] = [];
-  if (engine === "firefox") {
-    args.push(
-      `--remote-debugging-port=${debugPort}`,
-      `--profile`, profileDir,
-      "--new-tab", "about:blank",
-    );
-  } else {
-    // WebKit: Safari Technology Preview
-    args.push(
-      `--remote-debugging-port=${debugPort}`,
-    );
+  if (getConfigHeadless(config)) args.push("-headless");
+  for (const f of filterBrowserFlags(getConfigBrowserFlags(config) || [])) {
+    if (f && !args.includes(f)) args.push(f);
   }
+  args.push(
+    `--remote-debugging-port=${debugPort}`,
+    "--profile", profileDir,
+    "--new-tab", "about:blank"
+  );
 
   const proc = spawn(browser.path, args, {
     detached: true,
     stdio: ["ignore", "ignore", "pipe"],
   });
+  proc.on("error", (err) => {
+    logDebug(`[Weavetab] Firefox spawn error: ${err.message}`);
+  });
   proc.unref();
+  (proc.stderr as any)?.unref?.();
   const pid = proc.pid;
   logDebug(`[Weavetab] Launching ${browser.name} (${engine}, PID: ${pid}, port: auto).`);
 
@@ -890,6 +781,7 @@ async function launchNonChromium(config: Config, engine: BrowserEngine): Promise
     try {
       await withCDPTimeout(CDP.List({ host: "127.0.0.1", port: actualPort }), 2000, "CDP.List nonChromium");
       logDebug(`[Weavetab] [OK] ${browser.name} ready on :${actualPort}`);
+      await writeLock({ pid, port: actualPort, profileDir, browserPath: browser.path, mode: "session", pending: false, timestamp: Date.now() });
       return { path: browser.path, name: browser.name, port: actualPort, engine };
     } catch {
       await new Promise(r => setTimeout(r, 1000));
@@ -897,19 +789,16 @@ async function launchNonChromium(config: Config, engine: BrowserEngine): Promise
   }
 
   logDebug(`[Weavetab] [!] ${browser.name} not confirmed after 15s — proceeding with port ${actualPort}.`);
+  await writeLock({ pid, port: actualPort, profileDir, browserPath: browser.path, mode: "session", pending: false, timestamp: Date.now() });
   return { path: browser.path, name: browser.name, port: actualPort, engine };
 }
-
-// ─── Stealth injection helper ─────────────────────────────────────────────────
 
 export async function injectStealthScript(session: CDP.Client): Promise<void> {
   try {
     await session.Page.addScriptToEvaluateOnNewDocument({ source: STEALTH_SCRIPT });
-    await session.Runtime.evaluate({ expression: STEALTH_SCRIPT }).catch(() => { });
+    await session.Runtime.evaluate({ expression: STEALTH_SCRIPT }).catch(() => {});
   } catch { /* ignore */ }
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function resolvePortFromStderr(
   proc: ReturnType<typeof spawn>,
@@ -933,17 +822,18 @@ async function resolvePortFromStderr(
 
     let stderrData = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
-        stderrData += chunk.toString();
+      const chunkStr = chunk.toString();
+      stderrData += chunkStr;
 
-      // Check for extension loading errors
-      if (stderrData.toLowerCase().includes("extension") &&
-        (stderrData.toLowerCase().includes("error") ||
-          stderrData.toLowerCase().includes("failed") ||
-          stderrData.toLowerCase().includes("could not load"))) {
+      const lowerChunk = chunkStr.toLowerCase();
+      if (lowerChunk.includes("extension") &&
+        (lowerChunk.includes("error") ||
+          lowerChunk.includes("failed") ||
+          lowerChunk.includes("could not load"))) {
         logDebug(`[Weavetab] [!] Extension loading error detected in stderr: ${stderrData.slice(-500)}`);
       }
 
-      const match = stderrData.match(/DevTools listening on ws:\/\/[\d.]+:(\d+)/);
+      const match = stderrData.match(/DevTools listening on ws:\/\/(?:127\.0\.0\.1|localhost|\[::1\]|[\d.]+):(\d+)/i);
       if (match && !resolved) {
         resolved = true;
         clearTimeout(timer);
@@ -951,6 +841,16 @@ async function resolvePortFromStderr(
         const port = parseInt(match[1]!, 10);
         logDebug(`[Weavetab] [OK] Resolved dynamic port: ${port}`);
         resolve(port);
+      }
+    });
+
+    proc.on("error", (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        try { proc.stderr?.destroy(); } catch { /* ignore */ }
+        clearLock();
+        reject(new Error(`[Weavetab] Browser process spawn error: ${err.message}`));
       }
     });
 
@@ -1008,6 +908,7 @@ export function testPortListening(port: number): Promise<boolean> {
     });
     socket.on("error", () => {
       clearTimeout(timeout);
+      socket.destroy();
       resolve(false);
     });
   });
@@ -1025,7 +926,6 @@ export async function launchElectronApp(
     );
   }
 
-  // 1. Direct port dev attach mode (e.g., dev server or npm run dev)
   if (appCfg.port && !appCfg.path) {
     const isAlive = await testPortListening(appCfg.port);
     if (isAlive) {
@@ -1035,11 +935,13 @@ export async function launchElectronApp(
     throw new Error(`[Weavetab] ✗ Electron dev app "${appName}" on port ${appCfg.port} is not responding. Ensure your dev server is running.`);
   }
 
-  // 2. Direct URL dev attach mode
   if (appCfg.url && !appCfg.path) {
     try {
       const parsed = new URL(appCfg.url);
-      const port = parseInt(parsed.port || (parsed.protocol === "https:" ? "443" : "80"), 10);
+      const port = parsed.port ? parseInt(parsed.port, 10) : (appCfg.port || 0);
+      if (!port || port <= 0 || port > 65535) {
+        throw new Error(`Dev URL "${appCfg.url}" must include an explicit CDP port (e.g. http://localhost:9222) or pair with "port".`);
+      }
       const isAlive = await testPortListening(port);
       if (isAlive) {
         logDebug(`[Weavetab] Attached to live Electron app at ${appCfg.url} (port ${port})`);
@@ -1051,13 +953,11 @@ export async function launchElectronApp(
     }
   }
 
-  const { resolveElectronExecutablePath } = await import("../desktop/discovery.js");
   const execPath = resolveElectronExecutablePath(appName, appCfg.path) || appCfg.path;
   if (!execPath || !isValidElectronExecutablePath(execPath)) {
     throw new Error(`[Weavetab] ✗ Invalid or non-existent Electron executable path for "${appName}": ${execPath}`);
   }
 
-  // Check app-scoped lock
   const lock = readLock(appName);
   if (lock && lock.mode === "session") {
     if (isLockPending(lock)) {
@@ -1078,50 +978,72 @@ export async function launchElectronApp(
   const profileDir = getElectronProfile(appName, appCfg.profileDir);
   const actualPort = appCfg.port && appCfg.port > 0 ? appCfg.port : await getFreePort(9222);
 
-  // Clean up SingletonLock
   const singletonLock = path.join(profileDir, "SingletonLock");
   const singletonCookie = path.join(profileDir, "SingletonCookie");
   try { if (fs.existsSync(singletonLock)) fs.unlinkSync(singletonLock); } catch { /* non-fatal */ }
   try { if (fs.existsSync(singletonCookie)) fs.unlinkSync(singletonCookie); } catch { /* non-fatal */ }
 
   const platform = os.platform();
-  const normalizedProfileDir = platform === 'win32'
-    ? profileDir.replace(/\//g, '\\')
+  const normalizedProfileDir = platform === "win32"
+    ? profileDir.replace(/\//g, "\\")
     : profileDir;
 
   const resolvedDownloadDir = getDownloadDir(config) && getDownloadDir(config).trim()
     ? getDownloadDir(config).trim()
     : getOutputDir("downloads", config);
-  const normalizedDownloadDir = platform === 'win32'
-    ? resolvedDownloadDir.replace(/\//g, '\\')
+  const normalizedDownloadDir = platform === "win32"
+    ? resolvedDownloadDir.replace(/\//g, "\\")
     : resolvedDownloadDir;
 
-  // Notice: Clean Electron launch flags: only isolated user-data-dir, remote-debugging-port, and optional user args.
-  // We NEVER pass Chromium browser flags or extension flags to Electron binaries.
+  const userArgs = filterBrowserFlags(appCfg.args || []);
   const args = [
-    `--remote-debugging-port=${actualPort}`,
-    `--user-data-dir=${normalizedProfileDir}`,
     `--default-download-dir=${normalizedDownloadDir}`,
     "--no-first-run",
     "--no-default-browser-check",
-    ...(appCfg.args || []),
+    ...userArgs,
+    `--user-data-dir=${normalizedProfileDir}`,
+    `--remote-debugging-port=${actualPort}`,
+    "--remote-debugging-address=127.0.0.1",
   ];
-
-  const spawnOptions: any = {
-    detached: true,
-    stdio: "ignore",
-  };
-
-  if (platform === 'darwin' && execPath.includes('.app')) {
-    spawnOptions.shell = true;
+  if (getConfigHeadless(config) && !args.some(a => a === "--headless" || a.startsWith("--headless="))) {
+    args.push("--headless=new");
   }
 
-  const proc = spawn(execPath, args, spawnOptions);
+  const fingerprint = createBrowserFingerprint(process.pid, actualPort, profileDir, execPath);
+  const fpPayload = {
+    launchTimestamp: fingerprint.launchTimestamp,
+  };
+
+  await writeLock({
+    pid: process.pid,
+    port: actualPort,
+    profileDir,
+    browserPath: execPath,
+    mode: "session",
+    appName,
+    pending: true,
+    timestamp: Date.now(),
+    fingerprint: fpPayload,
+  }, appName);
+
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    XDG_CONFIG_HOME: profileDir,
+    XDG_DATA_HOME: profileDir,
+  };
+
+  const proc = spawn(execPath, args, {
+    detached: true,
+    stdio: "ignore",
+    env: childEnv,
+  });
+  proc.on("error", (err) => {
+    logDebug(`[Weavetab] Electron spawn error (${appName}): ${err.message}`);
+  });
   proc.unref();
   const pid = proc.pid;
   logDebug(`[Weavetab] Launching Electron app ${appName} (PID: ${pid}, port: ${actualPort}).`);
 
-  // Poll CDP endpoint on actualPort
   let confirmed = false;
   for (let i = 0; i < 20; i++) {
     try {
@@ -1136,7 +1058,7 @@ export async function launchElectronApp(
   if (!confirmed) {
     const isListening = await testPortListening(actualPort);
     if (!isListening) {
-      try { if (pid) process.kill(pid); } catch { /* ignore */ }
+      if (pid) killProcess(pid, true);
       clearLock(appName);
       throw new Error(`[Weavetab] Electron app ${appName} failed to start CDP listener on port ${actualPort} after 12s.`);
     }
@@ -1151,6 +1073,7 @@ export async function launchElectronApp(
     appName,
     pending: false,
     timestamp: Date.now(),
+    fingerprint: fpPayload,
   }, appName);
 
   return { path: execPath, name: appName, port: actualPort, engine: "chromium", isElectron: true };

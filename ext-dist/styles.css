@@ -87,51 +87,6 @@
   50%, 100% { opacity: 0; }
 }
 
-/* ── COMPONENT: Chat Input Row ──────────────────────────────── */
-.wt-chat {
-  display: inline-flex;
-}
-
-.wt-chat-in {
-  flex: 1;
-  padding: 5px 10px;
-  background: var(--wt-bg-item);
-  border: 1px solid var(--wt-border);
-  border-right: none;
-  color: var(--wt-text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 11px;
-  outline: none;
-  min-width: 200px;
-  caret-color: var(--wt-blue);
-  border-radius: var(--wt-radius-sm) 0 0 var(--wt-radius-sm);
-}
-
-.wt-chat-in::placeholder {
-  color: var(--wt-text-muted);
-}
-
-.wt-chat-in:focus {
-  border-color: var(--wt-blue);
-}
-
-.wt-chat-go {
-  padding: 5px 12px;
-  background: var(--wt-blue);
-  border: 1px solid var(--wt-blue);
-  color: #fff;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  border-radius: 0 var(--wt-radius-sm) var(--wt-radius-sm) 0;
-  transition: background 0.15s;
-}
-
-.wt-chat-go:hover {
-  background: var(--wt-blue-dark);
-}
-
 /* ── ANIMATIONS ──────────────────────────────────────────────── */
 @keyframes wt-bubble-in {
   from { opacity: 0; transform: scale(0.88) translateY(5px); }
@@ -174,39 +129,6 @@
 @keyframes wt-shimmer {
   0%   { left: -60%; }
   100% { left: 120%; }
-}
-
-/* ── COMPONENT: Badges ──────────────────────────────────────── */
-.wt-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 6px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: #fff;
-  border-radius: 4px;
-  letter-spacing: 0.03em;
-}
-
-.wt-badge-beta {
-  background: #f59e0b;
-}
-
-.wt-badge-dev {
-  background: var(--wt-blue);
-}
-
-/* ── PLACEHOLDER STYLING ─────────────────────────────────────── */
-#wt-msg-input::placeholder {
-  color: var(--wt-text-muted);
-  font-size: 11px;
-}
-
-#wt-msg-input:focus::placeholder {
-  color: var(--wt-text-secondary);
 }
 
 /* ── RESPONSIVE ──────────────────────────────────────────────── */

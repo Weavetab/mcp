@@ -1,50 +1,47 @@
 const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
 
-// HUD toggle command handler
-
-// HUD toggle command handler
 browserAPI.commands.onCommand.addListener(function(command) {
-  if (command === 'toggle-hud') {
-    browserAPI.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-      if (tabs[0] && tabs[0].id) {
-        browserAPI.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_HUD' }).catch(function(){});
-      }
-    });
-  }
-  if (command === 'toggle-debug') {
-    browserAPI.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-      if (tabs[0] && tabs[0].id) {
-        browserAPI.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_DEBUG' }).catch(function(){});
-      }
-    });
-  }
+  const msgType = command === 'toggle-hud' ? 'TOGGLE_HUD' : command === 'toggle-debug' ? 'TOGGLE_DEBUG' : null;
+  if (!msgType) return;
+  browserAPI.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+    if (tabs[0] && tabs[0].id) {
+      browserAPI.tabs.sendMessage(tabs[0].id, { type: msgType }).catch(() => {});
+    }
+  });
 });
 
-// Runtime state
 const controlledTabs = new Set();
-const anchorTabs = new Set();
 let currentGroupState = 'idle';
 let activeSessionTabId = null;
 
-// State color mapping — always blue, never yellow
-const STATE_COLORS = {
-  idle: 'grey',
-  weaving: 'blue',
-  stuck: 'blue',  // Keep blue, never yellow
-};
+function saveSessionState() {
+  if (!browserAPI.storage?.session) return;
+  browserAPI.storage.session.set({
+    wt_controlled_tabs: Array.from(controlledTabs),
+    wt_group_state: currentGroupState,
+    wt_active_tab_id: activeSessionTabId,
+  }).catch(() => {});
+}
+
+if (browserAPI.storage?.session) {
+  browserAPI.storage.session.get(['wt_controlled_tabs', 'wt_group_state', 'wt_active_tab_id'], (res) => {
+    if (res && Array.isArray(res.wt_controlled_tabs)) {
+      res.wt_controlled_tabs.forEach((id) => controlledTabs.add(id));
+    }
+    if (res && typeof res.wt_group_state === 'string') {
+      currentGroupState = res.wt_group_state;
+    }
+    if (res && res.wt_active_tab_id !== undefined) {
+      activeSessionTabId = res.wt_active_tab_id;
+    }
+  });
+}
 
 const STATE_BADGE = {
   idle: { text: '', color: null },
   weaving: { text: '\u25CF', color: '#3B82F6' },
-  stuck: { text: '\u25CF', color: '#3B82F6' },  // blue dot, not red
+  stuck: { text: '\u25CF', color: '#F59E0B' },
 };
-
-
-browserAPI.tabs.onCreated.addListener(async (tab) => {
-  if (!controlledTabs.has(tab.id)) return;
-  // Ungroup immediately — prevents Chrome from keeping this tab in any group
-  try { browserAPI.tabs.ungroup(tab.id).catch(() => {}); } catch(e) {}
-});
 
 browserAPI.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!controlledTabs.has(tabId)) return;
@@ -60,6 +57,7 @@ browserAPI.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 async function enableIntercept(tabId, pattern, mockStatus, mockBody) {
   try {
     await browserAPI.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [tabId],
       addRules: [{
         id: tabId,
         priority: 1,
@@ -74,7 +72,7 @@ async function enableIntercept(tabId, pattern, mockStatus, mockBody) {
     });
     return { success: true };
   } catch (e) {
-    console.error("Failed to enable intercept:", e);
+    console.warn('intercept enable err:', e && e.message);
     return { success: false, error: e.message };
   }
 }
@@ -91,13 +89,13 @@ async function disableIntercept(tabId) {
   }
 }
 
-// Stale state guard: if no Weavetab_GROUP_STATE message for 90s, reset all controlled tabs to idle
-let __wt_stateTimeout = null;
+const STALE_ALARM = 'wt-stale-state-guard';
 
 function resetToIdle() {
   if (currentGroupState === 'idle') return;
   currentGroupState = 'idle';
   activeSessionTabId = null;
+  saveSessionState();
   controlledTabs.forEach(tabId => {
     browserAPI.tabs.sendMessage(tabId, { type: 'Weavetab_GROUP_STATE', state: 'idle', isActive: false }).catch(() => {});
   });
@@ -107,45 +105,24 @@ function resetToIdle() {
 }
 
 function refreshStateTimeout() {
-  if (__wt_stateTimeout) clearTimeout(__wt_stateTimeout);
-  __wt_stateTimeout = setTimeout(resetToIdle, 120000); // 2 min stale guard
+  if (browserAPI.alarms) {
+    browserAPI.alarms.create(STALE_ALARM, { delayInMinutes: 2 });
+  }
 }
 
-// Bridge: relay state from CLI (via CDP executeScript) to content scripts
+if (browserAPI.alarms) {
+  browserAPI.alarms.onAlarm.addListener((alarm) => {
+    if (alarm && alarm.name === STALE_ALARM) {
+      resetToIdle();
+    }
+  });
+}
+
+// relay state from content scripts across controlled tabs
 browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // ── Forward tool call events to active tabs ──
-  if (message.type === 'TOOL_CALL_EVENT') {
+  if (message.type === 'WT_THOUGHT' || message.type === 'WT_HUD_UPDATE') {
     controlledTabs.forEach(tabId => {
       browserAPI.tabs.sendMessage(tabId, message).catch(() => {});
-    });
-  }
-  // ── Thought routing: relay to HUD in controlled tabs ──
-  if (message.type === 'WT_THOUGHT') {
-    controlledTabs.forEach(tabId => {
-      browserAPI.tabs.sendMessage(tabId, { type: 'WT_THOUGHT', text: message.text, kind: message.kind }).catch(() => {});
-    });
-  }
-
-  // ── User messaging ──
-  if (message.type === 'WT_USER_NOTE') {
-    const payload = {
-      type: 'WT_USER_NOTE_INJECT',
-      text: message.text,
-      snipe: message.snipe
-    };
-    // Query active tab in current window and send message immediately
-    browserAPI.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-      if (tabs[0] && tabs[0].id) {
-        browserAPI.tabs.sendMessage(tabs[0].id, payload).catch(function(){});
-      }
-    });
-    // Send to activeSessionTabId if set
-    if (activeSessionTabId) {
-      browserAPI.tabs.sendMessage(activeSessionTabId, payload).catch(function(){});
-    }
-    // Fallback to all controlled tabs
-    controlledTabs.forEach(tabId => {
-      browserAPI.tabs.sendMessage(tabId, payload).catch(function(){});
     });
   }
 
@@ -171,18 +148,15 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === 'Weavetab_GROUP_STATE') {
-    const { state, word } = message;
+    const { state } = message;
     currentGroupState = state;
     refreshStateTimeout();
-    const color = STATE_COLORS[state] || 'blue';
     const badge = STATE_BADGE[state] || STATE_BADGE.idle;
 
-    // Track which tab relayed this state update (the active session tab)
-    if (sender.tab) activeSessionTabId = sender.tab.id;
-    // Per-tab badge
+    if (sender.tab?.id) activeSessionTabId = sender.tab.id;
+    saveSessionState();
     if (browserAPI.action) {
-      const ids = Array.from(controlledTabs);
-      ids.forEach(tid => {
+      Array.from(controlledTabs).forEach(tid => {
         if (badge.text) {
           browserAPI.action.setBadgeText({ tabId: tid, text: badge.text }).catch(() => {});
           if (badge.color) {
@@ -194,7 +168,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     }
 
-    // Broadcast state to all controlled tabs so they update their favicons
     controlledTabs.forEach(tabId => {
       browserAPI.tabs.sendMessage(tabId, { type: 'Weavetab_GROUP_STATE', state, isActive: tabId === activeSessionTabId }).catch(() => {});
     });
@@ -202,15 +175,16 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === 'REGISTER_TAB') {
-    // Skip about:blank and chrome:// pages
-    if (sender.tab.url === 'about:blank' || sender.tab.url.startsWith('chrome://')) {
+    if (!sender.tab?.id) return;
+    const tabUrl = sender.tab.url || '';
+    if (tabUrl === 'about:blank' || tabUrl.startsWith('chrome://')) {
       sendResponse({ ok: true, skipped: true });
       return;
     }
     controlledTabs.add(sender.tab.id);
+    saveSessionState();
     refreshStateTimeout();
 
-    // Immediately inform the tab of the current group state so it can set its favicon
     browserAPI.tabs.sendMessage(sender.tab.id, { type: 'Weavetab_GROUP_STATE', state: currentGroupState, isActive: sender.tab.id === activeSessionTabId }).catch(() => {});
 
     updateBadge();
@@ -218,27 +192,34 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'NETWORK_INTERCEPT_ENABLE') {
+    if (!sender.tab?.id) return;
     enableIntercept(sender.tab.id, message.pattern, message.mockStatus, message.mockBody)
       .then(res => sendResponse(res));
     return true;
   }
   if (message.type === 'NETWORK_INTERCEPT_DISABLE') {
+    if (!sender.tab?.id) return;
     disableIntercept(sender.tab.id)
       .then(res => sendResponse(res));
     return true;
   }
-  if (message.type === 'GET_ANCHOR_STATUS') {
-    sendResponse({ isAnchor: anchorTabs.has(sender.tab.id) });
+
+  // plugin css injection bypasses strict site csp via scripting api
+  if (message.type === 'PLUGIN_INJECT_CSS' && message.css) {
+    if (!sender.tab?.id) return;
+    browserAPI.scripting.insertCSS({ target: { tabId: sender.tab.id }, css: message.css })
+      .then(() => sendResponse({ ok: true }))
+      .catch(e => sendResponse({ ok: false, error: e && e.message }));
     return true;
   }
-  if (message.type === 'SET_ANCHOR_TAB') {
-    if (message.anchor) anchorTabs.add(sender.tab.id);
-    else anchorTabs.delete(sender.tab.id);
-    sendResponse({ ok: true });
+  if (message.type === 'PLUGIN_REMOVE_CSS' && message.css) {
+    if (!sender.tab?.id) return;
+    browserAPI.scripting.removeCSS({ target: { tabId: sender.tab.id }, css: message.css })
+      .then(() => sendResponse({ ok: true }))
+      .catch(e => sendResponse({ ok: false, error: e && e.message }));
+    return true;
   }
 
-  // ── User feedback relay: content script → storage queue ───────────────────
-  // CDP polls window.__Weavetab.popUserFeedback() or window.__wt_chat_queue which reads from this queue.
   if (message.type === 'USER_FEEDBACK' || message.type === 'WT_USER_NOTE') {
     if (message.text || message.snipe) {
       const noteEntry = {
@@ -248,22 +229,29 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
         tabId: sender.tab && sender.tab.id
       };
 
+      const notePayload = {
+        type: 'WT_USER_NOTE_INJECT',
+        text: message.text,
+        snipe: message.snipe
+      };
+      browserAPI.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          browserAPI.tabs.sendMessage(tabs[0].id, notePayload).catch(() => {});
+          browserAPI.tabs.sendMessage(tabs[0].id, { type: 'WT_SNIPE_INJECT', entry: noteEntry }).catch(() => {});
+        }
+      });
+      if (activeSessionTabId) {
+        browserAPI.tabs.sendMessage(activeSessionTabId, notePayload).catch(() => {});
+      }
+      controlledTabs.forEach(tabId => {
+        browserAPI.tabs.sendMessage(tabId, notePayload).catch(() => {});
+      });
+
       browserAPI.storage.local.get('__wt_feedback_queue', function(res) {
         const queue = res['__wt_feedback_queue'] || [];
         queue.push(noteEntry);
-        // Cap queue at 20 entries
         if (queue.length > 20) queue.splice(0, queue.length - 20);
         browserAPI.storage.local.set({ '__wt_feedback_queue': queue });
-      });
-
-      // Forward directly to active session tab content script for immediate DOM queue push & interrupt
-      browserAPI.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          browserAPI.tabs.sendMessage(tabs[0].id, {
-            type: 'WT_SNIPE_INJECT',
-            entry: noteEntry
-          }).catch(() => {});
-        }
       });
     }
     sendResponse({ ok: true });
@@ -272,20 +260,17 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Alert tab: mark tabs with alert dialogs waiting + write to storage so CDP can see it
   if (message.type === 'TAB_ALERT_WAITING') {
-    const alertTabId = sender.tab && sender.tab.id;
-    if (alertTabId) {
-      browserAPI.tabs.sendMessage(alertTabId, { type: 'Weavetab_GROUP_STATE', state: 'weaving', isActive: false }).catch(() => {});
-      // Write alert state to storage — CDP polls __Weavetab.getAlertState()
-      browserAPI.storage.local.set({ '__wt_alert_state': { pending: true, tabId: alertTabId, ts: Date.now() } });
-    }
+    if (!sender.tab?.id) return;
+    const alertTabId = sender.tab.id;
+    browserAPI.tabs.sendMessage(alertTabId, { type: 'Weavetab_GROUP_STATE', state: 'weaving', isActive: false }).catch(() => {});
+    browserAPI.storage.local.set({ '__wt_alert_state': { pending: true, tabId: alertTabId, ts: Date.now() } });
     sendResponse({ ok: true });
   }
   if (message.type === 'TAB_ALERT_CLEARED') {
-    const alertTabId = sender.tab && sender.tab.id;
-    if (alertTabId) {
-      browserAPI.tabs.sendMessage(alertTabId, { type: 'Weavetab_GROUP_STATE', state: 'idle', isActive: false }).catch(() => {});
-      browserAPI.storage.local.set({ '__wt_alert_state': { pending: false, tabId: alertTabId, ts: Date.now() } });
-    }
+    if (!sender.tab?.id) return;
+    const alertTabId = sender.tab.id;
+    browserAPI.tabs.sendMessage(alertTabId, { type: 'Weavetab_GROUP_STATE', state: 'idle', isActive: false }).catch(() => {});
+    browserAPI.storage.local.set({ '__wt_alert_state': { pending: false, tabId: alertTabId, ts: Date.now() } });
     sendResponse({ ok: true });
   }
   if (message.type === 'RELOAD_EXTENSION') {
@@ -297,11 +282,13 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 browserAPI.tabs.onRemoved.addListener((tabId) => {
+  disableIntercept(tabId);
   if (controlledTabs.has(tabId)) {
     controlledTabs.delete(tabId);
+    if (activeSessionTabId === tabId) activeSessionTabId = null;
+    saveSessionState();
     updateBadge();
   }
-  anchorTabs.delete(tabId);
 });
 
 
@@ -313,62 +300,55 @@ browserAPI.runtime.onInstalled.addListener(() => {
       browserAPI.tabs.ungroup(ids).catch(() => {});
     }
   });
+  try {
+    if (browserAPI.declarativeNetRequest) {
+      browserAPI.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [1, 2, 3],
+        addRules: [
+          { id: 1, priority: 1, action: { type: 'block' }, condition: { urlFilter: '*google-analytics.com*', resourceTypes: ['script', 'xmlhttprequest', 'ping'] } },
+          { id: 2, priority: 1, action: { type: 'block' }, condition: { urlFilter: '*doubleclick.net*', resourceTypes: ['script', 'xmlhttprequest', 'ping', 'image', 'sub_frame'] } },
+          { id: 3, priority: 1, action: { type: 'block' }, condition: { urlFilter: '*facebook.net/en_US/fbevents.js*', resourceTypes: ['script'] } }
+        ]
+      }).catch(() => {});
+    }
+  } catch (e) {}
 });
 
 function updateBadge() {
   if (!browserAPI.action) return;
+  const badge = STATE_BADGE[currentGroupState] || STATE_BADGE.idle;
   const ids = Array.from(controlledTabs);
   if (ids.length === 0) {
     browserAPI.action.setBadgeText({ text: '' }).catch(() => {});
-  } else {
-    ids.forEach(tid => {
-      // Just set the dot, but don't group
-      browserAPI.action.setBadgeText({ tabId: tid, text: '\u25CF' }).catch(() => {});
-      browserAPI.action.setBadgeBackgroundColor({ tabId: tid, color: '#3B82F6' }).catch(() => {});
-    });
+    return;
   }
+  ids.forEach(tid => {
+    browserAPI.action.setBadgeText({ tabId: tid, text: badge.text }).catch(() => {});
+    if (badge.color) {
+      browserAPI.action.setBadgeBackgroundColor({ tabId: tid, color: badge.color }).catch(() => {});
+    }
+  });
 }
 
-// On startup: close stale blank tabs — but NEVER the last remaining tab.
-// Weavetab launches Chrome on about:blank, so removing the only tab closes
-// the browser window (graceful shutdown ~1s after launch → ECONNREFUSED loop).
 browserAPI.runtime.onStartup.addListener(async () => {
   try {
-    const blanks = await browserAPI.tabs.query({ url: 'about:blank' });
-    if (blanks.length === 0) return;
     const all = await browserAPI.tabs.query({});
-    // Keep one tab alive if every tab would otherwise be closed.
-    const mustKeep = blanks.length === all.length ? 1 : 0;
-    blanks.slice(0, blanks.length - mustKeep).forEach(t =>
-      browserAPI.tabs.remove(t.id).catch(() => {})
-    );
-  } catch (e) {
-    // Non-fatal: never let tab cleanup crash the service worker or close the browser.
-  }
+    const byWin = new Map();
+    for (const t of all) {
+      const list = byWin.get(t.windowId) || [];
+      list.push(t);
+      byWin.set(t.windowId, list);
+    }
+    for (const [, winTabs] of byWin) {
+      const blanks = winTabs.filter(t => t.url === 'about:blank');
+      if (blanks.length === 0) continue;
+      const mustKeep = blanks.length === winTabs.length ? 1 : 0;
+      blanks.slice(0, blanks.length - mustKeep).forEach(t => {
+        if (t.id !== undefined) browserAPI.tabs.remove(t.id).catch(() => {});
+      });
+    }
+  } catch (e) {}
 });
-
-// Network blocking for speed (delayed to avoid 'No SW' on cold start)
-// Guard: only run if the service worker is still alive (not being terminated)
-setTimeout(function() {
-  // Check the runtime is still valid before calling declarativeNetRequest
-  try {
-    if (!browserAPI.runtime || !browserAPI.runtime.id) return;
-    browserAPI.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: [1, 2, 3, 4],
-      addRules: [
-        { id: 1, priority: 1, action: { type: 'block' }, condition: { urlFilter: '*google-analytics.com*', resourceTypes: ['script', 'xmlhttprequest', 'ping'] } },
-        { id: 2, priority: 1, action: { type: 'block' }, condition: { urlFilter: '*doubleclick.net*', resourceTypes: ['script', 'xmlhttprequest', 'ping', 'image', 'sub_frame'] } },
-        { id: 3, priority: 1, action: { type: 'block' }, condition: { urlFilter: '*facebook.net/en_US/fbevents.js*', resourceTypes: ['script'] } }
-        // NOTE: GTM blocking removed — some sites bundle critical resources through GTM
-      ]
-    }).catch(function(e) {
-      // Non-fatal — log for debugging only
-      console.warn('[Weavetab] Dynamic rules update failed (non-fatal):', e && e.message);
-    });
-  } catch(e) {
-    // Service worker terminated or runtime invalidated — safe to ignore
-  }
-}, 1000);
 
 // ─── Omnibox: Weavetab:// protocol via browserAPI.omnibox ─────────────────────
 

@@ -6,7 +6,10 @@
  */
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
+import { getConfigAgentId } from "../config/loader.js";
 import { ghostClick } from "../overlay/ghost.js";
+import { SessionSecretTracker } from "../security/secrets.js";
+import { sessionRegistry } from "../state/session.js";
 
 export interface ClipboardOptions {
   action: "read" | "write";
@@ -30,20 +33,26 @@ export async function browserClipboard(
   _config: Config
 ): Promise<{ success: boolean; text?: string; dataUrl?: string; message: string }> {
   const { action, text, dataUrl, mimeType } = options;
+  const targetId = sessionRegistry.getActive(getConfigAgentId(_config))?.targetId ?? "default";
 
-  // ── Dispatch a synthetic click to grant transient user activation ──
-  async function grantActivation() {
+  async function grantActivation(center = false) {
     try {
-      await ghostClick(session, 5, 5);
-      await session.Input.dispatchMouseEvent({ type: "mouseReleased", x: 5, y: 5, button: "left", clickCount: 1 });
-    } catch {
-      // Non-critical — proceed anyway
-    }
+      let cx = 5;
+      let cy = 5;
+      if (center) {
+        const { result: vp } = await session.Runtime.evaluate({
+          expression: '({w: window.innerWidth, h: window.innerHeight})',
+          returnByValue: true
+        });
+        cx = Math.floor((vp?.value?.w || 800) / 2);
+        cy = Math.floor((vp?.value?.h || 600) / 2);
+      }
+      await ghostClick(session, cx, cy);
+      await session.Input.dispatchMouseEvent({ type: "mouseReleased", x: cx, y: cy, button: "left", clickCount: 1 });
+      if (center) await session.Runtime.evaluate({ expression: 'document.body.click()' }).catch(() => {});
+    } catch { /* non-critical */ }
   }
 
-  // Detect non-secure context (file://, http://) up front. The Clipboard API is
-  // undefined there, and raw CDP ops can hang or throw -32001. Surface a typed
-  // error instead.
   async function isSecureContext(): Promise<boolean> {
     try {
       const { result } = await session.Runtime.evaluate({
@@ -64,12 +73,17 @@ export async function browserClipboard(
       throw new Error("Provide 'text' and/or 'dataUrl' for write action");
     }
 
-    // ── Grant user activation only for standalone clipboard writes ───────────
-    // When called from browser_type, the input field is already focused.
-    // Clicking (5,5) here would blur the field before Ctrl+V, causing the
-    // phantom-click + wipe + write-to-BODY issue.
+    // Try OS clipboard first for text-only writes so we don't fire a stray (5,5) page click
+    if (hasText && !hasImage) {
+      try {
+        const clipboardy = (await import("clipboardy")).default;
+        await clipboardy.write(text!);
+        return { success: true, message: "Copied to clipboard" };
+      } catch { /* fallback to browser API */ }
+    }
+
     if (!options.skipActivation) {
-      await grantActivation();
+      await grantActivation(false);
     }
 
     const secureCtx = await isSecureContext();
@@ -79,8 +93,6 @@ export async function browserClipboard(
         throw new Error("browser_clipboard: image write requires a secure context (https or chrome://). Current page is non-secure (file:// or http://).");
       }
       const mime = mimeType || (dataUrl!.includes(';') ? dataUrl!.split(';')[0].split(':')[1] : "image/png");
-      // When both text and an image are supplied, put them in a single ClipboardItem
-      // so the plain-text flavor is not silently dropped (Windows keeps both).
       const textFlavor = hasText
         ? `itemData['text/plain'] = new Blob([${JSON.stringify(text)}], { type: 'text/plain' });`
         : "";
@@ -108,59 +120,33 @@ export async function browserClipboard(
       throw new Error("Failed to write image to clipboard: " + (val || "unknown"));
     }
 
-    // Text-only write
-    if (hasText && !hasImage) {
-      try {
-        const clipboardy = (await import("clipboardy")).default;
-        await clipboardy.write(text!);
-        return { success: true, message: "Copied to clipboard" };
-      } catch { /* fallback to browser API */ }
+    const res = await session.Runtime.evaluate({
+      expression: `(async function() {
+        try {
+          ${secureCtx ? `await navigator.clipboard.writeText(${JSON.stringify(text)});` : `throw new Error('non-secure');`}
+          return true;
+        } catch(e) {
+          return false;
+        }
+      })()`,
+      awaitPromise: true,
+      returnByValue: true
+    }).catch(() => ({ result: { value: false } }));
 
-      const res = await session.Runtime.evaluate({
-        expression: `(async function() {
-          try {
-            ${secureCtx ? `await navigator.clipboard.writeText(${JSON.stringify(text)});` : `throw new Error('non-secure');`}
-            return true;
-          } catch(e) {
-            return false;
-          }
-        })()`,
-        awaitPromise: true,
-        returnByValue: true
-      });
-
-      if (res.result?.value === true) {
-        return { success: true, message: "Copied to clipboard" };
-      }
+    if (res.result?.value === true) {
       return { success: true, message: "Copied to clipboard" };
     }
+    return { success: false, message: "Failed to write to clipboard (non-secure context or permission denied)" };
   }
 
-  // ── Read action ──────────────────────────────────────────────────
-  // 4-layer clipboard read strategy:
-  // Layer 1: CDP mouse click on body + page script click() for user activation
-  // Layer 2: navigator.clipboard.read() API
-  // Layer 3: Ctrl+V via trusted CDP key event → hidden textarea
-  // Layer 4: document.execCommand('paste') fallback
-  async function grantUserActivation() {
-    try {
-      const { result: vp } = await session.Runtime.evaluate({
-        expression: '({w: window.innerWidth, h: window.innerHeight})',
-        returnByValue: true
-      });
-      const cx = Math.floor((vp?.value?.w || 800) / 2);
-      const cy = Math.floor((vp?.value?.h || 600) / 2);
-      await ghostClick(session, cx, cy);
-      await session.Input.dispatchMouseEvent({ type: "mouseReleased", x: cx, y: cy, button: "left", clickCount: 1 });
-      await session.Runtime.evaluate({ expression: 'document.body.click()' }).catch(() => {});
-    } catch { /* non-critical */ }
-  }
+  const pasteMod = process.platform === "darwin" ? 4 : 2;
 
   async function readViaCdpPaste(): Promise<string | null> {
     const { result } = await session.Runtime.evaluate({
       expression: `(function() {
         try {
           var ta = document.createElement('textarea');
+          ta.setAttribute('data-wt-clip', '1');
           ta.style.cssText = 'position:fixed;top:-999px;left:-999px;opacity:0;width:1px;height:1px';
           document.body.appendChild(ta);
           ta.focus();
@@ -171,20 +157,24 @@ export async function browserClipboard(
       returnByValue: true
     });
     if (result?.value !== true) return null;
-    await session.Input.dispatchKeyEvent({ type: "rawKeyDown", key: "v", windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers: 2 });
-    await session.Input.dispatchKeyEvent({ type: "keyUp", key: "v", windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers: 2 });
-    await new Promise(r => setTimeout(r, 100));
-    const { result: valRes } = await session.Runtime.evaluate({
-      expression: `(function() {
-        var ta = document.querySelector('textarea[style*="top:-999px"]');
-        if (!ta) return null;
-        var v = ta.value;
-        ta.remove();
-        return v || null;
-      })()`,
-      returnByValue: true
-    });
-    return (valRes?.value as string) || null;
+    try {
+      await session.Input.dispatchKeyEvent({ type: "rawKeyDown", key: "v", windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers: pasteMod });
+      await session.Input.dispatchKeyEvent({ type: "keyUp", key: "v", windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers: pasteMod });
+      await new Promise(r => setTimeout(r, 100));
+      const { result: valRes } = await session.Runtime.evaluate({
+        expression: `(function() {
+          var ta = document.querySelector('textarea[data-wt-clip="1"]');
+          return ta ? (ta.value || null) : null;
+        })()`,
+        returnByValue: true
+      });
+      return (valRes?.value as string) || null;
+    } finally {
+      await session.Runtime.evaluate({
+        expression: `(function(){ var ta = document.querySelector('textarea[data-wt-clip="1"]'); if (ta) ta.remove(); })()`,
+        returnByValue: false
+      }).catch(() => {});
+    }
   }
 
   // Direct OS system clipboard read via clipboardy
@@ -192,11 +182,11 @@ export async function browserClipboard(
     const clipboardy = (await import("clipboardy")).default;
     const sysText = await clipboardy.read();
     if (sysText && sysText.trim().length > 0) {
-      return { success: true, text: sysText, message: "Read from clipboard" };
+      return { success: true, text: SessionSecretTracker.redact(targetId, sysText), message: "Read from clipboard" };
     }
   } catch {}
 
-  await grantUserActivation();
+  await grantActivation(true);
 
   const secureCtx = await isSecureContext();
 
@@ -318,13 +308,14 @@ export async function browserClipboard(
 
   try {
     const obj = JSON.parse(readResult);
+    const cleanText = obj.text ? SessionSecretTracker.redact(targetId, String(obj.text)) : undefined;
     return {
       success: true,
-      text: obj.text || undefined,
+      text: cleanText,
       dataUrl: obj.dataUrl || undefined,
-      message: obj.text && obj.dataUrl ? "Read text and image from clipboard" : obj.dataUrl ? "Read image from clipboard" : "Read from clipboard"
+      message: cleanText && obj.dataUrl ? "Read text and image from clipboard" : obj.dataUrl ? "Read image from clipboard" : "Read from clipboard"
     };
   } catch {
-    return { success: true, text: readResult, message: "Read from clipboard" };
+    return { success: true, text: SessionSecretTracker.redact(targetId, readResult), message: "Read from clipboard" };
   }
 }

@@ -12,7 +12,10 @@
  */
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
+import { getConfigAgentId } from "../config/loader.js";
 import { logAction } from "../audit/logger.js";
+import { SessionSecretTracker } from "../security/secrets.js";
+import { sessionRegistry } from "../state/session.js";
 
 export interface AutomationOptions {
   action: "start" | "stop" | "list" | "poll";
@@ -29,14 +32,10 @@ interface AutomationScript {
   onResult: "notify_agent" | "store" | "ignore";
   startedAt: string;
   active: boolean;
+  scriptIdentifier?: string;
 }
 
-// Server-side registry — the ONLY source of truth for script metadata.
-// Page must NOT hold agent state (anti-pattern #5).
 const automationRegistry = new Map<string, AutomationScript>();
-
-// Server-side result buffer for scripts with onResult="notify_agent".
-// Harvested from page mailboxes by list/poll.
 const resultQueue: Array<{ id: string; data: any; timestamp: string }> = [];
 
 function stopSignalKey(id: string): string {
@@ -45,6 +44,27 @@ function stopSignalKey(id: string): string {
 
 function resultMailboxKey(id: string): string {
   return `__wt_auto_out_${id}`;
+}
+
+async function harvestMailboxes(session: CDP.Client): Promise<void> {
+  for (const [autoId] of automationRegistry) {
+    try {
+      const resp = await session.Runtime.evaluate({
+        expression: `(function() {
+          var mb = window[${JSON.stringify(resultMailboxKey(autoId))}];
+          if (!mb || mb.length === 0) return '[]';
+          return JSON.stringify(mb.splice(0, mb.length));
+        })()`,
+        returnByValue: true,
+      });
+      if (resp.result?.value) {
+        const items = JSON.parse(resp.result.value as string) as Array<{ data: any; timestamp: string }>;
+        for (const item of items) {
+          resultQueue.push({ id: autoId, data: item.data, timestamp: item.timestamp });
+        }
+      }
+    } catch { /* ignore */ }
+  }
 }
 
 export async function browserAutomation(
@@ -107,6 +127,7 @@ export async function browserAutomation(
     var safeData;
     try { JSON.stringify(data); safeData = data; } catch(e) { safeData = String(data); }
     _resultMailbox.push({ data: safeData, timestamp: new Date().toISOString() });
+    if (_resultMailbox.length > 100) _resultMailbox.shift();
   }
 
   function _checkStop() {
@@ -153,9 +174,17 @@ export async function browserAutomation(
       };
     }
 
+    // Remove prior persistent script registration if replacing an existing id
+    const prev = automationRegistry.get(id);
+    if (prev?.scriptIdentifier) {
+      await session.Page.removeScriptToEvaluateOnNewDocument({ identifier: prev.scriptIdentifier }).catch(() => {});
+    }
+
+    let scriptIdentifier: string | undefined;
     if (persistent) {
       try {
-        await session.Page.addScriptToEvaluateOnNewDocument({ source: wrappedScript });
+        const added = await session.Page.addScriptToEvaluateOnNewDocument({ source: wrappedScript });
+        scriptIdentifier = added?.identifier;
       } catch (_e) {
         // Fallback gracefully if Page domain isn't enabled
       }
@@ -168,6 +197,7 @@ export async function browserAutomation(
       onResult,
       startedAt: new Date().toISOString(),
       active: true,
+      scriptIdentifier,
     });
 
     logAction("browser_automation", id, `started (persistent: ${persistent})`);
@@ -177,12 +207,14 @@ export async function browserAutomation(
   if (action === "stop") {
     if (!id) return { success: false, error: "browser_automation stop requires an 'id'" };
 
-    // Set stop signal boolean on window (single-purpose, same pattern as __wt_stop_requested)
-    // The running IIFE checks this flag on each iteration and exits when set.
+    const existing = automationRegistry.get(id);
+    if (existing?.scriptIdentifier) {
+      await session.Page.removeScriptToEvaluateOnNewDocument({ identifier: existing.scriptIdentifier }).catch(() => {});
+    }
+
     await session.Runtime.evaluate({
       expression: `(function() {
         window[${JSON.stringify(stopSignalKey(id))}] = true;
-        // Also clear the result mailbox
         delete window[${JSON.stringify(resultMailboxKey(id))}];
       })()`,
       returnByValue: true,
@@ -194,7 +226,6 @@ export async function browserAutomation(
   }
 
   if (action === "list") {
-    // Check active status by testing the stop signal
     for (const [autoId] of automationRegistry) {
       try {
         const resp = await session.Runtime.evaluate({
@@ -209,26 +240,7 @@ export async function browserAutomation(
       }
     }
 
-    // Collect pending results from all mailboxes
-    for (const [autoId] of automationRegistry) {
-      try {
-        const resp = await session.Runtime.evaluate({
-          expression: `(function() {
-            var mb = window[${JSON.stringify(resultMailboxKey(autoId))}];
-            if (!mb || mb.length === 0) return '[]';
-            var items = mb.splice(0, mb.length);
-            return JSON.stringify(items);
-          })()`,
-          returnByValue: true,
-        });
-        if (resp.result?.value) {
-          const items = JSON.parse(resp.result.value as string) as Array<{ data: any; timestamp: string }>;
-          for (const item of items) {
-            resultQueue.push({ id: autoId, data: item.data, timestamp: item.timestamp });
-          }
-        }
-      } catch { /* ignore */ }
-    }
+    await harvestMailboxes(session);
 
     return {
       success: true,
@@ -237,28 +249,9 @@ export async function browserAutomation(
   }
 
   if (action === "poll") {
-    // Collect all pending results from mailboxes, then drain server queue
-    for (const [autoId] of automationRegistry) {
-      try {
-        const resp = await session.Runtime.evaluate({
-          expression: `(function() {
-            var mb = window[${JSON.stringify(resultMailboxKey(autoId))}];
-            if (!mb || mb.length === 0) return '[]';
-            var items = mb.splice(0, mb.length);
-            return JSON.stringify(items);
-          })()`,
-          returnByValue: true,
-        });
-        if (resp.result?.value) {
-          const items = JSON.parse(resp.result.value as string) as Array<{ data: any; timestamp: string }>;
-          for (const item of items) {
-            resultQueue.push({ id: autoId, data: item.data, timestamp: item.timestamp });
-          }
-        }
-      } catch { /* ignore */ }
-    }
-
-    const results = resultQueue.splice(0, resultQueue.length);
+    await harvestMailboxes(session);
+    const targetId = sessionRegistry.getActive(getConfigAgentId(_config))?.targetId ?? "default";
+    const results = SessionSecretTracker.redactValue(targetId, resultQueue.splice(0, resultQueue.length));
     return { success: true, results };
   }
 

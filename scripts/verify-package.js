@@ -27,7 +27,20 @@ console.log(`  [OK] Entry point verified: ${pkg.main} (${(entryStats.size / 1024
 let missingCount = 0;
 const filesList = pkg.files || [];
 
-for (const filePattern of filesList) {
+const requiredAssets = [
+  'ext-dist/manifest.json',
+  'ext-dist/main_world.js',
+  'ext-dist/content.js',
+  'ext-dist/background.js',
+  'ext-dist/dashboard.js',
+  'ext-dist/dashboard.html',
+  'ext-dist/styles.css',
+  'ext-dist/hud/hud.js',
+  'ext-dist/hud/index.html',
+  'ext-dist/icons/icon128.png',
+];
+
+for (const filePattern of [...filesList, ...requiredAssets]) {
   if (filePattern.startsWith('!')) continue;
   const filePath = resolve(root, filePattern);
   if (!existsSync(filePath)) {

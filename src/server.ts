@@ -6,16 +6,19 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import { WEAVETAB_VERSION } from "./version.js";
 import { getOrConnect } from "./cdp/connector.js";
 import { checkRateLimit } from "./security/ratelimit.js";
-import { checkDomain, isToolAllowedInMode } from "./security/blacklist.js";
+import { checkDomain, isToolAllowedInMode, isToolAllowedForRole, ROLE_TOOL_ALLOW } from "./security/blacklist.js";
 import type { Role } from "./config/loader.js";
 import { logAction, logActionStructured } from "./audit/logger.js";
 import { recordToolUsage, broadcastTelemetry } from "./audit/telemetry.js";
 import type { Config } from "./config/loader.js";
 import { clearLock, readLock } from "./cdp/lock.js";
+
+export { isToolAllowedForRole, ROLE_TOOL_ALLOW };
 
 import { browserMap } from "./tools/read.js";
 import { weaveNavigate } from "./tools/navigate.js";
@@ -47,7 +50,6 @@ import { browserScreenshot } from "./tools/screenshot.js";
 import { browserViewport } from "./tools/viewport.js";
 import { browserClipboard } from "./tools/clipboard.js";
 import { browserInspect } from "./tools/inspect.js";
-import { browserExtractDesign } from "./tools/design_extract.js";
 import { browserAutomation } from "./tools/automation.js";
 import { browserRecording } from "./tools/recording.js";
 import { browserPerformance } from "./tools/performance.js";
@@ -71,7 +73,7 @@ import { toPluginInputShape } from "./plugin/schema.js";
 import { createSurface } from "./plugin/surface.js";
 import { PluginRuntime } from "./plugin/runtime.js";
 import { agentAction } from "./sensors/pacing.js";
-import { getCachedConfig, getElectronApps } from "./config/loader.js";
+import { getCachedConfig, getElectronApps, getConfigHeadless, startConfigWatcher } from "./config/loader.js";
 import { agentState } from "./state/agent.js";
 import { SessionSecretTracker } from "./security/secrets.js";
 import { sessionRegistry } from "./state/session.js";
@@ -80,27 +82,9 @@ import { sessionRegistry } from "./state/session.js";
 import { browserOfficeParse, browserOfficeList } from "./tools/office/index.js";
 
 let pluginRuntimeRef: PluginRuntime | null = null;
+const toolArgsStorage = new AsyncLocalStorage<Record<string, unknown>>();
 
 type ToolHandler<T> = (session: any, config: Config) => Promise<T>;
-
-const ROLE_TOOL_ALLOW: Record<string, Set<string>> = {
-  admin: new Set(["*"]),
-  operator: new Set(["*"]),
-  viewer: new Set(["browser_map", "browser_find", "browser_scrape", "browser_console", "browser_eval", "browser_inspect", "browser_extract_design", "browser_snapshot", "browser_screenshot", "browser_pdf", "browser_cookies", "browser_tabs", "browser_wait", "browser_pattern_learn"]),
-  automation: new Set(["*"]), // Allowed all except interactive tools (enforced in isToolAllowedForRole)
-  system: new Set(["browser_thoughts", "browser_detect", "browser_performance", "browser_checkpoint", "browser_pattern_learn"]),
-};
-
-function isToolAllowedForRole(role: Role, toolName: string): { allowed: boolean; reason?: string } {
-  if (role === "automation" && toolName === "browser_thoughts") {
-    return { allowed: false, reason: "Role 'automation' does not have permission to use 'browser_thoughts'. Automation agents must be non-interactive." };
-  }
-  const allowed = ROLE_TOOL_ALLOW[role];
-  if (!allowed) return { allowed: true };
-  if (allowed.has("*")) return { allowed: true };
-  if (allowed.has(toolName)) return { allowed: true };
-  return { allowed: false, reason: `Role '${role}' does not have permission to use '${toolName}'. ${role === "viewer" ? "Viewer role only permits read-only tools (map/find/scrape/console/eval/inspect/snapshot/pdf/cookies)." : ""}` };
-}
 
 /** Push a rich log card to every active browser session's overlay. Only shown when devMode is on. */
 async function pushRichLog(
@@ -124,12 +108,30 @@ async function pushRichLog(
   } catch { /* non-fatal */ }
 }
 
+function getToolTimeoutBudget(toolName: string, cfg: Config): number {
+  if (toolName === "browser_navigate") {
+    const navRaw = cfg.navigationTimeout || 30000;
+    const navMs = navRaw < 1000 ? navRaw * 1000 : navRaw;
+    return Math.max(22000, navMs + 5000);
+  }
+  if (
+    toolName === "browser_thoughts" ||
+    toolName === "browser_captcha" ||
+    toolName === "browser_wait" ||
+    toolName === "browser_burst"
+  ) {
+    return 130000;
+  }
+  return 25000;
+}
+
 function withTimeoutGuard<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       reject(new Error(`[!] ${label} timed out after ${timeoutMs / 1000}s. Target page or browser did not respond.`));
     }, timeoutMs);
+    timer.unref?.();
   });
   return Promise.race([fn(), timeoutPromise]).finally(() => clearTimeout(timer!));
 }
@@ -209,26 +211,30 @@ async function withSecurity<T>(
   config: Config,
   toolName: string,
   handler: ToolHandler<T>,
-  isOfficial = false,
+  _isOfficial = false,
   targetApp?: string,
-  requiresSession = true
-): Promise<{ content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> }> {
+  requiresSession = true,
+  explicitArgs?: Record<string, unknown>
+): Promise<{ content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; isError?: boolean }> {
   const liveConfig = getCachedConfig();
+  const toolArgs = explicitArgs ?? toolArgsStorage.getStore() ?? {};
 
   const rl = checkRateLimit(liveConfig);
   if (!rl.allowed) {
     throw new Error(`[!] Rate limit exceeded. Retry in ${rl.retryAfterMs}ms`);
   }
 
-  if (!isOfficial) {
-    // Phase 7d: RBAC role permission check (checked BEFORE browser launch)
-    const roleToolCheck = isToolAllowedForRole(liveConfig.role, toolName);
-    if (!roleToolCheck.allowed) {
-      throw new Error(`[!] ${roleToolCheck.reason}`);
-    }
-  }
-
   const resolvedTargetApp = requiresSession ? inferTargetApp(targetApp) : undefined;
+  const requestedTabId = (toolArgs?.tab_id ?? toolArgs?.tabId) as string | undefined;
+  const preTargetClient =
+    (requestedTabId
+      ? ((sessionRegistry as any).get?.(requestedTabId) || sessionRegistry.findClientByTargetId(requestedTabId))
+      : null) || sessionRegistry.getActive(liveConfig.agentId, resolvedTargetApp);
+
+  const roleToolCheck = isToolAllowedForRole(liveConfig.role, toolName, toolArgs, preTargetClient?.url, liveConfig);
+  if (!roleToolCheck.allowed) {
+    throw new Error(`[!] ${roleToolCheck.reason}`);
+  }
 
   let session: any;
   if (requiresSession) {
@@ -237,106 +243,117 @@ async function withSecurity<T>(
   }
   (global as any).__wt_live_config = liveConfig;
 
-  const { sendToExtension } = await import("./cdp/helpers.js");
+  const { sendToExtension, getFromExtension } = await import("./cdp/helpers.js");
   const chatMessages: string[] = [];
 
-  if (requiresSession) {
-    try {
-      const stopCheck = await session.Runtime.evaluate({
-        expression: 'window.__wt_stop_requested===true',
-        returnByValue: true,
-      });
-      if (stopCheck?.result?.value === true) {
-        await session.Runtime.evaluate({ expression: 'window.__wt_stop_requested=false;' }).catch(()=>{});
-        await sendToExtension(session, { type: 'Weavetab_GROUP_STATE', state: 'idle' }).catch(()=>{});
-        await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } }).catch(()=>{});
-        await sendToExtension(session, { type: 'Weavetab_CLEAR_THOUGHT' }).catch(()=>{});
-        agentState.reportTransportClosed();
-        throw new Error('[!] mission stopped by user via HUD.');
-      }
-    } catch (e) {
-      if (e instanceof Error && e.message.startsWith('[!]')) throw e;
-    }
+  const activeClient = sessionRegistry.getActive(liveConfig.agentId, resolvedTargetApp);
+  const targetClient =
+    (requestedTabId
+      ? ((sessionRegistry as any).get?.(requestedTabId) || sessionRegistry.findClientByTargetId(requestedTabId))
+      : null) || activeClient;
+  const checkUrl =
+    targetClient?.url ||
+    activeClient?.url ||
+    (toolName === "browser_pattern_learn" && typeof toolArgs?.origin === "string" ? toolArgs.origin : "");
 
-    if (!isOfficial) {
-      // Phase 7c: Domain policy check for read-only / deny / audit-only modes
-      const activeClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
-      if (activeClient?.url && !activeClient.isElectron) {
-        const domainCheck = checkDomain(activeClient.url, liveConfig);
-        if (!domainCheck.allowed) {
-          throw new Error(`[!] ${domainCheck.reason}`);
-        }
-        if (domainCheck.mode === "deny") {
-          throw new Error(`[!] Domain denied by policy`);
-        }
-        if (domainCheck.mode === "read-only") {
-          const toolCheck = isToolAllowedInMode(toolName, "read-only");
-          if (!toolCheck.allowed) {
-            throw new Error(`[!] ${toolCheck.reason}`);
+  if (checkUrl && !targetClient?.isElectron) {
+    const domainCheck = checkDomain(checkUrl, toolName, liveConfig, toolArgs);
+    if (!domainCheck.allowed) {
+      throw new Error(`[!] ${domainCheck.reason}`);
+    }
+    if (domainCheck.mode === "deny") {
+      throw new Error(`[!] Domain denied by policy`);
+    }
+    if (domainCheck.mode === "read-only") {
+      const toolCheck = isToolAllowedInMode(toolName, "read-only", toolArgs, checkUrl, liveConfig);
+      if (!toolCheck.allowed) {
+        throw new Error(`[!] ${toolCheck.reason}`);
+      }
+    }
+  }
+
+  if (requiresSession && session) {
+    if ((session as any).__wt_ext_bridge_active === true && liveConfig.extension !== false && !liveConfig.headless) {
+      const extState = await getFromExtension<{ stopRequested?: boolean; chatQueue?: string[] }>(session, {
+        type: "WT_POLL_HUD_STATE",
+      }).catch(() => null);
+      if (extState?.stopRequested === true) {
+        await sendToExtension(session, { type: "Weavetab_GROUP_STATE", state: "idle" }).catch(() => {});
+        await sendToExtension(session, { type: "Weavetab_STATE", hud: { action: "" } }).catch(() => {});
+        await sendToExtension(session, { type: "Weavetab_CLEAR_THOUGHT" }).catch(() => {});
+        agentState.reportTransportClosed();
+        throw new Error("[!] mission stopped by user via HUD.");
+      }
+      if (Array.isArray(extState?.chatQueue) && extState.chatQueue.length > 0) {
+        for (const msg of extState.chatQueue) {
+          if (typeof msg === "string" && msg.trim()) {
+            chatMessages.push(msg);
+            logAction("chat_queue", toolName, msg);
           }
         }
       }
     }
 
-    // Push config to extension once per session (idempotent, ignored if already set)
     sendToExtension(session, {
-      type: 'Weavetab_CONFIG',
-      groupTabs: (liveConfig as any).groupTabs,
+      type: "Weavetab_CONFIG",
       devMode: liveConfig.devMode,
     }).catch(() => {});
     if (liveConfig.devMode) {
-      sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'Mission Running', detail: toolName } }).catch(() => {});
+      sendToExtension(session, { type: "Weavetab_STATE", hud: { action: "Mission Running", detail: toolName } }).catch(() => {});
     }
-
-    try {
-      const { result: hasMsg } = await session.Runtime.evaluate({
-        expression: 'window.__wt_chat_queue&&window.__wt_chat_queue.length>0',
-        returnByValue: true,
-      });
-      if (hasMsg?.value === true) {
-        const { result: qResult } = await session.Runtime.evaluate({
-          expression: `(function(){ const q=window.__wt_chat_queue||[];window.__wt_chat_queue=[];return JSON.stringify(q); })()`,
-          returnByValue: true,
-        });
-        const raw = qResult?.value as string | undefined;
-        if (raw && raw !== '[]') {
-          chatMessages.push(...JSON.parse(raw));
-          for (const msg of chatMessages) {
-            logAction('chat_queue', toolName, msg);
-          }
-        }
-      }
-    } catch { /* non-fatal */ }
   }
 
-  // Emit a "started" info log so the user sees the tool immediately
-  const argsPreview = '(executing…)';
-  pushRichLog(liveConfig.agentId, toolName, ` ${toolName} ${argsPreview}`, '', 'info', !!liveConfig.devMode);
+  const hookSession = session ?? targetClient?.session ?? activeClient?.session;
+  try {
+    const dispatchedArgs = await hookPipeline.dispatchBeforeToolCall(toolName, toolArgs, hookSession);
+    if (dispatchedArgs && typeof dispatchedArgs === "object" && toolArgs && typeof toolArgs === "object") {
+      Object.assign(toolArgs, dispatchedArgs);
+    }
+  } catch (err: any) {
+    if (err?.isBlocked || err?.__blocked) {
+      return {
+        isError: true,
+        content: [{ type: "text" as const, text: `[!] Action '${toolName}' blocked by plugin: ${err.message}` }],
+      };
+    }
+    throw err;
+  }
+
+  const argsPreview = "(executing…)";
+  pushRichLog(liveConfig.agentId, toolName, ` ${toolName} ${argsPreview}`, "", "info", !!liveConfig.devMode);
 
   agentState.reportToolCall();
 
   const t0 = Date.now();
+  const timeoutBudget = getToolTimeoutBudget(toolName, liveConfig);
   try {
-    const result = await withTimeoutGuard(() => handler(session, liveConfig), 22000, toolName);
+    const result = await withTimeoutGuard(() => handler(session, liveConfig), timeoutBudget, toolName);
     agentState.reportToolSuccess();
     const ms = Date.now() - t0;
 
-    const activeClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
+    const currentClient = sessionRegistry.getActive(liveConfig.agentId, targetApp);
     logActionStructured({
       timestamp: new Date(t0).toISOString(),
-      sessionId: activeClient?.targetId,
+      sessionId: currentClient?.targetId,
       tool: toolName,
       duration: ms,
       result: "success",
-      pageUrl: activeClient?.url,
-      tabTitle: activeClient?.title,
+      pageUrl: currentClient?.url,
+      tabTitle: currentClient?.title,
     });
 
-    // Phase 10g: record tool usage for analytics (opt-in via telemetry:true in config)
     if (liveConfig.telemetry) {
+      let telemetryDomain = "(unknown)";
+      if (currentClient?.url) {
+        try {
+          telemetryDomain = new URL(currentClient.url).hostname || "(unknown)";
+        } catch {
+          telemetryDomain = "(unknown)";
+        }
+      }
       recordToolUsage({
         tool: toolName,
-        domain: activeClient?.url ? new URL(activeClient.url).hostname : "(unknown)",
+        domain: telemetryDomain,
         duration: ms,
         success: true,
         timestamp: new Date(t0).toISOString(),
@@ -462,7 +479,9 @@ async function withSecurity<T>(
         }
       }
     }
-    return { content };
+    const outPayload = { content };
+    const finalOut = await hookPipeline.dispatchAfterToolCall(toolName, toolArgs, outPayload, hookSession);
+    return finalOut ?? outPayload;
   } catch (err) {
     const ms = Date.now() - t0;
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -505,6 +524,7 @@ function wrapError(err: unknown): { content: [{ type: "text"; text: string }]; i
 }
 
 export async function startServer(config: Config, transportMode: "stdio" | "ws" = "stdio", wsPort = 3000): Promise<void> {
+  startConfigWatcher();
   const startupPlugins = discoverPlugins();
   const initialInstructions = buildPluginInstructions(startupPlugins);
   const server = new McpServer(
@@ -512,27 +532,13 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
     initialInstructions ? { instructions: initialInstructions } : undefined
   );
 
-  // Intercept server.tool to inject global plugin middleware hooks (onBeforeAction, onAfterAction)
   const rawTool = server.tool.bind(server);
   (server as any).tool = function (name: string, ...rest: any[]) {
     const rawHandler = rest[rest.length - 1];
     if (typeof rawHandler === "function") {
       rest[rest.length - 1] = async (args: any, extra: any) => {
-        try {
-          const session = agentState.getSession() ?? sessionRegistry.getActive(config.agentId)?.session;
-          const dispatchedArgs = await hookPipeline.dispatchBeforeToolCall(name, args || {}, session);
-          const result = await rawHandler(dispatchedArgs, extra);
-          const finalResult = await hookPipeline.dispatchAfterToolCall(name, dispatchedArgs, result, session);
-          return finalResult;
-        } catch (err: any) {
-          if (err?.isBlocked || err?.__blocked) {
-            return {
-              isError: true,
-              content: [{ type: "text" as const, text: `[!] Action '${name}' blocked by plugin: ${err.message}` }],
-            };
-          }
-          throw err;
-        }
+        const safeArgs = args && typeof args === "object" ? args : {};
+        return await toolArgsStorage.run(safeArgs, () => rawHandler(safeArgs, extra));
       };
     }
     return (rawTool as any)(name, ...rest);
@@ -670,6 +676,7 @@ export async function startServer(config: Config, transportMode: "stdio" | "ws" 
       x: z.number().optional().describe("Raw X coordinate. Use for precise positional clicks when element ID is not available."),
       y: z.number().optional().describe("Raw Y coordinate. Use for precise positional clicks when element ID is not available."),
       include_map: z.boolean().optional().describe("Set true to include a full updated page_map in the response. Default false — omit when you already have ref IDs or don't need a DOM refresh."),
+      force: z.boolean().optional().describe("Bypass pointer-event occlusion checks and click coordinates directly."),
       tab_id: z.string().optional().describe("Execute in a specific tab instead of active."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
@@ -709,6 +716,7 @@ server.tool(
     y: z.number().optional().describe("Raw Y coordinate to focus before typing."),
     text: z.string().describe("Text to type into the field."),
     clearFirst: z.boolean().optional().describe("Wipe existing field content before typing."),
+    clear: z.boolean().optional().describe("Alias for clearFirst: wipe existing field content before typing."),
     paste: z.boolean().optional().describe("Instant paste mode via clipboard. Auto-enabled for text longer than 8 chars."),
     include_map: z.boolean().optional().describe("Set true to include a full updated page_map in the response. Default false."),
     tab_id: z.string().optional().describe("Execute in a specific tab instead of active."),
@@ -826,18 +834,20 @@ server.tool(
     "Accept or dismiss JS dialogs (alert, confirm, prompt). Browser sessions only.",
     {
       action: z.enum(["accept", "dismiss"]).describe("Action to perform on the dialog."),
-      promptText: z.string().optional().describe("Text to enter if it is a prompt dialog.")
+      promptText: z.string().optional().describe("Text to enter if it is a prompt dialog."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         const liveConfig = getCachedConfig();
-        const active = sessionRegistry.getActive(liveConfig.agentId);
-        if (active?.isElectron) {
-          return { content: [{ type: "text", text: "[Note] JS dialog interception is only available for web browser sessions (Electron apps handle dialogs natively)." }] };
-        }
+        const active = sessionRegistry.getActive(liveConfig.agentId, args.app);
+        const isElectron = Boolean(args.app || active?.isElectron);
         return await withSecurity(config, "browser_dialog", async (session) => {
+          if (isElectron) {
+            return { content: [{ type: "text", text: "[Note] JS dialog interception is only available for web browser sessions (Electron apps handle dialogs natively)." }] };
+          }
           return await browserDialog(session, args as any);
-        });
+        }, false, args.app, !isElectron);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -955,13 +965,14 @@ server.tool(
     "Autonomous CAPTCHA detection and solving.",
     {
       action: z.enum(["detect", "solve", "wait_for_user", "status"]).describe("Action to perform."),
-      timeout: z.number().optional().describe("Timeout in ms (default 120000).")
+      timeout: z.number().optional().describe("Timeout in ms (default 120000)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
         return await withSecurity(config, "browser_captcha", async (session, liveConfig) => {
           return await browserCaptcha(session, args as any, liveConfig);
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -971,7 +982,7 @@ server.tool(
     "browser_thoughts",
     "Agent-to-user communication. Renders in the middle down of the page. Use 'question' mode to ask a free-text question. Use 'feedback' mode to provide status updates, analysis, or decisions. Supports element anchoring (e.g. 'w:15') and presentation styles ('observation', 'decision', 'warning', 'question').",
     {
-      action: z.enum(["question", "feedback"]).describe("Action to perform."),
+      action: z.enum(["question", "feedback"]).optional().default("feedback").describe("Action to perform (default: 'feedback')."),
       message: z.string().describe("The question to ask, or the feedback/analysis to log."),
       anchor: z.string().optional().describe("Optional element Ref ID (e.g. 'w:15') or CSS selector to visually anchor this thought to on the page."),
       style: z.enum(["observation", "decision", "warning", "question"]).optional().describe("Thought presentation style. Defaults to 'observation' for feedback and 'question' for question."),
@@ -983,22 +994,31 @@ server.tool(
       try {
         const liveConfig = getCachedConfig();
         const active = sessionRegistry.getActive(liveConfig.agentId, args.app);
-        if (args.app || active?.isElectron) {
-          const { logActionStructured } = await import("./audit/logger.js");
-          logActionStructured({
-            timestamp: new Date().toISOString(),
-            tool: "browser_thoughts",
-            result: `[ELECTRON APP FEEDBACK]: ${args.message}`
-          });
-          return { content: [{ type: "text", text: "[Note] Thought/HUD overlay is disabled for Electron desktop apps (DOM-only execution). Feedback recorded in audit log." }] };
-        }
-        return await withSecurity(config, "browser_thoughts", async (session) => {
+        const skipHud = Boolean(args.app || active?.isElectron || getConfigHeadless(liveConfig));
+        return await withSecurity(config, "browser_thoughts", async (session, currentConfig) => {
+          if (skipHud) {
+            const { logActionStructured } = await import("./audit/logger.js");
+            const tag = getConfigHeadless(currentConfig) ? "HEADLESS" : "ELECTRON APP";
+            logActionStructured({
+              timestamp: new Date().toISOString(),
+              tool: "browser_thoughts",
+              result: `[${tag} FEEDBACK]: ${args.message}`,
+            });
+            return {
+              content: [{
+                type: "text" as const,
+                text: getConfigHeadless(currentConfig)
+                  ? "[Note] Thought/HUD overlay is disabled in headless mode. Feedback recorded in audit log."
+                  : "[Note] Thought/HUD overlay is disabled for Electron desktop apps (DOM-only execution). Feedback recorded in audit log.",
+              }],
+            };
+          }
           if (args.action === "feedback") {
             const { logActionStructured } = await import("./audit/logger.js");
             logActionStructured({
               timestamp: new Date().toISOString(),
               tool: "browser_thoughts",
-              result: `[AGENT FEEDBACK]: ${args.message}`
+              result: `[AGENT FEEDBACK]: ${args.message}`,
             });
             await browserThought(session, {
               action: "feedback",
@@ -1006,7 +1026,7 @@ server.tool(
               anchor: args.anchor,
               style: args.style,
             });
-            return { content: [{ type: "text", text: "Feedback appended to mission log and HUD." }] };
+            return { content: [{ type: "text" as const, text: "Feedback appended to mission log and HUD." }] };
           }
           const result = await browserThought(session, {
             action: "question",
@@ -1016,8 +1036,8 @@ server.tool(
             input: args.input,
             timeout: args.timeout,
           });
-          return { content: [{ type: "text", text: JSON.stringify(result) }] };
-        });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        }, false, args.app, !skipHud);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1029,7 +1049,7 @@ server.tool(
     "browser_pointer",
     "Advanced pointer control (hover, click, double_click, drag_and_drop, hover_chain). Use hover_chain for Photoshop/Photopea, Figma, and multi-level flyout submenus.",
     {
-      action: z.enum(["hover", "click", "double_click", "drag_and_drop", "hover_chain"]).optional().describe("Action to perform (default: click, or hover_chain if hover_chain array is provided)."),
+      action: z.enum(["hover", "move", "click", "double_click", "drag_and_drop", "hover_chain"]).optional().describe("Action to perform (default: click, or hover_chain if hover_chain array is provided)."),
       ref: z.string().optional().describe("Ref ID of the target element (e.g. w:42)."),
       id: z.string().optional().describe("Alternative element ID / Ref ID from browser_map."),
       selector: z.string().optional().describe("CSS Selector of the target element."),
@@ -1071,14 +1091,18 @@ server.tool(
   // ── 14. browser_select ───────────────────────────────────────────────────────
   server.tool(
     "browser_select",
-    "Select an option from a native dropdown or custom UI dropdown.",
+    "Select option(s) from a native/custom dropdown, or highlight text inside an element (mode: 'text').",
     {
       id: z.string().optional().describe("Element ref ID (e.g. 'w:42') or selector."),
       ref: z.string().optional().describe("Alias for id."),
       target: z.string().optional().describe("Alternative selector or ref ID."),
       nodeId: z.number().optional().describe("CDP backendNodeId."),
       selector: z.string().optional().describe("CSS Selector."),
-      value: z.string().describe("The exact text value to select."),
+      value: z.string().optional().describe("Exact option text/value to select (required for single-option select)."),
+      values: z.array(z.string()).optional().describe("Multiple option values for multi-select dropdowns."),
+      mode: z.enum(["option", "text"]).optional().describe("'option' (default) picks dropdown option(s); 'text' highlights text inside the element."),
+      start: z.number().optional().describe("Start offset when mode='text' on an input/textarea."),
+      end: z.number().optional().describe("End offset when mode='text' on an input/textarea."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1236,6 +1260,12 @@ server.tool(
       pattern: z.string().optional().describe("URL glob pattern to intercept or filter telemetry (e.g. '*api/login*')."),
       mockStatus: z.number().optional().describe("HTTP status code to return when enabling mock (default 200)."),
       mockBody: z.string().optional().describe("JSON or plaintext body payload to return in the mocked response."),
+      rules: z.array(z.object({
+        pattern: z.string().optional(),
+        urlPattern: z.string().optional(),
+        mockStatus: z.number().optional(),
+        mockBody: z.string().optional(),
+      })).optional().describe("Optional rule objects (first entry supplies pattern/mockStatus/mockBody when omitted at top level)."),
       app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
@@ -1391,7 +1421,7 @@ server.tool(
     "browser_snapshot",
     "Capture or restore an MHTML snapshot. Best for offline archival, replay testing, and compliance audits.",
     {
-      action: z.enum(["capture", "restore"]).describe("Action to perform."),
+      action: z.enum(["capture", "restore"]).optional().default("capture").describe("Action to perform (default: 'capture')."),
       filePath: z.string().optional().describe("Absolute or relative file path to save/load the .mhtml snapshot (default: auto-generated in snapshots directory for capture)."),
       filename: z.string().optional().describe("Alias for filePath."),
       hideOverlay: z.boolean().optional().describe("If false, keeps the Weavetab HUD and overlay visible in snapshot. Default true."),
@@ -1437,12 +1467,13 @@ server.tool(
     "browser_viewport",
     "Set viewport dimensions and device emulation (device presets, geolocation, locale, timezone, color scheme, touch, orientation).",
     {
-      action: z.enum(["set", "clear", "list", "preset"]).describe("'set' viewport/emulation, 'clear' all overrides, 'list' available device presets, 'preset' apply a named device."),
+      action: z.enum(["set", "clear", "list", "preset"]).optional().describe("'set' viewport/emulation, 'clear' all overrides, 'list' available device presets, 'preset' apply a named device (inferred automatically when omitted)."),
       width: z.number().optional().describe("Viewport width in pixels."),
       height: z.number().optional().describe("Viewport height in pixels."),
       deviceScaleFactor: z.number().optional().describe("Device Pixel Ratio (default 1)."),
       mobile: z.boolean().optional().describe("Whether to emulate a mobile device (default false)."),
       devicePreset: z.string().optional().describe("Device preset name for action='preset' (see action='list')."),
+      preset: z.string().optional().describe("Alias for devicePreset."),
       userAgent: z.string().optional().describe("Override the User Agent string."),
       geolocation: z.object({ latitude: z.number(), longitude: z.number(), accuracy: z.number().optional() }).optional().describe("Override geolocation coordinates."),
       locale: z.string().optional().describe("Override locale (e.g. 'en-US')."),
@@ -1506,28 +1537,6 @@ server.tool(
     }
   );
 
-  // ── 36b. browser_extract_design ─────────────────────────────────────────────
-  server.tool(
-    "browser_extract_design",
-    "Extract design tokens (colors, typography, spacing, shadows, CSS variables), semantic HTML layouts, and clean CSS into structured files and an LLM design blueprint. Ideal for cloning websites, UI components, and design systems with 100% pixel fidelity.",
-    {
-      selector: z.string().optional().describe("CSS selector of the container element to extract (default 'main', falls back to 'body')."),
-      format: z.enum(["tailwind", "vanilla_css", "tokens_only"]).optional().describe("Format preset for extracted styles: 'tailwind' (default, generates tailwind.theme.json), 'vanilla_css' (generates scoped styles), or 'tokens_only' (design tokens only)."),
-      outputDir: z.string().optional().describe("Optional custom directory to write extracted files into. If omitted, uses configured designDir (~/.weavetab/designs/<domain>-<timestamp>/)."),
-      name: z.string().optional().describe("Optional custom name for the saved design folder (e.g. 'resend-hero', 'pricing-section')."),
-      includeAssets: z.boolean().optional().describe("Whether to capture inline SVGs and asset references (default true)."),
-      hideOverlay: z.boolean().optional().describe("Whether to hide Weavetab overlay during capture (default true)."),
-      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
-    },
-    async (args) => {
-      try {
-        return await withSecurity(config, "browser_extract_design", async (session, liveConfig) => {
-          return await agentAction(session, 'reading', () => browserExtractDesign(session, args, liveConfig), 'browser_extract_design');
-        }, false, args.app);
-      } catch (e) { return wrapError(e); }
-    }
-  );
-
   // ── 39. browser_automation ─────────────────────────────────────────────────
   server.tool(
     "browser_automation",
@@ -1577,11 +1586,15 @@ server.tool(
   server.tool(
     "browser_detect",
     "CRITICAL INITIALIZATION TOOL. Detect available browsers and configured desktop apps (Discord, Slack, etc.). Call this FIRST before interacting with the environment to know if apps are online/offline and what tabs they have open.",
-    {},
-    async () => {
+    {
+      app: z.string().optional().describe("Optional desktop app name to inspect specifically."),
+    },
+    async (args) => {
       try {
-        const result = await detectBrowsers(getActiveEngine());
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        return await withSecurity(config, "browser_detect", async () => {
+          const result = await detectBrowsers(getActiveEngine(), args.app);
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        }, false, args.app, false);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1625,14 +1638,16 @@ server.tool(
       success: z.boolean().optional().describe("Whether the execution succeeded (required for 'record_execution')."),
       duration_ms: z.number().optional().describe("Execution duration in ms (optional for 'record_execution')."),
       quirk_key: z.string().optional().describe("Quirk key: 'cookie_banner', 'rate_limit', or 'modal_popups' (required for 'record_quirk')."),
-      quirk_data: z.record(z.any()).optional().describe("Quirk payload object (required for 'record_quirk').")
+      quirk_data: z.record(z.any()).optional().describe("Quirk payload object (required for 'record_quirk')."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
-        if (args.action === "get") {
-          let resolvedOrigin = args.origin;
-          if (!resolvedOrigin) {
-            return await withSecurity(config, "browser_pattern_learn", async (session, _liveConfig) => {
+        const needsSession = args.action === "get" && !args.origin;
+        return await withSecurity(config, "browser_pattern_learn", async (session) => {
+          if (args.action === "get") {
+            let resolvedOrigin = args.origin;
+            if (!resolvedOrigin && session) {
               try {
                 const res = await session.Runtime.evaluate({
                   expression: "window.location.origin",
@@ -1640,70 +1655,57 @@ server.tool(
                 });
                 resolvedOrigin = res?.result?.value as string | undefined;
               } catch { /* fall through */ }
+            }
 
-              if (!resolvedOrigin) {
-                return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Could not determine origin from active tab. Pass origin explicitly." }) }] };
-              }
+            if (!resolvedOrigin) {
+              return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Could not determine origin from active tab. Pass origin explicitly." }) }] };
+            }
 
-              if (args.pattern) {
-                const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
-                return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
-              }
+            if (args.pattern) {
+              const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
+              return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
+            }
 
-              const profile = await getSiteProfile(resolvedOrigin);
-              if (!profile) {
-                return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
-              }
+            const profile = await getSiteProfile(resolvedOrigin);
+            if (!profile) {
+              return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
+            }
 
-              const hint = formatSiteProfileHint(profile);
-              return { content: [{ type: "text" as const, text: JSON.stringify({ ...profile, _hint: hint }) }] };
+            const hint = formatSiteProfileHint(profile);
+            return { content: [{ type: "text" as const, text: JSON.stringify({ ...profile, _hint: hint }) }] };
+          }
+
+          if (!args.origin) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "origin is required for write actions" }) }] };
+
+          if (args.action === "learn") {
+            if (!args.name) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "name is required for action='learn'" }) }] };
+            const pattern = await learnPattern(args.origin, args.name, {
+              steps: args.steps ?? [],
+              success_indicator: args.success_indicator,
+              entry: args.entry,
             });
+            return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, pattern }) }] };
           }
 
-          if (args.pattern) {
-            const reliability = await getPatternReliability(resolvedOrigin, args.pattern);
-            return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, pattern: args.pattern, reliability }) }] };
+          if (args.action === "record_execution") {
+            if (!args.name) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "name is required for action='record_execution'" }) }] };
+            if (args.success === undefined) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "success (boolean) is required for action='record_execution'" }) }] };
+            const updated = await recordPatternExecution(args.origin, args.name, args.success, args.duration_ms);
+            if (!updated) {
+              return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, error_code: "PATTERN_NOT_FOUND", message: `No pattern named '${args.name}' exists for origin '${args.origin}'. Learn it first with action='learn'.` }) }] };
+            }
+            return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, pattern: updated }) }] };
           }
 
-          const profile = await getSiteProfile(resolvedOrigin);
-          if (!profile) {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ origin: resolvedOrigin, known: false, message: "No site profile found. This site has not been profiled yet." }) }] };
+          if (args.action === "record_quirk") {
+            if (!args.quirk_key) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "quirk_key is required for action='record_quirk'" }) }] };
+            if (!args.quirk_data) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "quirk_data is required for action='record_quirk'" }) }] };
+            await recordQuirk(args.origin, args.quirk_key, args.quirk_data);
+            return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, origin: args.origin, quirk_key: args.quirk_key }) }] };
           }
 
-          const hint = formatSiteProfileHint(profile);
-          return { content: [{ type: "text" as const, text: JSON.stringify({ ...profile, _hint: hint }) }] };
-        }
-
-        if (!args.origin) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "origin is required for write actions" }) }] };
-
-        if (args.action === "learn") {
-          if (!args.name) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "name is required for action='learn'" }) }] };
-          const pattern = await learnPattern(args.origin, args.name, {
-            steps: args.steps ?? [],
-            success_indicator: args.success_indicator,
-            entry: args.entry,
-          });
-          return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, pattern }) }] };
-        }
-
-        if (args.action === "record_execution") {
-          if (!args.name) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "name is required for action='record_execution'" }) }] };
-          if (args.success === undefined) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "success (boolean) is required for action='record_execution'" }) }] };
-          const updated = await recordPatternExecution(args.origin, args.name, args.success, args.duration_ms);
-          if (!updated) {
-            return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, error_code: "PATTERN_NOT_FOUND", message: `No pattern named '${args.name}' exists for origin '${args.origin}'. Learn it first with action='learn'.` }) }] };
-          }
-          return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, pattern: updated }) }] };
-        }
-
-        if (args.action === "record_quirk") {
-          if (!args.quirk_key) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "quirk_key is required for action='record_quirk'" }) }] };
-          if (!args.quirk_data) return { content: [{ type: "text" as const, text: JSON.stringify({ error: "quirk_data is required for action='record_quirk'" }) }] };
-          await recordQuirk(args.origin, args.quirk_key, args.quirk_data);
-          return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, origin: args.origin, quirk_key: args.quirk_key }) }] };
-        }
-
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Unknown action" }) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Unknown action" }) }] };
+        }, false, args.app, needsSession);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1732,6 +1734,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       file: z.string().optional().describe("Bare filename (e.g. 'report.xlsx') of a file already in the local downloads directory. No path separators allowed."),
       max_rows: z.number().optional().describe("Max rows to return for Excel/CSV (default 500). Increase if you need more data."),
       max_chars: z.number().optional().describe("Max characters to return for PDF/Word text (default 50000)."),
+      app: z.string().optional().describe("Electron app name configured in config.json under 'electron'."),
     },
     async (args) => {
       try {
@@ -1762,7 +1765,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
           );
 
           return result;
-        });
+        }, false, args.app);
       } catch (e) { return wrapError(e); }
     }
   );
@@ -1849,6 +1852,16 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
     "Analyze the current active tab. Use this to give the agent instant context about the page without wasting tool calls.",
     async () => {
       const liveConfig = getCachedConfig();
+      const roleCheck = isToolAllowedForRole(liveConfig.role, "browser_map");
+      if (!roleCheck.allowed) {
+        return {
+          messages: [{
+            role: "user",
+            content: { type: "text", text: `[!] ${roleCheck.reason}` }
+          }]
+        };
+      }
+
       const active = sessionRegistry.getActive(liveConfig.agentId);
 
       if (!active) {
@@ -1861,6 +1874,17 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       }
 
       const { session, targetId, url, title } = active;
+      if (url && !active.isElectron) {
+        const domainCheck = checkDomain(url, "browser_map", liveConfig);
+        if (!domainCheck.allowed) {
+          return {
+            messages: [{
+              role: "user",
+              content: { type: "text", text: `[!] ${domainCheck.reason}` }
+            }]
+          };
+        }
+      }
 
       // 0. Wait for page load and get viewport/scroll context
       let pageContextStr = "";
@@ -1945,7 +1969,7 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       ].filter(Boolean).join("\n").trim();
 
       const messages: Array<{ role: "user"; content: any }> = [
-        { role: "user", content: { type: "text", text: promptText } }
+        { role: "user", content: { type: "text", text: SessionSecretTracker.redactAll(promptText) } }
       ];
 
       return { messages };
@@ -2005,9 +2029,18 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
       },
       waitForSelector: async (selector: string, opts: any = {}) => {
         const timeout = opts.timeoutMs ?? 5000;
+        const checkVis = Boolean(opts.visible);
         const start = Date.now();
         while (Date.now() - start < timeout) {
-          const res = await session.Runtime.evaluate({ expression: `Boolean(document.querySelector(${JSON.stringify(selector)}))`, returnByValue: true });
+          const res = await session.Runtime.evaluate({
+            expression: `(() => {
+              const el = document.querySelector(${JSON.stringify(selector)});
+              if (!el) return false;
+              if (!${checkVis}) return true;
+              return el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0;
+            })()`,
+            returnByValue: true,
+          });
           if (res.result?.value) return true;
           await new Promise(r => setTimeout(r, 100));
         }
@@ -2130,21 +2163,8 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
   const totalTools = Object.keys((server as any)._registeredTools || {}).length;
   process.stderr.write(`[OK] Weavetab Server Ready — ${totalTools} tools, ${surface.count().prompts} prompts, ${surface.count().resources} resources loaded. (Transport: ${transportMode})\n`);
 
-  // Handle transport close gracefully to prevent zombie processes.
-  // The MCP SDK's StdioServerTransport only invokes onclose() from an explicit
-  // transport.close() — it never fires when the IDE dies and stdin reaches EOF.
-  // Register stdin close/end/error handlers unconditionally for stdio.
-  //
-  // Guard handleClose against multi-fire: stdin "end" and "close" both fire on
-  // EOF; "error" can fire for EPIPE. Without a flag, cleanup() runs multiple
-  // times and process.exit(0) fires for every event.
-  let handleCloseCalled = false;
-  const handleClose = async () => {
-    if (handleCloseCalled) return;
-    handleCloseCalled = true;
-    agentState.reportTransportClosed();
-    await cleanup();
-    process.exit(0);
+  const handleClose = () => {
+    void shutdown("transport_closed", 0);
   };
 
   if ((server as any).server) {
@@ -2153,11 +2173,97 @@ DO NOT use browser_scrape or browser_map for binary documents — they cannot re
   if (transportMode !== "ws") {
     process.stdin.on("close", handleClose);
     process.stdin.on("end", handleClose);
-    // stdin "error" (e.g. EPIPE) must NOT trigger a full cleanup/exit — a
-    // spurious EPIPE on the MCP pipe should not kill the browser. Log only.
-    process.stdin.on("error", (err) => {
-      process.stderr.write(`[Weavetab] stdin error (ignored): ${err.message}\n`);
+    process.stdin.on("error", (err: NodeJS.ErrnoException) => {
+      if (isFatalPipeError(err)) {
+        void shutdown(`stdin_${err.code || "error"}`, 0);
+        return;
+      }
+      process.stderr.write(`[Weavetab] stdin error: ${err.message}\n`);
     });
+    process.stdout.on("close", handleClose);
+    process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+      if (isFatalPipeError(err)) {
+        void shutdown(`stdout_${err.code || "error"}`, 0);
+      }
+    });
+    process.on("disconnect", () => {
+      void shutdown("ipc_disconnect", 0);
+    });
+    startParentWatchdog();
+  }
+}
+
+let parentWatchdogTimer: NodeJS.Timeout | null = null;
+let shuttingDown = false;
+
+function isFatalPipeError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return (
+    code === "EPIPE" ||
+    code === "EOF" ||
+    code === "EBADF" ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_DESTROYED"
+  );
+}
+
+function isParentDead(initialPpid: number): boolean {
+  if (!Number.isInteger(initialPpid) || initialPpid <= 1) return false;
+  if (process.platform !== "win32" && (process.ppid === 1 || process.ppid !== initialPpid)) {
+    return true;
+  }
+  try {
+    process.kill(initialPpid, 0);
+    return false;
+  } catch (err: any) {
+    // EPERM means the parent process still exists under different privileges
+    return err?.code === "ESRCH";
+  }
+}
+
+function startParentWatchdog(): void {
+  stopParentWatchdog();
+  const initialPpid = process.ppid;
+  if (!Number.isInteger(initialPpid) || initialPpid <= 1) return;
+
+  parentWatchdogTimer = setInterval(() => {
+    if (process.stdin.destroyed || process.stdin.readableEnded || isParentDead(initialPpid)) {
+      void shutdown("parent_gone", 0);
+    }
+  }, 3000);
+  parentWatchdogTimer.unref?.();
+}
+
+function stopParentWatchdog(): void {
+  if (parentWatchdogTimer) {
+    clearInterval(parentWatchdogTimer);
+    parentWatchdogTimer = null;
+  }
+}
+
+async function shutdown(reason: string, exitCode = 0): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  stopParentWatchdog();
+
+  // Hard exit deadline so hung plugin unload hooks or dead CDP sockets can never leave zombies
+  const hardExit = setTimeout(() => process.exit(exitCode), 2500);
+  hardExit.unref?.();
+
+  try {
+    agentState.reportTransportClosed();
+    await Promise.race([
+      cleanup(),
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 2000);
+        t.unref?.();
+      }),
+    ]);
+  } catch {
+    // exiting anyway
+  } finally {
+    clearTimeout(hardExit);
+    process.exit(exitCode);
   }
 }
 
@@ -2250,21 +2356,30 @@ process.on("uncaughtException", (err) => {
   _consecutiveUncaught++;
   if (_consecutiveUncaughtResetTimer) clearTimeout(_consecutiveUncaughtResetTimer);
   _consecutiveUncaughtResetTimer = setTimeout(() => { _consecutiveUncaught = 0; }, 10_000);
+  _consecutiveUncaughtResetTimer.unref?.();
   if (_consecutiveUncaught >= 3) {
     process.stderr.write(`[Weavetab] 3 consecutive uncaught exceptions — exiting to prevent runaway failure.\n`);
     process.exit(1);
   }
 });
 
-process.on("SIGINT", async () => {
-  await cleanup();
-  process.exit(0);
+process.on("SIGINT", () => {
+  void shutdown("SIGINT", 0);
 });
 
-process.on("SIGTERM", async () => {
-  await cleanup();
-  process.exit(0);
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM", 0);
 });
+
+process.on("SIGHUP", () => {
+  void shutdown("SIGHUP", 0);
+});
+
+if (process.platform === "win32") {
+  process.on("SIGBREAK", () => {
+    void shutdown("SIGBREAK", 0);
+  });
+}
 
 process.on("exit", () => {
   // We purposefully do NOT clear the lock file here.

@@ -105,7 +105,7 @@ $$\text{Reliability}_{t} = 0.85 \times \text{Reliability}_{t-1} + 0.15 \times (\
 All site memory operations use a single tool. Use `action: "get"` to read a site profile, `action: "learn"` to register a workflow, `action: "record_execution"` to update reliability scores, and `action: "record_quirk"` to store site quirks:
 
 ```json
-{ "tool": "get", "origin": "https://github.com" }
+{ "action": "get", "origin": "https://github.com" }
 ```
 
 ```json

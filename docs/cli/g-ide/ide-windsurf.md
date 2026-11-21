@@ -9,7 +9,7 @@ slug: ide-windsurf
 
 # Windsurf Integration
 
-Add to `~/.windsurf/mcp_config.json`:
+Add to `~/.codeium/windsurf/mcp_config.json`:
 
 ```json
 {

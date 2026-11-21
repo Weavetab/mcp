@@ -25,7 +25,7 @@ export function toPromptResult(r: PromptReturn) {
   }
   if (!r || !Array.isArray(r.messages) || !r.messages.length) throw new Error("prompt returned no messages");
   return {
-    ...(r.description ? { description: r.description } : {}),
+    ...(r.description ? { description: scrub(r.description) } : {}),
     messages: r.messages.map((m) => ({
       role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
       content: { type: "text" as const, text: scrub(typeof m.content === "string" ? m.content : m.content?.text ?? "") },
@@ -35,7 +35,12 @@ export function toPromptResult(r: PromptReturn) {
 
 export function toReadResult(r: ResourceReturn, uri: string, mime?: string) {
   const one = (c: { uri?: string; text?: string; blob?: string; mimeType?: string }) => {
-    const base = { uri: c.uri ?? uri, mimeType: c.mimeType ?? mime };
+    const finalUri = c.uri ?? uri;
+    const sch = schemeOf(finalUri);
+    if (!sch || BLOCKED.has(sch)) {
+      throw new Error(`resource uri "${finalUri}" uses a blocked or invalid scheme`);
+    }
+    const base = { uri: finalUri, mimeType: c.mimeType ?? mime };
     if (typeof c.text === "string") return { ...base, mimeType: base.mimeType ?? "text/plain", text: scrub(c.text) };
     if (typeof c.blob === "string") return { ...base, blob: c.blob };
     throw new Error("resource content needs text or blob");
@@ -109,7 +114,7 @@ export function createSurface(
       return false;
     }
 
-    const meta = { title: r.title, description: r.description, mimeType: r.mimeType };
+    const meta = { title: r.title, description: r.description ? scrub(r.description) : r.description, mimeType: r.mimeType };
     const ctx = () => ctxFor(owner);
     const guard = async <T>(fn: () => Promise<T> | T) => {
       try {
@@ -138,7 +143,14 @@ export function createSurface(
       }
       const complete = r.complete
         ? Object.fromEntries(
-            Object.entries(r.complete).map(([k, fn]) => [k, async (v: string) => (await fn(v)).slice(0, 100)])
+            Object.entries(r.complete).map(([k, fn]) => [
+              k,
+              async (v: string) =>
+                guard(async () => {
+                  const res = await fn(v);
+                  return Array.isArray(res) ? res.slice(0, 100) : [];
+                }),
+            ])
           )
         : undefined;
       const tpl = new ResourceTemplate(r.uriTemplate as string, {
@@ -165,7 +177,9 @@ export function createSurface(
     const all = owned.get(owner) ?? [];
     const gone = all.filter((o) => (!kind || o.kind === kind) && (!key || o.key === key));
     for (const o of gone) o.remove();
-    owned.set(owner, all.filter((o) => !gone.includes(o)));
+    const rem = all.filter((o) => !gone.includes(o));
+    if (rem.length > 0) owned.set(owner, rem);
+    else owned.delete(owner);
     return gone.length > 0;
   }
 

@@ -1,10 +1,4 @@
 import { logDebug } from "../audit/logger.js";
-/**
- * Weavetab — config/loader.ts
- * Enterprise-grade config resolution with multi-source merge, per-field validation,
- * broken config recovery, and real-browser isolation checks.
- * Weavetab by fy2ne
- */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -35,7 +29,7 @@ export interface Config {
   attachPort: number;
   agentId: string;
   telemetry: boolean;
-  
+
   browserPath: string;
   browserType: BrowserEngine;
   headless: boolean;
@@ -44,15 +38,15 @@ export interface Config {
   profileDir: string;
   cookies: boolean;
   syncDataAcrossBrowsers: boolean;
-  
+
   apps?: Record<string, ElectronAppConfig>;
   electron?: Record<string, ElectronAppConfig>;
-  
+
   role: Role;
   block: string[];
   allow: string[];
   policies: PolicyEntry[];
-  
+
   sessionTimeout: number;
   navigationTimeout: number;
   idleTimeout: number;
@@ -60,23 +54,17 @@ export interface Config {
   maxTabs: number;
   maxActionsPerMinute: number;
   refCacheTtlMs: number;
-  
+
   downloadDir: string;
   pdfDir: string;
   snapshotDir: string;
   recordingDir: string;
-  designDir: string;
-  
+
   devMode: DevModeConfig;
-  
+
   proxy?: string;
 }
 
-// ─── Main Config Interface ─────────────────────────────────────────────────────────
-
-// ─── Directory constants ───────────────────────────────────────────────────────
-
-// Platform detection (used throughout the file)
 export const PLATFORM = os.platform();
 
 const HOME = os.homedir();
@@ -84,10 +72,6 @@ const lowerGlobal = path.join(HOME, ".weavetab");
 const upperGlobal = path.join(HOME, ".Weavetab");
 export const GLOBAL_CONFIG_DIR = fs.existsSync(lowerGlobal) ? lowerGlobal : (fs.existsSync(upperGlobal) ? upperGlobal : lowerGlobal);
 export const GLOBAL_CONFIG_PATH = path.join(GLOBAL_CONFIG_DIR, "config.json");
-const OLD_SYSTEM_PATH = path.join(GLOBAL_CONFIG_DIR, "system.json");
-const OLD_UI_PATH     = path.join(GLOBAL_CONFIG_DIR, "ui_manifest.json");
-
-// ─── Defaults ─────────────────────────────────────────────────────────────────
 
 export const DEFAULT_CONFIG: Config = {
   mode: "session",
@@ -95,7 +79,7 @@ export const DEFAULT_CONFIG: Config = {
   attachPort: 0,
   agentId: process.env.WT_AGENT_ID || crypto.randomUUID(),
   telemetry: false,
-  
+
   browserPath: "auto",
   browserType: "chromium",
   headless: false,
@@ -104,15 +88,15 @@ export const DEFAULT_CONFIG: Config = {
   profileDir: "",
   cookies: false,
   syncDataAcrossBrowsers: false,
-  
+
   apps: undefined,
   electron: undefined,
-  
+
   role: "operator",
   block: ["*.bank.*", "paypal.com"],
   allow: [],
   policies: [],
-  
+
   sessionTimeout: 3600,
   navigationTimeout: 30000,
   idleTimeout: 60000,
@@ -120,28 +104,27 @@ export const DEFAULT_CONFIG: Config = {
   maxTabs: 10,
   maxActionsPerMinute: 60,
   refCacheTtlMs: 30_000,
-  
+
   downloadDir: "",
   pdfDir: "",
   snapshotDir: "",
   recordingDir: "",
-  designDir: "",
-  
+
   devMode: false,
 
   proxy: undefined,
 };
 
-// ─── Config change listeners ───────────────────────────────────────────────────
-
 export type OnConfigChange = (newConfig: Config) => void;
 const listeners: OnConfigChange[] = [];
 
-export function onConfigChange(cb: OnConfigChange) {
+export function onConfigChange(cb: OnConfigChange): () => void {
   listeners.push(cb);
+  return () => {
+    const idx = listeners.indexOf(cb);
+    if (idx !== -1) listeners.splice(idx, 1);
+  };
 }
-
-// ─── Directory helpers ─────────────────────────────────────────────────────────
 
 function ensureConfigDir(dir: string): void {
   if (!fs.existsSync(dir)) {
@@ -149,18 +132,10 @@ function ensureConfigDir(dir: string): void {
   }
 }
 
-// ─── Config Migration ─────────────────────────────────────────────────────────────
-
-/**
- * Detects if a config object is in the old sectioned format.
- */
 function isSectionedConfig(raw: Record<string, unknown>): boolean {
   return "general" in raw || "browser" in raw || "security" in raw || "performance" in raw;
 }
 
-/**
- * Migrates old sectioned config to new simplified flat format.
- */
 export function migrateToSimple(sectioned: any): Config {
   return {
     mode: sectioned.general?.mode || "session",
@@ -168,7 +143,7 @@ export function migrateToSimple(sectioned: any): Config {
     attachPort: sectioned.general?.attachPort || 0,
     agentId: sectioned.general?.agentId || crypto.randomUUID(),
     telemetry: sectioned.general?.telemetry || false,
-    
+
     browserPath: sectioned.browser?.path || "auto",
     browserType: sectioned.browser?.type || "chromium",
     headless: sectioned.browser?.headless ?? false,
@@ -176,38 +151,35 @@ export function migrateToSimple(sectioned: any): Config {
     browserFlags: sectioned.browser?.flags || [],
     profileDir: sectioned.browser?.profileDir || "",
     cookies: sectioned.browser?.cookies || false,
-    
+
     apps: sectioned.apps || sectioned.electron || undefined,
     electron: sectioned.apps || sectioned.electron || undefined,
-    
-    role: sectioned.security?.role || "admin",
+
+    role: sectioned.security?.role || "operator",
     block: sectioned.security?.block || ["*.bank.*", "paypal.com"],
     allow: sectioned.security?.allow || [],
     policies: sectioned.security?.policies || [],
-    
+
     sessionTimeout: sectioned.performance?.timeouts?.session || 3600,
     navigationTimeout: sectioned.performance?.timeouts?.navigation || 30000,
     idleTimeout: sectioned.performance?.timeouts?.idle || 60000,
-    actionabilityTimeoutMs: sectioned.performance?.timeouts?.actionability || 500,
+    actionabilityTimeoutMs: sectioned.performance?.timeouts?.actionability || 300,
     maxTabs: sectioned.performance?.limits?.maxTabs || 10,
     maxActionsPerMinute: sectioned.performance?.limits?.maxActionsPerMinute || 60,
     refCacheTtlMs: sectioned.performance?.cache?.refCacheTtlMs || 30_000,
-    
+
     downloadDir: sectioned.paths?.downloads || "",
     pdfDir: sectioned.paths?.pdfs || "",
     snapshotDir: sectioned.paths?.snapshots || "",
     recordingDir: sectioned.paths?.recordings || "",
-    designDir: sectioned.paths?.designs || "",
-    
+
     devMode: typeof sectioned.devMode === "boolean" ? sectioned.devMode : sectioned.devMode?.enabled || false,
-    
+
     syncDataAcrossBrowsers: sectioned.general?.syncDataAcrossBrowsers || false,
-    
+
     proxy: sectioned.network?.proxy,
   };
 }
-
-// ─── Per-field validation ──────────────────────────────────────────────────────
 
 function validateField<T>(
   fieldName: string,
@@ -227,51 +199,84 @@ function validateField<T>(
   return value;
 }
 
-const isStr  = (v: unknown): v is string  => typeof v === "string";
-const isBool = (v: unknown): v is boolean => typeof v === "boolean";
-const isNum  = (v: unknown): v is number  => typeof v === "number" && isFinite(v);
+const isStr  = (v: unknown): v is string    => typeof v === "string";
+const isBool = (v: unknown): v is boolean   => typeof v === "boolean";
+const isNum  = (v: unknown): v is number    => typeof v === "number" && isFinite(v);
 const isArr  = (v: unknown): v is unknown[] => Array.isArray(v);
 
+const VALID_POLICY_MODES = ["allow", "deny", "read-only", "audit-only", "audit"] as const;
+
+function validatePolicies(rawPolicies: unknown): PolicyEntry[] {
+  if (!Array.isArray(rawPolicies)) return DEFAULT_CONFIG.policies;
+  const out: PolicyEntry[] = [];
+  for (const p of rawPolicies) {
+    if (
+      p &&
+      typeof p === "object" &&
+      typeof (p as any).pattern === "string" &&
+      (p as any).pattern.trim().length > 0 &&
+      (VALID_POLICY_MODES as readonly string[]).includes((p as any).mode)
+    ) {
+      const normalizedMode: PolicyMode = (p as any).mode === "audit" ? "audit-only" : (p as any).mode;
+      out.push({
+        pattern: (p as any).pattern.trim(),
+        mode: normalizedMode,
+      });
+    } else {
+      logDebug(`[Weavetab Config] [WARN] Skipping invalid policy entry: ${JSON.stringify(p)}`);
+    }
+  }
+  return out;
+}
+
+function writeAtomicJson(targetPath: string, data: unknown): void {
+  const dir = path.dirname(targetPath);
+  ensureConfigDir(dir);
+  const tmpFile = path.join(dir, `config.tmp.${process.pid}.${crypto.randomBytes(4).toString("hex")}.json`);
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), "utf-8");
+    fs.renameSync(tmpFile, targetPath);
+  } catch (e) {
+    try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    throw e;
+  }
+}
+
 function validateConfig(raw: Record<string, unknown>): Config {
-  // Detect old sectioned format and migrate to simplified format
   if (isSectionedConfig(raw)) {
     logDebug("[Weavetab Config] [INFO] Detected old sectioned config format, migrating to simplified structure...");
-    const simple = migrateToSimple(raw);
-    // Save migrated config
+    const migrated = migrateToSimple(raw);
+    const validated = validateConfigInternal(migrated as unknown as Record<string, unknown>);
     try {
-      fs.writeFileSync(GLOBAL_CONFIG_PATH, JSON.stringify(simple, null, 2));
+      writeAtomicJson(GLOBAL_CONFIG_PATH, validated);
       logDebug(`[Weavetab Config] [OK] Migrated config saved to ${GLOBAL_CONFIG_PATH}`);
     } catch (e) {
       logDebug("[Weavetab Config] [WARN] Failed to save migrated config:", e);
     }
-    return simple;
+    return validated;
   }
 
-  // Validate simplified config
   return validateConfigInternal(raw);
 }
 
 export function validateConfigInternal(raw: Record<string, unknown>): Config {
   const d = DEFAULT_CONFIG;
-  const VALID_MODES    = ["session", "attach"] as const;
-  const VALID_ENGINES  = ["chromium", "firefox", "webkit"] as const;
-  const VALID_ROLES    = ["admin", "operator", "viewer", "automation", "system"] as const;
+  const VALID_MODES   = ["session", "attach"] as const;
+  const VALID_ENGINES = ["chromium", "firefox", "webkit"] as const;
+  const VALID_ROLES   = ["admin", "operator", "viewer", "automation", "system"] as const;
   const mode = validateField("mode", raw.mode, isStr, d.mode, v => (VALID_MODES as readonly string[]).includes(v)) as Config["mode"];
 
-  // Path validation helpers
   function safePathField(field: string, value: unknown): string {
     if (!isStr(value) || !value.trim()) return "";
-    const raw = value.trim();
-    // Path traversal guard — check BEFORE resolving
-    if (raw.includes("..") || raw.includes("~")) {
-      logDebug(`[Weavetab Config] [WARN] Suspicious path in "${field}": "${raw}". Resetting to default.`);
+    const trimmed = value.trim();
+    const segments = trimmed.split(/[\\/]/);
+    if (segments.includes("..") || trimmed === "~" || trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+      logDebug(`[Weavetab Config] [WARN] Suspicious path in "${field}": "${trimmed}". Resetting to default.`);
       return "";
     }
-    const resolved = path.resolve(raw);
-    return resolved;
+    return path.resolve(trimmed);
   }
 
-  // Validate downloadDir — auto-create if missing
   const rawDownloadDir = safePathField("downloadDir", raw.downloadDir);
   let downloadDir = rawDownloadDir;
   if (downloadDir) {
@@ -279,99 +284,102 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
       try {
         fs.mkdirSync(downloadDir, { recursive: true });
         logDebug(`[Weavetab Config] [OK] Created custom download directory: ${downloadDir}`);
-      } catch (e) {
+      } catch {
         logDebug(`[Weavetab Config] [ERROR] Failed to create downloadDir "${downloadDir}". Resetting to default.`);
         downloadDir = "";
       }
     }
   }
 
-  // Validate browser path — check file exists if not "auto"
   const rawBrowser = validateField("browserPath", raw.browserPath ?? "auto", isStr, d.browserPath);
   let browserPath = rawBrowser;
   if (browserPath && browserPath !== "auto") {
-    // Only verify it exists if it looks like a path (contains slashes).
-    // Otherwise it might be a browser name like "edge" or "brave".
-    if ((browserPath.includes('/') || browserPath.includes('\\')) && !fs.existsSync(browserPath)) {
+    if ((browserPath.includes("/") || browserPath.includes("\\")) && !fs.existsSync(browserPath)) {
       logDebug(`[Weavetab Config] [WARN] browser path "${browserPath}" does not exist. Resetting to "auto".`);
       browserPath = "auto";
     }
   }
 
-  // Validate profileDir — path safety only (real-browser guard is in profiles.ts)
   const profileDir = safePathField("profileDir", raw.profileDir);
 
-  // Validate proxy — resolve env var and reject plaintext credentials
-  let proxy = raw.proxy as string | undefined;
-  if (proxy === "$WT_PROXY_URL") {
+  let proxy: string | undefined;
+  const rawProxy = isStr(raw.proxy) ? raw.proxy.trim() : "";
+  if (rawProxy && rawProxy !== "$WT_PROXY_URL") {
+    if (/:\/\/[^:]+:[^@]+@/.test(rawProxy)) {
+      logDebug(`[Weavetab Config] [WARN] Proxy contains literal credentials (://user:pass@). This is a security risk. Use an environment variable instead. Ignoring proxy.`);
+      proxy = undefined;
+    } else {
+      proxy = rawProxy;
+    }
+  } else if (rawProxy === "$WT_PROXY_URL" || (!rawProxy && process.env.WT_PROXY_URL)) {
     proxy = process.env.WT_PROXY_URL;
   }
-  if (proxy && /:\/\/[^:]+:[^@]+@/.test(proxy)) {
-    logDebug(`[Weavetab Config] [WARN] Proxy contains literal credentials (://user:pass@). This is a security risk. Use an environment variable instead. Ignoring proxy.`);
-    proxy = undefined;
-  }
 
-  // Validate apps / electron apps mapping
   let electron: Record<string, ElectronAppConfig> | undefined = undefined;
-  const rawApps = raw.apps || raw.electron;
-  if (rawApps && typeof rawApps === "object" && !Array.isArray(rawApps)) {
-    const rawMap = rawApps as Record<string, unknown>;
+  const appSources = [raw.electron, raw.apps].filter(
+    (src): src is Record<string, unknown> => Boolean(src && typeof src === "object" && !Array.isArray(src))
+  );
+  if (appSources.length > 0) {
     const validatedMap: Record<string, ElectronAppConfig> = {};
-    for (const [rawKey, rawVal] of Object.entries(rawMap)) {
-      const sanitizedKey = rawKey.trim();
-      if (!/^[a-zA-Z0-9_-]+$/.test(sanitizedKey)) {
-        logDebug(`[Weavetab Config] [WARN] Invalid app name "${rawKey}". Must be alphanumeric, dashes, or underscores.`);
-        continue;
-      }
-      if (typeof rawVal === "string") {
-        const strVal = rawVal.trim();
-        if (/^\d+$/.test(strVal)) {
-          const portNum = parseInt(strVal, 10);
-          if (portNum > 0 && portNum <= 65535) {
-            validatedMap[sanitizedKey] = { port: portNum };
+    for (const rawMap of appSources) {
+      for (const [rawKey, rawVal] of Object.entries(rawMap)) {
+        const sanitizedKey = rawKey.trim();
+        if (!/^[a-zA-Z0-9_-]+$/.test(sanitizedKey)) {
+          logDebug(`[Weavetab Config] [WARN] Invalid app name "${rawKey}". Must be alphanumeric, dashes, or underscores.`);
+          continue;
+        }
+        let parsedCfg: ElectronAppConfig | null = null;
+        if (typeof rawVal === "string") {
+          const strVal = rawVal.trim();
+          if (!strVal || strVal.toLowerCase() === "auto") {
+            logDebug(`[Weavetab Config] [WARN] Skipping placeholder path "${strVal}" for app "${sanitizedKey}".`);
+            continue;
+          } else if (/^\d+$/.test(strVal)) {
+            const portNum = parseInt(strVal, 10);
+            if (portNum > 0 && portNum <= 65535) parsedCfg = { port: portNum };
+          } else if (strVal.startsWith("http://") || strVal.startsWith("https://") || strVal.startsWith("ws://") || strVal.startsWith("wss://")) {
+            parsedCfg = { url: strVal };
+            try {
+              const parsedUrl = new URL(strVal);
+              if (parsedUrl.port) {
+                const p = parseInt(parsedUrl.port, 10);
+                if (p > 0 && p <= 65535) parsedCfg.port = p;
+              }
+            } catch { /* ignore */ }
+          } else {
+            const safePath = safePathField(`apps.${sanitizedKey}`, strVal);
+            if (safePath) parsedCfg = { path: safePath };
           }
-        } else if (strVal.startsWith("http://") || strVal.startsWith("https://") || strVal.startsWith("ws://") || strVal.startsWith("wss://")) {
-          const cfg: ElectronAppConfig = { url: strVal };
-          try {
-            const parsedUrl = new URL(strVal);
-            if (parsedUrl.port) {
-              const p = parseInt(parsedUrl.port, 10);
-              if (p > 0 && p <= 65535) cfg.port = p;
-            }
-          } catch { /* ignore */ }
-          validatedMap[sanitizedKey] = cfg;
-        } else {
-          const safePath = safePathField(`apps.${sanitizedKey}`, strVal);
-          if (safePath) {
-            validatedMap[sanitizedKey] = { path: safePath };
+        } else if (typeof rawVal === "number" && Number.isFinite(rawVal) && rawVal > 0 && rawVal <= 65535) {
+          parsedCfg = { port: rawVal };
+        } else if (typeof rawVal === "object" && rawVal !== null && !Array.isArray(rawVal)) {
+          const objVal = rawVal as Record<string, unknown>;
+          const appCfg: ElectronAppConfig = {};
+          if (typeof objVal.path === "string" && objVal.path.trim() && objVal.path.trim().toLowerCase() !== "auto") {
+            const safePath = safePathField(`apps.${sanitizedKey}.path`, objVal.path);
+            if (safePath) appCfg.path = safePath;
+          }
+          if (typeof objVal.port === "number" && Number.isFinite(objVal.port) && objVal.port > 0 && objVal.port <= 65535) {
+            appCfg.port = objVal.port;
+          } else if (typeof objVal.port === "string" && /^\d+$/.test((objVal.port as string).trim())) {
+            const p = parseInt((objVal.port as string).trim(), 10);
+            if (p > 0 && p <= 65535) appCfg.port = p;
+          }
+          if (typeof objVal.url === "string" && objVal.url.trim()) {
+            appCfg.url = objVal.url.trim();
+          }
+          if (Array.isArray(objVal.args)) {
+            appCfg.args = (objVal.args as unknown[]).filter(isStr);
+          }
+          if (typeof objVal.profileDir === "string" && objVal.profileDir.trim()) {
+            appCfg.profileDir = safePathField(`apps.${sanitizedKey}.profileDir`, objVal.profileDir);
+          }
+          if (appCfg.path || appCfg.port || appCfg.url || appCfg.profileDir || (appCfg.args && appCfg.args.length > 0)) {
+            parsedCfg = appCfg;
           }
         }
-      } else if (typeof rawVal === "number" && Number.isFinite(rawVal) && rawVal > 0 && rawVal <= 65535) {
-        validatedMap[sanitizedKey] = { port: rawVal };
-      } else if (typeof rawVal === "object" && rawVal !== null && !Array.isArray(rawVal)) {
-        const objVal = rawVal as Record<string, unknown>;
-        const appCfg: ElectronAppConfig = {};
-        if (typeof objVal.path === "string" && objVal.path.trim()) {
-          const safePath = safePathField(`apps.${sanitizedKey}.path`, objVal.path);
-          if (safePath) appCfg.path = safePath;
-        }
-        if (typeof objVal.port === "number" && Number.isFinite(objVal.port) && objVal.port > 0 && objVal.port <= 65535) {
-          appCfg.port = objVal.port;
-        } else if (typeof objVal.port === "string" && /^\d+$/.test((objVal.port as string).trim())) {
-          const p = parseInt((objVal.port as string).trim(), 10);
-          if (p > 0 && p <= 65535) appCfg.port = p;
-        }
-        if (typeof objVal.url === "string" && objVal.url.trim()) {
-          appCfg.url = objVal.url.trim();
-        }
-        if (Array.isArray(objVal.args)) {
-          appCfg.args = (objVal.args as unknown[]).filter(isStr);
-        }
-        if (typeof objVal.profileDir === "string" && objVal.profileDir.trim()) {
-          appCfg.profileDir = safePathField(`apps.${sanitizedKey}.profileDir`, objVal.profileDir);
-        }
-        if (appCfg.path || appCfg.port || appCfg.url) {
-          validatedMap[sanitizedKey] = appCfg;
+        if (parsedCfg) {
+          validatedMap[sanitizedKey] = { ...(validatedMap[sanitizedKey] || {}), ...parsedCfg };
         }
       }
     }
@@ -382,69 +390,70 @@ export function validateConfigInternal(raw: Record<string, unknown>): Config {
 
   return {
     mode,
-    session:             validateField("session", raw.session, isStr, d.session),
-    attachPort:          mode !== "attach" ? 0 : validateField("attachPort", raw.attachPort, isNum, d.attachPort, v => v >= 0 && v <= 65535),
-    agentId:             isStr(raw.agentId) ? raw.agentId : d.agentId,
-    telemetry:           validateField("telemetry", raw.telemetry, isBool, d.telemetry),
-    
+    session:                validateField("session", raw.session, isStr, d.session),
+    attachPort:             mode !== "attach" ? 0 : validateField("attachPort", raw.attachPort, isNum, d.attachPort, v => v >= 0 && v <= 65535),
+    agentId:                isStr(raw.agentId) ? raw.agentId : d.agentId,
+    telemetry:              validateField("telemetry", raw.telemetry, isBool, d.telemetry),
+
     browserPath,
-    browserType:         validateField("browserType", raw.browserType, isStr, d.browserType, v => (VALID_ENGINES as readonly string[]).includes(v)) as BrowserEngine,
-    headless:            validateField("headless", raw.headless, isBool, d.headless),
-    extension:           validateField("extension", raw.extension, isBool, d.extension),
-    browserFlags:        isArr(raw.browserFlags) ? (raw.browserFlags as unknown[]).filter(isStr) : d.browserFlags,
+    browserType:            validateField("browserType", raw.browserType, isStr, d.browserType, v => (VALID_ENGINES as readonly string[]).includes(v)) as BrowserEngine,
+    headless:               validateField("headless", raw.headless, isBool, d.headless),
+    extension:              validateField("extension", raw.extension, isBool, d.extension),
+    browserFlags:           isArr(raw.browserFlags) ? (raw.browserFlags as unknown[]).filter(isStr) : d.browserFlags,
     profileDir,
-    cookies:             validateField("cookies", raw.cookies, isBool, d.cookies),
-    
-    apps:                electron,
+    cookies:                validateField("cookies", raw.cookies, isBool, d.cookies),
+
+    apps:                   electron,
     electron,
-    
-    role:                validateField("role", raw.role, isStr, d.role, v => (VALID_ROLES as readonly string[]).includes(v)) as Role,
-    block:               isArr(raw.block)  ? (raw.block  as unknown[]).filter(isStr) : d.block,
-    allow:               isArr(raw.allow)  ? (raw.allow  as unknown[]).filter(isStr) : d.allow,
-    policies:            isArr(raw.policies) ? raw.policies as PolicyEntry[] : d.policies,
-    
-    sessionTimeout:      validateField("sessionTimeout", raw.sessionTimeout, isNum, d.sessionTimeout, v => v >= 60 && v <= 86400),
-    navigationTimeout:   validateField("navigationTimeout", raw.navigationTimeout, isNum, d.navigationTimeout, v => v >= 1000 && v <= 120000),
-    idleTimeout:         validateField("idleTimeout", raw.idleTimeout, isNum, d.idleTimeout, v => v >= 5000),
+
+    role:                   validateField("role", raw.role, isStr, d.role, v => (VALID_ROLES as readonly string[]).includes(v)) as Role,
+    block:                  isArr(raw.block) ? (raw.block as unknown[]).filter(isStr) : d.block,
+    allow:                  isArr(raw.allow) ? (raw.allow as unknown[]).filter(isStr) : d.allow,
+    policies:               validatePolicies(raw.policies),
+
+    sessionTimeout:         validateField("sessionTimeout", raw.sessionTimeout, isNum, d.sessionTimeout, v => v >= 60 && v <= 86400),
+    navigationTimeout:      validateField("navigationTimeout", raw.navigationTimeout, isNum, d.navigationTimeout, v => v >= 1000 && v <= 120000),
+    idleTimeout:            validateField("idleTimeout", raw.idleTimeout, isNum, d.idleTimeout, v => v >= 5000),
     actionabilityTimeoutMs: validateField("actionabilityTimeoutMs", raw.actionabilityTimeoutMs, isNum, d.actionabilityTimeoutMs, v => v >= 50 && v <= 15000),
-    maxTabs:             validateField("maxTabs", raw.maxTabs, isNum, d.maxTabs, v => v >= 1 && v <= 100),
-    maxActionsPerMinute: validateField("maxActionsPerMinute", raw.maxActionsPerMinute, isNum, d.maxActionsPerMinute, v => v >= 1 && v <= 600),
-    refCacheTtlMs:       validateField("refCacheTtlMs", raw.refCacheTtlMs, isNum, d.refCacheTtlMs, v => v >= 1000 && v <= 300_000),
-    
+    maxTabs:                validateField("maxTabs", raw.maxTabs, isNum, d.maxTabs, v => v >= 1 && v <= 100),
+    maxActionsPerMinute:    validateField("maxActionsPerMinute", raw.maxActionsPerMinute, isNum, d.maxActionsPerMinute, v => v >= 1 && v <= 600),
+    refCacheTtlMs:          validateField("refCacheTtlMs", raw.refCacheTtlMs, isNum, d.refCacheTtlMs, v => v >= 1000 && v <= 300_000),
+
     downloadDir,
-    pdfDir:              safePathField("pdfDir", raw.pdfDir),
-    snapshotDir:         safePathField("snapshotDir", raw.snapshotDir),
-    recordingDir:        safePathField("recordingDir", raw.recordingDir),
-    designDir:           safePathField("designDir", raw.designDir),
-    
-    devMode:             isBool(raw.devMode) ? raw.devMode : d.devMode,
-    
+    pdfDir:                 safePathField("pdfDir", raw.pdfDir),
+    snapshotDir:            safePathField("snapshotDir", raw.snapshotDir),
+    recordingDir:           safePathField("recordingDir", raw.recordingDir),
+
+    devMode:                isBool(raw.devMode) ? raw.devMode : d.devMode,
+
     syncDataAcrossBrowsers: validateField("syncDataAcrossBrowsers", raw.syncDataAcrossBrowsers, isBool, d.syncDataAcrossBrowsers),
-    
-    proxy:               isStr(proxy) ? proxy : d.proxy,
+
+    proxy:                  isStr(proxy) ? proxy : d.proxy,
   };
 }
 
-// ─── Safe JSON reader with broken-file recovery ────────────────────────────────
-
-type ReadResult = 
+type ReadResult =
   | { status: "ok";      data: Record<string, unknown>; file: string }
   | { status: "missing"; file: string }
   | { status: "broken";  file: string };
 
-function safeReadJson(file: string): ReadResult {
+export function safeReadJson(file: string): ReadResult {
   if (!fs.existsSync(file)) return { status: "missing", file };
   try {
-    let raw = fs.readFileSync(file, "utf-8").trim();
-    if (!raw) return { status: "missing", file }; // empty file = treat as missing (atomic write race)
+    const raw = fs.readFileSync(file, "utf-8").trim();
+    if (!raw) return { status: "missing", file };
 
-    // Auto-fix unescaped Windows paths in JSON before parsing
-    raw = raw.replace(/"([a-zA-Z]:\\[^"]*)"/g, (match, p1) => {
-      const normalized = p1.replace(/\\\\/g, '\\').replace(/\\/g, '\\\\');
-      return `"${normalized}"`;
-    });
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      const fixed = raw.replace(/"([a-zA-Z]:\\[^"]*)"/g, (_match, p1) => {
+        const normalized = p1.replace(/\\\\/g, "\\").replace(/\\/g, "\\\\");
+        return `"${normalized}"`;
+      });
+      data = JSON.parse(fixed);
+    }
 
-    const data = JSON.parse(raw);
     if (typeof data !== "object" || Array.isArray(data) || data === null) {
       return { status: "broken", file };
     }
@@ -454,14 +463,13 @@ function safeReadJson(file: string): ReadResult {
   }
 }
 
-/** Renames a broken config file to config.broken.<timestamp>.json for forensics. */
 const _lastQuarantine = new Map<string, number>();
-const QUARANTINE_COOLDOWN_MS = 5_000; // min 5s between quarantines of same file
+const QUARANTINE_COOLDOWN_MS = 5_000;
 
 function quarantineBrokenConfig(file: string): void {
   const now = Date.now();
   const last = _lastQuarantine.get(file) || 0;
-  if (now - last < QUARANTINE_COOLDOWN_MS) return; // too soon, skip
+  if (now - last < QUARANTINE_COOLDOWN_MS) return;
   _lastQuarantine.set(file, now);
 
   const dir  = path.dirname(file);
@@ -471,7 +479,6 @@ function quarantineBrokenConfig(file: string): void {
     fs.renameSync(file, dest);
     logDebug(`[Weavetab Config] [WARN] Broken config quarantined → ${dest}`);
 
-    // Limit quarantine folder size (keep last 5 broken files)
     const brokenFiles = fs.readdirSync(dir)
       .filter(f => f.startsWith("config.broken.") && f.endsWith(".json"))
       .map(f => ({ name: f, time: fs.statSync(path.join(dir, f)).mtimeMs }))
@@ -487,104 +494,59 @@ function quarantineBrokenConfig(file: string): void {
   }
 }
 
-// ─── Multi-source merge pipeline ──────────────────────────────────────────────
-
-/**
- * Priority: Global (user) → Built-in defaults
- * 
- * Each field is individually merged from global config.
- * If a config file is broken JSON it is quarantined and defaults are used.
- */
-export function findProjectDir(startDir: string = process.cwd()): string | undefined {
-  return undefined;
-}
-
 function resolveConfigMerge(): { config: Config; activeDir: string } {
   const globalDir  = GLOBAL_CONFIG_DIR;
   const globalFile = GLOBAL_CONFIG_PATH;
 
-  // Ensure global dir always exists
   ensureConfigDir(globalDir);
 
   const globalResult = safeReadJson(globalFile);
 
-  // Recover from broken files
   if (globalResult.status === "broken") {
     logDebug(`[Weavetab Config] [ERROR] Global config at "${globalFile}" is broken JSON!`);
     quarantineBrokenConfig(globalFile);
   }
 
   const hasGlobal = globalResult.status === "ok";
+  const activeDir = globalDir;
 
-  // Check for project config
-  const projectDir = findProjectDir();
-  let projectFile: string | undefined;
-  let projectResult: ReadResult | undefined;
-  
-  if (projectDir) {
-    projectFile = path.join(projectDir, "config.json");
-    if (fs.existsSync(projectFile)) {
-      projectResult = safeReadJson(projectFile);
-      if (projectResult.status === "broken") {
-        logDebug(`[Weavetab Config] [ERROR] Project config at "${projectFile}" is broken JSON!`);
-        quarantineBrokenConfig(projectFile);
-      }
-    }
-  }
-
-  const hasProject = projectResult && projectResult.status === "ok";
-  const activeDir = projectDir && hasProject ? projectDir : globalDir;
-
-  // Log the resolution decision
-  if (hasProject) {
-    logDebug(`[Weavetab Config] [OK] Loaded project config: ${projectFile} (overrides global)`);
-    logDebug(`[Weavetab Config] [OK] Active directory: ${activeDir}`);
-  } else if (hasGlobal) {
-    logDebug(`[Weavetab Config] [OK] Using global config only: ${globalFile}`);
+  if (hasGlobal) {
+    logDebug(`[Weavetab Config] [OK] Using global config: ${globalFile}`);
     logDebug(`[Weavetab Config] [OK] Active directory: ${activeDir}`);
   } else {
     logDebug(`[Weavetab Config] [WARN] No config found — using built-in defaults. Run: weavetab config`);
     logDebug(`[Weavetab Config] [OK] Active directory: ${activeDir}`);
-    // Write a starter global config so user isn't surprised
     ensureConfigDir(globalDir);
     if (!fs.existsSync(globalFile)) {
       try {
-        fs.writeFileSync(globalFile, JSON.stringify(DEFAULT_CONFIG, null, 2), "utf-8");
+        writeAtomicJson(globalFile, DEFAULT_CONFIG);
         logDebug(`[Weavetab Config] [OK] Created starter config at: ${globalFile}`);
       } catch { /* non-fatal */ }
     }
   }
 
-  // Field-by-field merge: project > global > default
   const globalData = hasGlobal ? (globalResult as { status: "ok"; data: Record<string, unknown>; file: string }).data : {};
-  const projectData = hasProject ? (projectResult as { status: "ok"; data: Record<string, unknown>; file: string }).data : {};
   const merged: Record<string, unknown> = {
-    ...DEFAULT_CONFIG as unknown as Record<string, unknown>,
+    ...(DEFAULT_CONFIG as unknown as Record<string, unknown>),
     ...globalData,
-    ...projectData,
   };
 
   const config = validateConfig(merged);
-  
-  // Fill in default paths for output directories when config has empty strings.
-  // This ensures users see the actual paths (not "") when viewing their config.
+
   const dirDefaults: [keyof Config, string][] = [
     ["downloadDir", "downloads"],
     ["pdfDir", "pdfs"],
     ["snapshotDir", "snapshots"],
     ["recordingDir", "recordings"],
-    ["designDir", "designs"],
   ];
   for (const [field, subdir] of dirDefaults) {
     if (!config[field]) {
       (config as any)[field] = path.join(activeDir, subdir);
     }
   }
-  
+
   return { config, activeDir };
 }
-
-// ─── Backward-compat: legacy config migration ─────────────────────────────────
 
 function cleanupBrokenConfigs(): void {
   try {
@@ -604,50 +566,14 @@ function cleanupBrokenConfigs(): void {
   } catch { /* ignore */ }
 }
 
-function migrateOldConfigIfNeeded(): void {
-  if (fs.existsSync(GLOBAL_CONFIG_PATH)) return; // already done
-  const hasSystem = fs.existsSync(OLD_SYSTEM_PATH);
-  const hasUI     = fs.existsSync(OLD_UI_PATH);
-  if (!hasSystem && !hasUI) return;
-
-  let merged: Record<string, unknown> = { ...DEFAULT_CONFIG as unknown as Record<string, unknown> };
-  if (hasSystem) {
-    try { merged = { ...merged, ...JSON.parse(fs.readFileSync(OLD_SYSTEM_PATH, "utf-8")) }; }
-    catch { logDebug("[Weavetab] Failed to parse old system.json"); }
-  }
-  if (hasUI) {
-    try { merged = { ...merged, ...JSON.parse(fs.readFileSync(OLD_UI_PATH, "utf-8")) }; }
-    catch { logDebug("[Weavetab] Failed to parse old ui_manifest.json"); }
-  }
-  merged.mode = "session";
-  merged.attachPort = 0;
-
-  ensureConfigDir(GLOBAL_CONFIG_DIR);
-  fs.writeFileSync(GLOBAL_CONFIG_PATH, JSON.stringify(merged, null, 2));
-  logDebug("[Weavetab] Auto-migrated old config files to config.json.");
-  try {
-    if (hasSystem) fs.unlinkSync(OLD_SYSTEM_PATH);
-    if (hasUI)     fs.unlinkSync(OLD_UI_PATH);
-  } catch { /* ignore */ }
-}
-
-// ─── Active config path (for saveConfig + tools that need to know the dir) ────
-
-/** 
- * Returns the "write target" directory for configs.
- * Priority: Project config if it exists, otherwise global.
- */
 export function getActiveConfigPath(): { dir: string; file: string } {
   return { dir: GLOBAL_CONFIG_DIR, file: GLOBAL_CONFIG_PATH };
 }
-
-// ─── In-memory cache + live reload ────────────────────────────────────────────
 
 let _cachedConfig: Config | null = null;
 let _cachedActiveDir: string | null = null;
 
 export function loadConfigSync(): Config {
-  migrateOldConfigIfNeeded();
   cleanupBrokenConfigs();
   const { config, activeDir } = resolveConfigMerge();
   _cachedConfig    = config;
@@ -660,50 +586,41 @@ export async function loadConfig(): Promise<Config> {
   return _cachedConfig;
 }
 
-/** Zero disk I/O after first load. Refreshed by fs.watch. */
 export function getCachedConfig(): Config {
   if (!_cachedConfig) _cachedConfig = loadConfigSync();
   return _cachedConfig;
 }
 
-/** Force re-read from disk on next getCachedConfig/loadConfig call. */
 export function invalidateConfigCache(): void {
   _cachedConfig = null;
   _cachedActiveDir = null;
 }
 
-/** Returns the resolved active directory (global). */
 export function getActiveDirCached(): string {
   if (!_cachedActiveDir) loadConfigSync();
   return _cachedActiveDir ?? GLOBAL_CONFIG_DIR;
 }
 
-// ─── Output directory resolution ──────────────────────────────────────────────
-// Outputs use configurable paths from config, falling back to global Weavetab directory.
-
-export function getOutputDir(subdir: "downloads" | "pdfs" | "snapshots" | "recordings" | "designs", config?: Config): string {
+export function getOutputDir(subdir: "downloads" | "pdfs" | "snapshots" | "recordings", config?: Config): string {
   if (!config) {
-    // Fall back to default global directory
     const dir = path.join(GLOBAL_CONFIG_DIR, subdir);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
     return dir;
   }
-  
-  // Map simplified config fields to subdirs
+
   const fieldMap: Record<string, string> = {
     downloads: "downloadDir",
     pdfs: "pdfDir",
     snapshots: "snapshotDir",
     recordings: "recordingDir",
-    designs: "designDir"
   };
-  
+
   const field = fieldMap[subdir];
-  const customPath = (config as any)[field];
-  
-  if (customPath && customPath.trim()) {
+  const customPath = field ? (config as any)[field] : undefined;
+
+  if (customPath && typeof customPath === "string" && customPath.trim()) {
     const resolved = customPath.trim();
     if (!fs.existsSync(resolved)) {
       try {
@@ -712,8 +629,7 @@ export function getOutputDir(subdir: "downloads" | "pdfs" | "snapshots" | "recor
     }
     return resolved;
   }
-  
-  // Fall back to default global directory
+
   const dir = path.join(GLOBAL_CONFIG_DIR, subdir);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -721,21 +637,9 @@ export function getOutputDir(subdir: "downloads" | "pdfs" | "snapshots" | "recor
   return dir;
 }
 
-/**
- * Helper to get download directory from config.
- */
 export function getDownloadDir(config: Config): string {
   return config.downloadDir || "";
 }
-
-/**
- * Helper to get design output directory from config.
- */
-export function getDesignDir(config: Config): string {
-  return config.designDir || "";
-}
-
-// ─── Config Property Access Helpers ───────────────────────────────────────────────
 
 export function getConfigMode(config: Config): "session" | "attach" {
   return config.mode;
@@ -877,22 +781,14 @@ export function getElectronApps(config?: Config): Record<string, ElectronAppConf
   return getApps(config);
 }
 
-// ─── Additional Helper Functions for Code Compatibility ─────────────────────────
-
 export function getConfigNavigationTimeoutMs(config: Config): number {
   return config.navigationTimeout;
 }
-
 
 export function getConfigRefCacheTtlMs(config: Config): number {
   return config.refCacheTtlMs;
 }
 
-/**
- * Returns a directory inside the global Weavetab system folder.
- * User-facing outputs stay in `.weavetab/` — system internals go here.
- * Platform-specific locations for better organization.
- */
 const GLOBAL_SYSTEM_DIR = path.join(HOME, ".weavetab-system");
 
 export function getSystemDir(subdir: string): string {
@@ -912,10 +808,6 @@ export function getSystemAppDir(appName: string): string {
   return dir;
 }
 
-/**
- * Returns a directory inside the global ~/.weavetab-system/ folder.
- * Alias for consistency — identical to getSystemDir.
- */
 export function getGlobalSystemDir(subdir: string): string {
   const dir = path.join(GLOBAL_SYSTEM_DIR, subdir);
   if (!fs.existsSync(dir)) {
@@ -924,12 +816,6 @@ export function getGlobalSystemDir(subdir: string): string {
   return dir;
 }
 
-/**
- * Returns the canonical directory for persistent site profiles and learned workflow patterns.
- * Lives in ~/.weavetab-system/memory/sites/ — strictly machine-managed, never user-authored.
- * Separated from the legacy selector-memory dir (~/.weavetab-system/memory/) so existing
- * per-domain selector caches are not disrupted.
- */
 export function getSystemMemorySitesDir(): string {
   const dir = path.join(GLOBAL_SYSTEM_DIR, "memory", "sites");
   if (!fs.existsSync(dir)) {
@@ -938,6 +824,7 @@ export function getSystemMemorySitesDir(): string {
   return dir;
 }
 
+let _lastSelfSaveMs = 0;
 
 export function saveConfig(config: Config): void {
   const { dir, file } = getActiveConfigPath();
@@ -946,36 +833,30 @@ export function saveConfig(config: Config): void {
   if (mode !== "attach") {
     config.attachPort = 0;
   }
-  // Atomic write: write to temp file then rename to prevent partial reads
-  // from concurrent processes or crashes mid-write.
-  const tmpFile = path.join(dir, `config.tmp.${process.pid}.json`);
-  try {
-    const content = JSON.stringify(config, null, 2);
-    fs.writeFileSync(tmpFile, content, "utf-8");
-    fs.renameSync(tmpFile, file);
-  } catch (e) {
-    try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-    throw e;
-  }
+  _lastSelfSaveMs = Date.now();
+  writeAtomicJson(file, config);
   _cachedConfig = loadConfigSync();
+  _lastSelfSaveMs = Date.now();
   listeners.forEach(cb => cb(_cachedConfig!));
 }
-
-// ─── Live-reload watcher ───────────────────────────────────────────────────────
 
 let watchTimeout: NodeJS.Timeout | null = null;
 let _configWatcher: fs.FSWatcher | null = null;
 
-function startWatcher(dir: string) {
+export function startConfigWatcher(dir: string = GLOBAL_CONFIG_DIR): void {
   try {
-    if (!fs.existsSync(dir)) return;
+    ensureConfigDir(dir);
     if (_configWatcher) {
       try { _configWatcher.close(); } catch { /* ignore */ }
+      _configWatcher = null;
     }
     _configWatcher = fs.watch(dir, (eventType, filename) => {
-      if (filename === "config.json" && eventType === "change") {
+      if (filename === "config.json" && (eventType === "change" || eventType === "rename")) {
+        if (Date.now() - _lastSelfSaveMs < 400) return;
         if (watchTimeout) clearTimeout(watchTimeout);
         watchTimeout = setTimeout(() => {
+          if (Date.now() - _lastSelfSaveMs < 400) return;
+          if (!fs.existsSync(GLOBAL_CONFIG_PATH)) return;
           try {
             _cachedConfig = loadConfigSync();
             listeners.forEach(cb => cb(_cachedConfig!));
@@ -988,11 +869,12 @@ function startWatcher(dir: string) {
         }
       }
     });
+    _configWatcher.on("error", () => {});
     if (_configWatcher && typeof (_configWatcher as any).unref === "function") {
       (_configWatcher as any).unref();
     }
   } catch {
-    // Ignore watch errors on some OS/network mounts
+    // ignore watch errors
   }
 }
 
@@ -1008,7 +890,3 @@ export function stopConfigWatcher(): void {
     _configWatcher = null;
   }
 }
-
-// Watch global location so changes are picked up
-startWatcher(GLOBAL_CONFIG_DIR);
-

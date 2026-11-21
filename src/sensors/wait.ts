@@ -1,17 +1,7 @@
-/**
- * Weavetab — sensors/wait.ts
- * Network idle detection used internally by navigate and burst — never exposed as an MCP tool.
- * Weavetab by fy2ne
- */
-
 import CDP from "chrome-remote-interface";
 
 export type WaitCondition = "navigation" | "network_idle" | "dom_stable";
 
-/**
- * Wait for the network to be idle (no requests for 500ms).
- * Used internally by navigate and burst — never exposed as a tool.
- */
 export async function waitForNetworkIdle(
   session: CDP.Client,
   idleThresholdMs = 300,
@@ -21,34 +11,43 @@ export async function waitForNetworkIdle(
   await Network.enable();
 
   return new Promise<void>((resolve) => {
-    let idleTimer: NodeJS.Timeout;
+    let idleTimer: NodeJS.Timeout | undefined;
     let done = false;
-    const deadline = setTimeout(() => { done = true; resolve(); }, timeout);
+    const unsubs: Array<() => void> = [];
 
     const cleanup = () => {
       if (done) return;
       done = true;
-      clearTimeout(idleTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       clearTimeout(deadline);
-      // Remove the Network listeners on the object they were registered on
-      // (session.Network), otherwise every waitForNetworkIdle call leaks 3 listeners.
-      try {
-        (session.Network as any).removeListener('requestWillBeSent', reset);
-        (session.Network as any).removeListener('loadingFinished', reset);
-        (session.Network as any).removeListener('loadingFailed', reset);
-      } catch { /* ignore */ }
+      for (const unsub of unsubs) {
+        try {
+          unsub();
+        } catch {}
+      }
+      unsubs.length = 0;
       resolve();
     };
 
+    const deadline = setTimeout(cleanup, timeout);
+    deadline.unref?.();
+
     const reset = () => {
       if (done) return;
-      clearTimeout(idleTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(cleanup, idleThresholdMs);
+      idleTimer.unref?.();
     };
 
-    session.Network.on("requestWillBeSent", reset);
-    session.Network.on("loadingFinished", reset);
-    session.Network.on("loadingFailed", reset);
+    for (const ev of ["requestWillBeSent", "loadingFinished", "loadingFailed"] as const) {
+      const ret = (session.Network as any).on(ev, reset);
+      if (typeof ret === "function") {
+        unsubs.push(ret);
+      } else if (typeof (session.Network as any).removeListener === "function") {
+        unsubs.push(() => (session.Network as any).removeListener(ev, reset));
+      }
+    }
+
     reset();
   });
 }

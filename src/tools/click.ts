@@ -3,7 +3,6 @@
 
 import CDP from "chrome-remote-interface";
 import { buildActionMap, findAllMatches, safeSelector, toMarkdownTable, resolveByAria, recoverDetachedRef, type ActionElement } from "../cdp/walker.js";
-import { checkDomain } from "../security/blacklist.js";
 import { logAction } from "../audit/logger.js";
 import { recordAction, detectLoop, getLoopDiagnostics } from "../intelligence/trail.js";
 import { waitForDOMStable } from "../sensors/guard.js";
@@ -62,9 +61,18 @@ function describeOccluder(occ: NonNullable<ActionabilityResult['occludedBy']>): 
   return `<${occ.tag}${id}${cls}${label}> intercepts pointer events`;
 }
 
+function occludedError(occ: NonNullable<ActionabilityResult['occludedBy']>, detail: string): WeaveError {
+  return {
+    success: false,
+    error_code: "ELEMENT_OCCLUDED_BY",
+    message: `[!] ${describeOccluder(occ)} — ${detail}`,
+    suggestion: "Dismiss the blocking overlay or retry with { force: true } to bypass occlusion.",
+  };
+}
+
 export async function weaveClick(
   session: CDP.Client,
-  args: { id?: string; label?: string; intent?: string; backendNodeId?: number; x?: number; y?: number; include_map?: boolean; mark?: number },
+  args: { id?: string; label?: string; intent?: string; backendNodeId?: number; x?: number; y?: number; include_map?: boolean; mark?: number; force?: boolean },
   config: Config
 ): Promise<ClickResult | WeaveError> {
   const { id, label, intent, backendNodeId: directNodeId } = args;
@@ -119,9 +127,13 @@ export async function weaveClick(
   let usedMemoryIntent = false;
   let coords: any = null;
 
-  const urlObj = new URL(initialUrl);
-  const hostname = urlObj.hostname;
-  const pathname = urlObj.pathname;
+  let hostname = "local";
+  let pathname = "/";
+  try {
+    const u = new URL(initialUrl);
+    hostname = u.hostname || u.protocol.replace(/:$/, "") || "local";
+    pathname = u.pathname || "/";
+  } catch { /* file/empty/custom electron scheme */ }
 
   // FAST PATH: Memory Intent Intercept
   if (intent && !id && !label) {
@@ -150,13 +162,23 @@ export async function weaveClick(
         } as any;
       } else if (actCheck.status === 'OCCLUDED') {
         const occ = actCheck.occludedBy;
-        // WeaveTab-owned blockers are transparent — retry as actionable if only WT nodes blocked
-        if (!occ?.isWeavetabOwned) {
-          return {
-            success: false,
-            error_code: "ELEMENT_OCCLUDED_BY",
-            message: `[!] ${describeOccluder(occ!)}. Handle the blocking element first.`,
-          };
+        if (args.force || occ?.isWeavetabOwned) {
+          args.id = memHit.selector;
+          usedMemoryIntent = true;
+          coords = { x: actCheck.x, y: actCheck.y, visible: true };
+          element = {
+            id: memHit.selector,
+            label: intent,
+            x: actCheck.x,
+            y: actCheck.y,
+            selector: memHit.selector,
+            role: "button",
+            group: "utility",
+            depth: 0,
+            fingerprint: "memory:" + memHit.selector,
+          } as any;
+        } else {
+          return occludedError(occ!, "Handle the blocking element first.");
         }
       }
     }
@@ -212,8 +234,22 @@ export async function weaveClick(
             depth: 0,
             fingerprint: "selector:" + reqId,
           } as any;
-        } else if (actCheck.status === 'OCCLUDED' && !actCheck.occludedBy?.isWeavetabOwned) {
-          return { success: false, error_code: "ELEMENT_OCCLUDED_BY", message: `[!] ${describeOccluder(actCheck.occludedBy!)} — element ${reqId} is blocked.` };
+        } else if (actCheck.status === 'OCCLUDED') {
+          if (args.force || actCheck.occludedBy?.isWeavetabOwned) {
+            element = {
+              id: reqId,
+              label: 'selector-match',
+              x: actCheck.x,
+              y: actCheck.y,
+              selector: reqId,
+              role: "button",
+              group: "utility",
+              depth: 0,
+              fingerprint: "selector:" + reqId,
+            } as any;
+          } else {
+            return occludedError(actCheck.occludedBy!, `element ${reqId} is blocked.`);
+          }
         }
       }
     } else if (label) {
@@ -311,11 +347,10 @@ export async function weaveClick(
         if (actCheck.status === 'ACTIONABLE') {
           coords = { x: actCheck.x, y: actCheck.y, visible: true };
         } else if (actCheck.status === 'OCCLUDED') {
-          if (actCheck.occludedBy?.isWeavetabOwned) {
-            // WeaveTab's own overlay — treat as clear, use computed coords
+          if (args.force || actCheck.occludedBy?.isWeavetabOwned) {
             coords = { x: actCheck.x, y: actCheck.y, visible: true };
           } else {
-            return { success: false, error_code: "ELEMENT_OCCLUDED_BY", message: `[!] ${describeOccluder(actCheck.occludedBy!)} — ${selector} is blocked.` };
+            return occludedError(actCheck.occludedBy!, `${selector} is blocked.`);
           }
         } else if (actCheck.status === 'NOT_FOUND') {
           if (element.id.startsWith("w:")) {
@@ -354,8 +389,6 @@ export async function weaveClick(
     }
   }
 
-  let neededScroll = false; // Note: scrolling is now handled primarily inside checkActionability
-
   const { x, y } = coords;
 
   // 3. Execute interaction with Human Simulation (Move + Hardware Click)
@@ -383,19 +416,11 @@ export async function weaveClick(
     await Input.dispatchMouseEvent({ type: 'mouseReleased', x: cx, y: cy, button: 'left', clickCount: 1, pointerType: 'mouse' });
   }
 
-  let scrollYBefore = 0;
-  try {
-    const r = await session.Runtime.evaluate({ expression: 'Math.round(window.scrollY)', returnByValue: true });
-    scrollYBefore = (r?.result?.value as number) || 0;
-  } catch { /* ignore */ }
-
-  async function isClickStuck(currentUrl: string): Promise<{ stuck: boolean; url: string; newMap: any; canvas_hint?: string; dialog_open?: boolean }> {
-    // Check if a dialog was opened by the click immediately. If a dialog is open,
-    // the click succeeded in triggering an action. Waiting for DOM stable will
-    // just hang for 5-10s because Runtime.evaluate blocks on JS dialogs.
-    await new Promise(r => setTimeout(r, 30)); // give dialog time to trigger
+  async function postClickState(currentUrl: string): Promise<{ url: string; newMap: any; domChanged: boolean; canvas_hint?: string; dialog_open?: boolean }> {
+    // Give JS dialogs a beat to open before touching Runtime.evaluate (which blocks on dialogs)
+    await new Promise(r => setTimeout(r, 30));
     if (hasOpenDialog(session)) {
-      return { stuck: false, url: currentUrl, newMap: null, dialog_open: true };
+      return { url: currentUrl, newMap: null, domChanged: true, dialog_open: true };
     }
 
     const isElectronSession = Boolean(clientMatch?.isElectron);
@@ -405,14 +430,11 @@ export async function weaveClick(
     ]);
     const finalUrl = (await Page.getFrameTree()).frameTree.frame.url;
 
-    // Fast path: URL changed → definitely not stuck, skip map rebuild
     if (finalUrl !== currentUrl) {
-      labelCache.invalidate(currentUrl); // URL changed, invalidate old labels
-      return { stuck: false, url: finalUrl, newMap: null };
+      labelCache.invalidate(currentUrl);
+      return { url: finalUrl, newMap: null, domChanged: true };
     }
 
-    // Canvas fast path: if the clicked element is a <canvas>, DOM will never change
-    // because canvas is pixel-rendered. Treat as success and guide agent to browser_canvas.
     if (element) {
       const sel = safeSelector(element);
       if (sel) {
@@ -420,38 +442,34 @@ export async function weaveClick(
           const { result: canvasCheck } = await session.Runtime.evaluate({
             expression: `(function(s) {
               const el = document.querySelector(s);
-              if (!el) return false;
-              // Check if the element itself or its closest ancestor is a canvas
-              return el.tagName === 'CANVAS' || !!el.closest('canvas');
+              return !!(el && (el.tagName === 'CANVAS' || el.closest('canvas')));
             })(${JSON.stringify(sel)})`,
             returnByValue: true,
           });
           if (canvasCheck?.value === true) {
             return {
-              stuck: false,
               url: finalUrl,
               newMap: null,
+              domChanged: true,
               canvas_hint: 'Canvas element clicked. To read chart data or pixel content from this canvas, use browser_canvas with action:"get_image".'
             };
           }
         } catch { /* non-fatal */ }
       }
-      // Also check by coordinates — elementFromPoint may return a canvas even if the AX ref is a wrapper
       if (coords) {
         try {
           const { result: coordCanvasCheck } = await session.Runtime.evaluate({
             expression: `(function(x, y) {
               const el = document.elementFromPoint(x, y);
-              if (!el) return false;
-              return el.tagName === 'CANVAS' || !!el.closest('canvas');
+              return !!(el && (el.tagName === 'CANVAS' || el.closest('canvas')));
             })(${coords.x}, ${coords.y})`,
             returnByValue: true,
           });
           if (coordCanvasCheck?.value === true) {
             return {
-              stuck: false,
               url: finalUrl,
               newMap: null,
+              domChanged: true,
               canvas_hint: 'Canvas element clicked via coordinates. To read chart data or pixel content from this canvas, use browser_canvas with action:"get_image".'
             };
           }
@@ -459,143 +477,53 @@ export async function weaveClick(
       }
     }
 
-    let newMap = getCachedActionMap(targetId, finalUrl);
-    if (!newMap) {
-      const _emptyMap: import('../cdp/walker.js').ActionMap = { url: finalUrl, title: '', elements: [], targetId };
-      const timeoutMap = new Promise<import('../cdp/walker.js').ActionMap>((resolve) => {
-        setTimeout(() => resolve(_emptyMap), 1500);
-      });
-      newMap = await Promise.race([
-        buildActionMap(session, { lite: true }, targetId),
-        timeoutMap
-      ]).catch(() => _emptyMap);
+    // Only rebuild the action map when the caller asked for page_map
+    let newMap: any = null;
+    let domChanged = true;
+    if (args.include_map) {
+      newMap = getCachedActionMap(targetId, finalUrl);
+      if (!newMap) {
+        const emptyMap: import('../cdp/walker.js').ActionMap = { url: finalUrl, title: '', elements: [], targetId };
+        const timeoutMap = new Promise<import('../cdp/walker.js').ActionMap>((resolve) => {
+          setTimeout(() => resolve(emptyMap), 1500);
+        });
+        newMap = await Promise.race([
+          buildActionMap(session, { lite: true }, targetId),
+          timeoutMap
+        ]).catch(() => emptyMap);
 
-      if (newMap.elements.length > 0) {
-        cacheActionMap(targetId, newMap);
-      }
-    }
-    const safeMap = newMap || { url: finalUrl, title: '', elements: [], targetId };
-    const delta = computeDelta(targetId, initialUrl, safeMap.elements);
-    const changesCount = delta ? delta.added.length + delta.removed.length + delta.changed.length : 0;
-
-    // Check scroll position — same-page anchors scroll without URL/DOM change
-    let scrollYAfter = 0;
-    try {
-      const r = await session.Runtime.evaluate({ expression: 'Math.round(window.scrollY)', returnByValue: true });
-      scrollYAfter = (r?.result?.value as number) || 0;
-    } catch { /* ignore */ }
-    const scrolled = Math.abs(scrollYAfter - scrollYBefore) > 50;
-
-    // Radio/checkbox: computeDelta doesn't track `checked` attribute changes.
-    // Do a targeted check on the clicked element to see if its checked state flipped.
-    // Also handles clicking a <label for="..."> — follow the `for` attr to the real input.
-    let radioCheckboxFixed = false;
-    if (delta !== null && changesCount === 0 && !scrolled && element) {
-      const sel = safeSelector(element);
-      if (sel) {
-        const { result: ckResult } = await session.Runtime.evaluate({
-          expression: `(function(sel) {
-            var el = document.querySelector(sel);
-            if (!el) return null;
-            // Check the element itself
-            var t = (el.getAttribute('type') || '').toLowerCase();
-            if (t === 'radio' || t === 'checkbox') return el.checked;
-            // If it's a <label>, follow its 'for' attribute to the referenced input
-            if (el.tagName === 'LABEL') {
-              var forId = el.getAttribute('for');
-              var target = forId ? document.getElementById(forId) : el.querySelector('input');
-              if (target) {
-                var t2 = (target.getAttribute('type') || '').toLowerCase();
-                if (t2 === 'radio' || t2 === 'checkbox') return target.checked;
-              }
-            }
-            return null;
-          })(${JSON.stringify(sel)})`,
-          returnByValue: true,
-        }).catch(() => ({ result: { value: null } }));
-        if (ckResult?.value !== null && ckResult?.value !== undefined) {
-          radioCheckboxFixed = true;
+        if (newMap.elements.length > 0) {
+          cacheActionMap(targetId, newMap);
         }
       }
+      const delta = computeDelta(targetId, initialUrl, newMap.elements);
+      domChanged = delta ? (delta.added.length + delta.removed.length + delta.changed.length) > 0 : false;
     }
 
-    // ARIA-state change: buttons that toggle a panel/menu/checked state change
-    // aria-expanded, aria-selected, aria-pressed, or aria-checked without DOM-tree changes.
-    // These are real successful clicks. Detect them before labelling as stuck.
-    let ariaStateChanged = false;
-    if (delta !== null && changesCount === 0 && !scrolled && !radioCheckboxFixed && element) {
-      const sel = safeSelector(element);
-      if (sel) {
-        const { result: ariaRes } = await session.Runtime.evaluate({
-          expression: `(function(sel) {
-            const el = document.querySelector(sel);
-            if (!el) return null;
-            return JSON.stringify({
-              expanded: el.getAttribute('aria-expanded'),
-              selected: el.getAttribute('aria-selected'),
-              pressed: el.getAttribute('aria-pressed'),
-              checked: el.getAttribute('aria-checked'),
-              current: el.getAttribute('aria-current')
-            });
-          })(${JSON.stringify(sel)})`,
-          returnByValue: true,
-        }).catch(() => ({ result: { value: null } }));
-        // Any non-null aria state present means element is togglable; count it as changed
-        if (ariaRes?.value) {
-          try {
-            const ariaState = JSON.parse(ariaRes.value as string);
-            ariaStateChanged = Object.values(ariaState).some(v => v !== null);
-          } catch { /* ignore */ }
-        }
-      }
-    }
-
-    // We no longer blindly consider "no DOM changes" as stuck because many static elements (tabs, menus, external links, pure JS)
-    // do not mutate the DOM predictably. Only treat it as stuck if we explicitly failed to hit the target.
-    const stuck = false;
-    return { stuck, url: finalUrl, newMap };
+    return { url: finalUrl, newMap, domChanged };
   }
 
   const { x: clickX, y: clickY } = coords;
   await performClick(clickX, clickY);
 
-  // ── Post-click: get page state (URL, map, DOM delta) ─────────────────────
-  // The 'stuck' flag is purely informational — it powers stuck_warning in the
-  // result. A dispatched click is NOT retried based on DOM delta alone, because:
-  // (a) many real interactions produce no measurable DOM delta (static buttons,
-  //     CSS-only toggles, anchor scrolls);
-  // (b) retrying doubles the click on checkboxes/accordions, net-zeroing it.
-  const postCheck = await isClickStuck(initialUrl);
+  const postCheck = await postClickState(initialUrl);
 
   const executionMs = Date.now() - startMs;
-  const { stuck: isStuck, url: finalUrl, newMap } = postCheck;
-
-  if (neededScroll) {
-    try {
-      const hostname = new URL(initialUrl).hostname;
-      await appendKnowledgeHint(hostname, "elements on this site often need to be scrolled into view before clicking");
-    } catch { /* ignore */ }
-  }
+  const { url: finalUrl, newMap, domChanged } = postCheck;
+  const isStuck = false;
 
   const stuckHint = postCheck.dialog_open
     ? 'A dialog opened. Use browser_dialog to interact with it.'
-    : isStuck
-      ? `Page did not respond to click (no visible DOM change). Try browser_pointer with raw coords (x: ${clickX}, y: ${clickY}) if the element is visible, or browser_eval to click it directly.`
-      : undefined;
+    : undefined;
 
-  // Logging success or action failure
   if (intent && (args.id || element_.selector)) {
     const finalSelector = args.id || element_.selector!;
-    if (isStuck) {
-      await logMemoryFailure(hostname, intent, finalSelector, "ACTION_FAILED", pathname);
-    } else {
-      await logMemorySuccess(hostname, intent, finalSelector, {
-        role: element_.role,
-        classes: element_.className ? element_.className.split(' ') : undefined,
-        tag: element_.type, // assuming type roughly maps to tag
-        structuralIdiom: element_.structuralIdiom
-      }, pathname);
-    }
+    await logMemorySuccess(hostname, intent, finalSelector, {
+      role: element_.role,
+      classes: element_.className ? element_.className.split(' ') : undefined,
+      tag: element_.type,
+      structuralIdiom: element_.structuralIdiom
+    }, pathname);
   }
 
   recordAction({
@@ -615,11 +543,11 @@ export async function weaveClick(
     title: newMap?.title || clientMatch?.title || "",
     url_changed: finalUrl !== initialUrl,
     ...(args.include_map ? { page_map: newMap ? toMarkdownTable(newMap.elements, finalUrl, newMap.title) : "" } : {}),
-    dom_changed: !isStuck,
+    dom_changed: domChanged,
     stuck_warning: isStuck,
     ...(stuckHint ? { stuck_hint: stuckHint } : {}),
     ...(sniperWarning ? { sniper_warning: sniperWarning } : {}),
-    ...((postCheck as any).canvas_hint ? { canvas_hint: (postCheck as any).canvas_hint } : {})
+    ...(postCheck.canvas_hint ? { canvas_hint: postCheck.canvas_hint } : {})
   };
 }
 

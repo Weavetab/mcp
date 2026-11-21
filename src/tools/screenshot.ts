@@ -49,11 +49,16 @@ export async function browserScreenshot(
   const quality = format === "jpeg" ? (options.quality ?? 90) : undefined;
 
   // Get viewport dimensions
-  const { result: vpResult } = await session.Runtime.evaluate({
-    expression: `JSON.stringify({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 })`,
-    returnByValue: true,
-  });
-  const vp = JSON.parse(vpResult.value as string) as { w: number; h: number; dpr: number };
+  let vp = { w: 1280, h: 720, dpr: 1 };
+  try {
+    const { result: vpResult } = await session.Runtime.evaluate({
+      expression: `JSON.stringify({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 })`,
+      returnByValue: true,
+    });
+    if (typeof vpResult?.value === "string") {
+      vp = JSON.parse(vpResult.value);
+    }
+  } catch { /* fallback to default viewport */ }
 
   let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
   let beyondViewport = !!options.fullPage;
@@ -160,8 +165,9 @@ export async function browserScreenshot(
   }
   // ─────────────────────────────────────────────────────────────────────────────
 
-  const width = clip ? clip.width : vp.w;
-  const height = clip ? clip.height : vp.h;
+  const outScale = params.clip?.scale ?? 1;
+  const width = Math.round((clip ? clip.width : vp.w) * outScale);
+  const height = Math.round((clip ? clip.height : vp.h) * outScale);
   const actualFormat = params.format || format;
 
   const dataUrl = `data:image/${actualFormat};base64,${data}`;

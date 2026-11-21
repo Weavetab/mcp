@@ -1,57 +1,27 @@
-/**
- * Weavetab — intelligence/patternCompiler.ts
- *
- * Compiles raw browser session trails (action sequences) into persistent,
- * reusable site workflow patterns stored under ~/.weavetab-system/memory/sites/.
- *
- * Design invariants:
- *  - One file per origin (sanitized hostname). Never creates per-path or per-run files.
- *  - Pattern names are caller-supplied (snake_case). Duplicate calls for the same
- *    name on the same origin UPDATE the existing pattern rather than creating a new file.
- *  - Volatile / unstable selectors (auto-generated classes, nth-child paths) are
- *    stripped and replaced with semantic anchors where possible.
- *  - Never reads or writes to ~/.weavetab/ (user config space).
- */
-
-import { readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { logDebug } from "../audit/logger.js";
+import { mkdir, readFile, rename, unlink, writeFile } from "fs/promises";
+import path from "path";
 import fs from "fs";
 import { getSystemMemorySitesDir } from "../config/loader.js";
-import { logDebug } from "../audit/logger.js";
-
-// ─── Types ──────────────────────────────────────────────────────────────────
+import { SessionSecretTracker } from "../security/secrets.js";
 
 export interface WorkflowStep {
-  /** MCP tool name, e.g. "browser_click", "browser_fill", "browser_navigate" */
   tool: string;
-  /** Primary selector or URL target */
   target?: string;
-  /** Optional value (text typed, option selected, etc.) */
   value?: string;
-  /** Any extra args forwarded verbatim to browser_burst replay */
   extra?: Record<string, unknown>;
 }
 
 export interface WorkflowPattern {
-  /** Caller-assigned name in snake_case, e.g. "login_flow", "pr_review" */
   name: string;
-  /** Compiled, stable steps ready for browser_burst replay */
   steps: WorkflowStep[];
-  /** Optional CSS selector / URL fragment that confirms success */
   success_indicator?: string;
-  /** URL path or pattern where this workflow starts, e.g. "/pull/:id/files" */
   entry?: string;
-  /** Exponentially-weighted moving average of duration in ms */
   avg_duration_ms?: number;
-  /** 0.0 – 1.0 reliability. Degrades on failures, climbs on successes. */
   reliability: number;
-  /** Consecutive failure counter — 3 strikes triggers re-learn flag */
   strikes: number;
-  /** ISO timestamp of last successful verified run */
   last_verified: string;
-  /** Total times this pattern was executed */
   total_executions: number;
-  /** Times the pattern completed without errors */
   successful_executions: number;
 }
 
@@ -73,31 +43,21 @@ export interface SiteQuirks {
 }
 
 export interface SiteProfile {
-  /** Full origin, e.g. "https://github.com" */
   origin: string;
-  /** Detected JS framework: react, vue, angular, next, nuxt, svelte, etc. */
   framework?: string;
-  /** True if the site uses Shadow DOM components */
   shadowDom?: boolean;
-  /** How often this site presents CAPTCHA challenges */
   captcha_frequency?: "none" | "rare" | "moderate" | "frequent";
-  /** Known site-level quirks to handle automatically */
   quirks: SiteQuirks;
-  /** Named, compiled workflow patterns indexed by name */
   patterns: Record<string, WorkflowPattern>;
-  /** ISO timestamp of last profile write */
   updatedAt: string;
-  /** How many times this origin has been visited in automated sessions */
   visitCount: number;
 }
 
-// ─── Volatile selector detection ────────────────────────────────────────────
-
 const VOLATILE_PATTERNS: RegExp[] = [
-  /\[class\*="[a-z0-9]+-[a-z0-9]+"\]/,   // CSS-module hash attribute selectors
-  /:nth-child\(\d+\)/,                     // positional pseudo-selectors
-  /\.\w{8,}[-_]\w{4,}/,                   // hashed Tailwind / CSS-module class combos
-  /div > div > div > /,                    // deep anonymous structural chains (3+ levels)
+  /\[class\*="[a-z0-9]+-[a-z0-9]+"\]/,
+  /:nth-child\(\d+\)/,
+  /\.\w{8,}[-_]\w{4,}/,
+  /div > div > div > /,
 ];
 
 function isVolatileSelector(sel: string): boolean {
@@ -113,20 +73,63 @@ function stabilizeSelector(sel: string): string | undefined {
   return sel;
 }
 
-// ─── File path helpers ───────────────────────────────────────────────────────
+function redactSecretDeep<T>(val: T, sessionId = "__global__"): T {
+  if (val == null) return val;
+  const step1 = SessionSecretTracker.redactValue(sessionId, val);
+  if (typeof step1 === "string") {
+    return SessionSecretTracker.redactAll(step1) as T;
+  }
+  if (Array.isArray(step1)) {
+    return step1.map((item) => redactSecretDeep(item, sessionId)) as T;
+  }
+  if (typeof step1 === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(step1 as Record<string, unknown>)) {
+      out[k] = redactSecretDeep(v, sessionId);
+    }
+    return out as T;
+  }
+  return step1;
+}
 
 function originToFilename(origin: string): string {
-  return origin
-    .replace(/^https?:\/\//, "")
-    .replace(/[^a-zA-Z0-9.-]/g, "_");
+  const safe =
+    origin
+      .replace(/^https?:\/\//, "")
+      .replace(/^\.+/, "")
+      .replace(/\.\.+/g, "_")
+      .replace(/[^a-zA-Z0-9.-]/g, "_")
+      .replace(/^\.+/, "")
+      .replace(/\.\.+/g, "_") || "unknown";
+  return safe;
 }
 
 function siteProfilePath(origin: string): string {
   const sitesDir = getSystemMemorySitesDir();
-  return join(sitesDir, `${originToFilename(origin)}.json`);
+  const file = `${originToFilename(origin)}.json`;
+  const resolvedBase = path.resolve(sitesDir);
+  const fullPath = path.resolve(resolvedBase, file);
+  if (!fullPath.startsWith(resolvedBase + path.sep)) {
+    throw new Error(`Invalid site profile path for origin: ${origin}`);
+  }
+  return fullPath;
 }
 
-// ─── In-process LRU cache ───────────────────────────────────────────────────
+async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
+  const dir = path.dirname(filePath);
+  await mkdir(dir, { recursive: true });
+  const payload = JSON.stringify(data, null, 2);
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  await writeFile(tmp, payload, "utf-8");
+  try {
+    await rename(tmp, filePath);
+  } catch {
+    await writeFile(filePath, payload, "utf-8");
+    try {
+      await unlink(tmp);
+    } catch {}
+  }
+}
 
 const profileCache = new Map<string, SiteProfile>();
 const CACHE_MAX = 100;
@@ -143,12 +146,6 @@ export function clearSiteProfileCache(): void {
   profileCache.clear();
 }
 
-// ─── Public API ──────────────────────────────────────────────────────────────
-
-/**
- * Load a site profile from disk. Returns null if the site has never been profiled.
- * Hits in-process cache first — no redundant disk reads within a session.
- */
 export async function getSiteProfile(origin: string): Promise<SiteProfile | null> {
   if (profileCache.has(origin)) return profileCache.get(origin)!;
 
@@ -166,10 +163,6 @@ export async function getSiteProfile(origin: string): Promise<SiteProfile | null
   }
 }
 
-/**
- * Persist a site profile. Always deep-merges into existing data on disk — never
- * blindly overwrites — so concurrent tool calls don't clobber each other.
- */
 export async function saveSiteProfile(profile: SiteProfile): Promise<void> {
   const filePath = siteProfilePath(profile.origin);
 
@@ -177,7 +170,7 @@ export async function saveSiteProfile(profile: SiteProfile): Promise<void> {
   if (fs.existsSync(filePath)) {
     try {
       base = JSON.parse(await readFile(filePath, "utf-8")) as SiteProfile;
-    } catch { /* treat corrupt file as empty */ }
+    } catch {}
   }
 
   const merged: SiteProfile = {
@@ -185,22 +178,16 @@ export async function saveSiteProfile(profile: SiteProfile): Promise<void> {
     ...profile,
     origin: profile.origin,
     patterns: { ...(base?.patterns ?? {}), ...profile.patterns },
-    quirks:   { ...(base?.quirks ?? {}),   ...profile.quirks   },
+    quirks: { ...(base?.quirks ?? {}), ...profile.quirks },
     visitCount: profile.visitCount ?? base?.visitCount ?? 0,
     updatedAt: new Date().toISOString(),
   };
 
   cacheSet(profile.origin, merged);
-  await writeFile(filePath, JSON.stringify(merged, null, 2), "utf-8");
-  logDebug(`[PatternCompiler] Saved site profile → ${filePath}`);
+  await writeJsonAtomic(filePath, merged);
+  logDebug(`[PatternCompiler] Saved site profile -> ${filePath}`);
 }
 
-/**
- * Learn or update a named workflow pattern for a given origin.
- * - Duplicate name = merge/update, never duplicate file.
- * - Volatile selectors in steps are dropped to keep patterns stable.
- * - Anti-spam: skips disk write when content is identical to existing.
- */
 export async function learnPattern(
   origin: string,
   name: string,
@@ -224,17 +211,26 @@ export async function learnPattern(
     successful_executions: 0,
   };
 
-  const stabilizedSteps = (incoming.steps ?? existing.steps).map((step) => ({
-    ...step,
-    target: step.target ? stabilizeSelector(step.target) : undefined,
-  }));
+  const stabilizedSteps = (incoming.steps ?? existing.steps).map((step) => {
+    const stabilizedTarget = step.target ? stabilizeSelector(step.target) : undefined;
+    const redactedValue = step.value !== undefined ? redactSecretDeep(step.value) : undefined;
+    let extra = step.extra !== undefined ? redactSecretDeep(step.extra) : undefined;
+    if (step.target && stabilizedTarget === undefined) {
+      extra = { ...(extra ?? {}), fallback_target: step.target };
+    }
+    return {
+      ...step,
+      target: stabilizedTarget,
+      ...(redactedValue !== undefined ? { value: redactedValue } : {}),
+      ...(extra !== undefined ? { extra } : {}),
+    };
+  });
 
-  const hasChanges = (
+  const hasChanges =
     !profile.patterns[name] ||
     (incoming.steps !== undefined && JSON.stringify(stabilizedSteps) !== JSON.stringify(existing.steps)) ||
     (incoming.success_indicator !== undefined && incoming.success_indicator !== existing.success_indicator) ||
-    (incoming.entry !== undefined && incoming.entry !== existing.entry)
-  );
+    (incoming.entry !== undefined && incoming.entry !== existing.entry);
 
   if (hasChanges) {
     const updated: WorkflowPattern = {
@@ -256,11 +252,6 @@ export async function learnPattern(
   }
 }
 
-/**
- * Record the outcome of executing a named pattern.
- * Updates reliability via EWMA (α=0.15) and tracks consecutive strikes.
- * 3 strikes → reliability will naturally fall below 0.4, agent should re-explore.
- */
 export async function recordPatternExecution(
   origin: string,
   patternName: string,
@@ -294,7 +285,7 @@ export async function recordPatternExecution(
   };
 
   if (updated.strikes >= 3) {
-    logDebug(`[PatternCompiler] ⚠ Pattern "${patternName}" on ${origin} hit 3 strikes (reliability: ${updated.reliability}) — re-learning recommended`);
+    logDebug(`[PatternCompiler] Pattern "${patternName}" on ${origin} hit 3 strikes (reliability: ${updated.reliability})`);
   }
 
   await saveSiteProfile({
@@ -305,10 +296,6 @@ export async function recordPatternExecution(
   return updated;
 }
 
-/**
- * Record or update a site quirk (cookie banner, rate limit, modal popup, etc.)
- * Only writes if the stored data differs from incoming — prevents spam writes.
- */
 export async function recordQuirk(
   origin: string,
   quirkKey: string,
@@ -335,9 +322,6 @@ export async function recordQuirk(
   logDebug(`[PatternCompiler] Recorded quirk "${quirkKey}" for ${origin}`);
 }
 
-/**
- * Returns the reliability score (0–1) of a named pattern, or -1 if unknown.
- */
 export async function getPatternReliability(
   origin: string,
   patternName: string
@@ -347,10 +331,6 @@ export async function getPatternReliability(
   return profile.patterns[patternName]?.reliability ?? -1;
 }
 
-/**
- * Formats a compact site profile hint string for agent system prompt injection.
- * Called at session start when navigating to a known origin.
- */
 export function formatSiteProfileHint(profile: SiteProfile): string {
   const lines: string[] = [`[SiteProfile] ${profile.origin}`];
 
@@ -363,7 +343,7 @@ export function formatSiteProfileHint(profile: SiteProfile): string {
   if (patternNames.length > 0) {
     lines.push("  known_patterns:");
     for (const name of patternNames) {
-      const p = profile.patterns[name];
+      const p = profile.patterns[name]!;
       const flag =
         p.strikes >= 3
           ? " [RE-LEARN NEEDED]"

@@ -18,6 +18,7 @@ export interface DialogResult {
 // across initDialogHandler → browserDialog calls without leaking memory
 // (entries are GC'd when the session is released).
 const dialogState = new WeakMap<CDP.Client, { type: string; message: string; defaultPrompt?: string; autoDismiss?: boolean; timeoutId?: NodeJS.Timeout }>();
+const initializedSessions = new WeakSet<CDP.Client>();
 
 export function hasOpenDialog(session: CDP.Client): boolean {
   const state = dialogState.get(session);
@@ -26,24 +27,27 @@ export function hasOpenDialog(session: CDP.Client): boolean {
 
 /** Register the auto-dismiss handler for the given CDP session. */
 export function initDialogHandler(session: CDP.Client): void {
+  if (initializedSessions.has(session)) return;
+  initializedSessions.add(session);
+
   session.Page.on("javascriptDialogOpening", async (event) => {
     const { type, message, defaultPrompt } = event;
 
-    // Store dialog metadata WITHOUT auto-dismissing so browserDialog can read
-    // the type and handle it appropriately. This is the only point where CDP
-    // exposes the real type.
+    const prev = dialogState.get(session);
+    if (prev?.timeoutId) clearTimeout(prev.timeoutId);
+
     dialogState.set(session, { type, message, defaultPrompt, autoDismiss: false });
 
     logAction("browser_dialog", type, `dialog detected: "${message}"`);
 
-    // Inject a visual toast so the user knows we detected it
+    const toastText = JSON.stringify(`${type} detected: ${String(message ?? "").slice(0, 50)}`);
     const toastScript = `
       (function() {
         if (document.getElementById('wt-dialog-toast')) return;
         const toast = document.createElement("div");
         toast.id = 'wt-dialog-toast';
         toast.style.cssText = "position:fixed;bottom:20px;right:20px;background:#f59e0b;color:white;padding:12px 24px;border-radius:8px;font-family:sans-serif;font-weight:600;z-index:2147483647;box-shadow:0 4px 12px rgba(0,0,0,0.3);animation:fadein 0.3s, fadeout 0.3s 2.5s forwards;";
-        toast.textContent = "${type} detected: ${message.substring(0, 50).replace(/"/g, '\\"')}";
+        toast.textContent = ${toastText};
         const style = document.createElement("style");
         style.textContent = "@keyframes fadein { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } } @keyframes fadeout { from { opacity: 1; } to { opacity: 0; } }";
         document.head.appendChild(style);
@@ -118,13 +122,13 @@ export async function browserDialog(
         : undefined,
     });
     
-    // Mark as handled so the timeout handler doesn't try to dismiss it
     if (stored) {
-      dialogState.set(session, { ...stored, autoDismiss: true });
+      const handled = { ...stored, autoDismiss: true, timeoutId: undefined };
+      dialogState.set(session, handled);
+      setTimeout(() => {
+        if (dialogState.get(session) === handled) dialogState.delete(session);
+      }, 100);
     }
-    
-    // Clean up after a short delay
-    setTimeout(() => dialogState.delete(session), 100);
   } catch (e) {
     // No dialog was open or it was already handled
     dialogState.delete(session);

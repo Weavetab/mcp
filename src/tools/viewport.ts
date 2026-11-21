@@ -12,8 +12,9 @@ export interface ViewportOptions {
   height?: number;
   deviceScaleFactor?: number;
   mobile?: boolean;
-  action: "set" | "clear" | "list" | "preset";
+  action?: "set" | "clear" | "list" | "preset";
   devicePreset?: string;
+  preset?: string;
   userAgent?: string;
   geolocation?: { latitude: number; longitude: number; accuracy?: number };
   locale?: string;
@@ -129,12 +130,10 @@ export async function browserViewport(
   _config: Config
 ): Promise<{ success: boolean; message: string; data?: any }> {
   const { 
-    action, 
     width, 
     height, 
     deviceScaleFactor = 1, 
     mobile = false,
-    devicePreset,
     userAgent,
     geolocation,
     locale,
@@ -143,6 +142,12 @@ export async function browserViewport(
     hasTouch,
     screenOrientation
   } = options;
+  const devicePreset = options.devicePreset ?? options.preset;
+  const action = options.action ?? (
+    devicePreset ? "preset" :
+    (width !== undefined || height !== undefined || geolocation !== undefined || locale !== undefined || timezoneId !== undefined || colorScheme !== undefined) ? "set" :
+    "list"
+  );
 
   if (action === "list") {
     return {
@@ -187,10 +192,12 @@ export async function browserViewport(
   }
 
   if (action === "clear") {
-    await session.Emulation.clearDeviceMetricsOverride();
-    await session.Network.setUserAgentOverride({ userAgent: '' });
-    await session.Emulation.clearGeolocationOverride();
-    await session.Emulation.setTimezoneOverride({ timezoneId: '' });
+    await session.Emulation.clearDeviceMetricsOverride().catch(() => {});
+    await session.Emulation.setTouchEmulationEnabled({ enabled: false }).catch(() => {});
+    await session.Emulation.setEmulatedMedia({ features: [] }).catch(() => {});
+    await session.Network.setUserAgentOverride({ userAgent: '' }).catch(() => {});
+    await session.Emulation.clearGeolocationOverride().catch(() => {});
+    await session.Emulation.setTimezoneOverride({ timezoneId: '' }).catch(() => {});
     return { success: true, message: "Cleared all viewport emulation" };
   }
 
@@ -241,9 +248,10 @@ export async function browserViewport(
       await session.Emulation.setLocaleOverride({ locale });
       msg.push(`Locale set to ${locale}`);
     }
-    if (colorScheme && colorScheme !== 'no-preference') {
+    if (colorScheme) {
+      const value = colorScheme === 'no-preference' ? '' : colorScheme;
       await session.Emulation.setEmulatedMedia({
-        features: [{ name: 'prefers-color-scheme', value: colorScheme }]
+        features: [{ name: 'prefers-color-scheme', value }]
       });
       msg.push(`Color scheme set to ${colorScheme}`);
     }
@@ -298,6 +306,10 @@ async function applyViewportEmulation(
     screenOrientation: orientation
   });
 
+  if (typeof session.Emulation.setTouchEmulationEnabled === "function") {
+    await session.Emulation.setTouchEmulationEnabled({ enabled: Boolean(hasTouch) }).catch(() => {});
+  }
+
   // Set user agent if provided
   if (userAgent) {
     await session.Network.setUserAgentOverride({ userAgent });
@@ -322,10 +334,10 @@ async function applyViewportEmulation(
     await session.Emulation.setLocaleOverride({ locale });
   }
 
-  // Set color scheme if provided
-  if (colorScheme && colorScheme !== 'no-preference') {
+  if (colorScheme) {
+    const value = colorScheme === 'no-preference' ? '' : colorScheme;
     await session.Emulation.setEmulatedMedia({
-      features: [{ name: 'prefers-color-scheme', value: colorScheme }]
+      features: [{ name: 'prefers-color-scheme', value }]
     });
   }
 }

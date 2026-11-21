@@ -45,16 +45,21 @@ const consoleBuffers = new Map<string, ConsoleEntry[]>();
 /** Per-tab last-seen text for deduplication */
 const lastSeenText = new Map<string, { text: string; at: number }>();
 
+const MAX_LOG_ENTRY_LEN = 1000;
+
+export function cleanupConsoleBuffer(targetId: string): void {
+  consoleBuffers.delete(targetId);
+  lastSeenText.delete(targetId);
+}
+
 export function initConsoleBuffering(session: CDP.Client, targetId: string) {
   if (consoleBuffers.has(targetId)) return;
   const buffer: ConsoleEntry[] = [];
   consoleBuffers.set(targetId, buffer);
 
   const push = (entry: ConsoleEntry) => {
-    // Server-side noise suppression
     if (isNoise(entry.text)) return;
 
-    // Deduplication: same text within 10s window
     const last = lastSeenText.get(targetId);
     if (last && last.text === entry.text && Date.now() - last.at < DEDUP_WINDOW_MS) return;
     lastSeenText.set(targetId, { text: entry.text, at: Date.now() });
@@ -64,7 +69,7 @@ export function initConsoleBuffering(session: CDP.Client, targetId: string) {
   };
 
   session.Runtime.on("consoleAPICalled", (event) => {
-    const text = event.args.map((a: any) => a.value || a.description || "").join(" ");
+    const text = event.args.map((a: any) => (a.value !== undefined ? String(a.value) : (a.description ?? ""))).join(" ");
     push({ type: event.type, text, timestamp: event.timestamp });
   });
 
@@ -115,25 +120,28 @@ export async function browserConsole(
   }).catch(() => null);
 
   let logs: any[] = [];
-  if (res?.result?.value) {
-    logs = res.result.value.map((l: any) => ({
-      type: l.level,
-      text: l.text,
-      timestamp: l.time
-    }));
+  if (Array.isArray(res?.result?.value)) {
+    logs = res.result.value
+      .map((l: any) => ({
+        type: l.level,
+        text: l.text,
+        timestamp: l.time
+      }))
+      .filter((l: any) => typeof l.text !== "string" || !isNoise(l.text));
   } else {
-    // Fallback to CDP buffer
     const buf = consoleBuffers.get(targetId);
     if (buf) {
       logs = [...buf];
-      buf.length = 0; // Simulate 'since: last'
+      buf.length = 0;
     }
   }
 
-  const redactedLogs = logs.map(l => ({
-    ...l,
-    text: typeof l.text === 'string' ? SessionSecretTracker.redact(targetId, l.text) : l.text
-  }));
+  const redactedLogs = logs.map(l => {
+    if (typeof l.text !== 'string') return l;
+    const clean = SessionSecretTracker.redact(targetId, l.text);
+    const text = clean.length > MAX_LOG_ENTRY_LEN ? `${clean.slice(0, MAX_LOG_ENTRY_LEN)}... (truncated)` : clean;
+    return { ...l, text };
+  });
 
   return { success: true, logs: redactedLogs };
 }

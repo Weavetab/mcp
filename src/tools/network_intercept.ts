@@ -9,11 +9,19 @@ import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
 import { TelemetryCapture, TelemetryReport } from "../sensors/network.js";
 
+export interface InterceptRule {
+  pattern?: string;
+  urlPattern?: string;
+  mockStatus?: number;
+  mockBody?: string;
+}
+
 export interface InterceptOptions {
   action: "enable" | "disable" | "get_telemetry" | "clear_telemetry";
   pattern?: string; // e.g. "*api/users*"
   mockStatus?: number;
   mockBody?: string;
+  rules?: InterceptRule[];
 }
 
 // Track handler refs so we can remove them on disable — prevents
@@ -22,8 +30,17 @@ const activeHandlers = new Map<CDP.Client, (params: any) => Promise<void>>();
 const activeInterceptors = new Map<CDP.Client, { pattern: string; mockStatus: number; mockBody: string }>();
 const activeTelemetry = new Map<CDP.Client, TelemetryCapture>();
 
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(escaped);
+}
+
 export function cleanupNetworkIntercept(session: CDP.Client): void {
-  activeHandlers.delete(session);
+  const handler = activeHandlers.get(session);
+  if (handler) {
+    try { (session as any).removeListener('Fetch.requestPaused', handler); } catch {}
+    activeHandlers.delete(session);
+  }
   activeInterceptors.delete(session);
   const tc = activeTelemetry.get(session);
   if (tc) {
@@ -47,6 +64,11 @@ export async function browserNetworkIntercept(
   options: InterceptOptions,
   _config: Config
 ): Promise<any> {
+  const firstRule = Array.isArray(options.rules) && options.rules.length > 0 ? options.rules[0] : undefined;
+  const pattern = options.pattern ?? firstRule?.pattern ?? firstRule?.urlPattern;
+  const mockStatus = options.mockStatus ?? firstRule?.mockStatus;
+  const mockBody = options.mockBody ?? firstRule?.mockBody;
+
   // ── Action: get_telemetry ──────────────────────────────────────────────
   if (options.action === "get_telemetry") {
     const tc = activeTelemetry.get(session);
@@ -65,9 +87,8 @@ export async function browserNetworkIntercept(
     await tc.start();
 
     let requests = report.networkRequests;
-    if (options.pattern) {
-      const regexPattern = options.pattern.replace(/\*/g, '.*').replace(/\?/g, '.');
-      const reg = new RegExp(regexPattern);
+    if (pattern) {
+      const reg = globToRegex(pattern);
       requests = requests.filter(r => reg.test(r.url));
     }
 
@@ -106,15 +127,15 @@ export async function browserNetworkIntercept(
   if (hasExt?.result?.value) {
     // ── Extension path (preferred) ────────────────────────────────────────
     if (options.action === "enable") {
-      if (!options.pattern) throw new Error("enable requires 'pattern'");
+      if (!pattern) throw new Error("enable requires 'pattern' (or rules[0].pattern)");
       await sendToExtension(session, {
         type: 'NETWORK_INTERCEPT_ENABLE',
-        pattern: options.pattern,
-        mockStatus: options.mockStatus || 200,
-        mockBody: options.mockBody || '{}'
+        pattern,
+        mockStatus: mockStatus || 200,
+        mockBody: mockBody || '{}'
       });
-      activeInterceptors.set(session, { pattern: options.pattern, mockStatus: options.mockStatus || 200, mockBody: options.mockBody || '{}' });
-      return { success: true, message: `Extension interception enabled for ${options.pattern}` };
+      activeInterceptors.set(session, { pattern, mockStatus: mockStatus || 200, mockBody: mockBody || '{}' });
+      return { success: true, message: `Extension interception enabled for ${pattern}` };
     }
     if (options.action === "disable") {
       await sendToExtension(session, { type: 'NETWORK_INTERCEPT_DISABLE' });
@@ -125,10 +146,10 @@ export async function browserNetworkIntercept(
 
   // ── CDP Fetch domain fallback ───────────────────────────────────────────
   if (options.action === "enable") {
-    if (!options.pattern) throw new Error("enable requires 'pattern'");
-    const mockStatus = options.mockStatus || 200;
-    const mockBody = options.mockBody || '{}';
-    const regexPattern = options.pattern.replace(/\*/g, '.*').replace(/\?/g, '.');
+    if (!pattern) throw new Error("enable requires 'pattern' (or rules[0].pattern)");
+    const status = mockStatus || 200;
+    const body = mockBody || '{}';
+    const reg = globToRegex(pattern);
 
     // Remove stale handler from previous enable() to prevent accumulation
     const oldHandler = activeHandlers.get(session);
@@ -137,23 +158,31 @@ export async function browserNetworkIntercept(
     }
 
     try {
-      await (session as any).Fetch.enable({ patterns: [{ urlPattern: options.pattern, requestStage: 'Response' }] });
+      await (session as any).Fetch.enable({ patterns: [{ urlPattern: pattern, requestStage: 'Response' }] });
       const handler = async (params: any) => {
-        if (params.request?.url?.match(new RegExp(regexPattern))) {
+        if (params.request?.url && reg.test(params.request.url)) {
           await (session as any).Fetch.fulfillRequest({
             requestId: params.requestId,
-            responseCode: mockStatus,
+            responseCode: status,
             responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
-            body: Buffer.from(mockBody).toString('base64'),
+            body: Buffer.from(body).toString('base64'),
           }).catch(() => {});
         } else {
-          await (session as any).Fetch.continueRequest({ requestId: params.requestId }).catch(() => {});
+          // requestStage is 'Response' — continueResponse unblocks without stalling
+          const fetchApi = (session as any).Fetch;
+          if (typeof fetchApi.continueResponse === 'function') {
+            await fetchApi.continueResponse({ requestId: params.requestId }).catch(() =>
+              fetchApi.continueRequest({ requestId: params.requestId }).catch(() => {})
+            );
+          } else {
+            await fetchApi.continueRequest({ requestId: params.requestId }).catch(() => {});
+          }
         }
       };
       (session as any).on('Fetch.requestPaused', handler);
       activeHandlers.set(session, handler);
-      activeInterceptors.set(session, { pattern: options.pattern, mockStatus, mockBody });
-      return { success: true, message: `CDP Fetch interception enabled for ${options.pattern} (fallback mode)` };
+      activeInterceptors.set(session, { pattern, mockStatus: status, mockBody: body });
+      return { success: true, message: `CDP Fetch interception enabled for ${pattern} (fallback mode)` };
     } catch (e: any) {
       throw new Error(`Failed to enable CDP Fetch interception: ${e.message}`);
     }

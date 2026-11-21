@@ -14,73 +14,25 @@ import boxen from "boxen";
 import pc from "picocolors";
 import { WEAVETAB_VERSION } from "./version.js";
 
-// ─── Server-Process Singleton Lock ────────────────────────────────────────────
-// When an IDE opens multiple windows or reconnects after a crash, it spawns a new
-// `node dist/index.js` MCP process each time. Without a guard, these stack up
-// silently — each eating ~50-150 MB RAM with open timers/watchers. This lock
-// detects a live server process and exits the duplicate immediately.
 const _SERVER_LOCK_DIR = path.join(os.homedir(), ".weavetab-system", "locks");
-const _SERVER_LOCK_FILE = path.join(_SERVER_LOCK_DIR, ".weavetab-server.pid");
 
 function _isProcessAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-function _acquireServerLock(): boolean {
+function _reapStaleBrowserLock(): void {
   try {
-    fs.mkdirSync(_SERVER_LOCK_DIR, { recursive: true });
-    if (fs.existsSync(_SERVER_LOCK_FILE)) {
-      const existingPid = parseInt(fs.readFileSync(_SERVER_LOCK_FILE, "utf-8").trim(), 10);
-      if (!isNaN(existingPid) && existingPid !== process.pid) {
-        if (_isProcessAlive(existingPid)) {
-          process.stderr.write(`[Weavetab] Another Weavetab MCP server is running (PID ${existingPid}). Client session active.\n`);
-        } else {
-          // Process is dead: reap stale PID lock
-          try { fs.unlinkSync(_SERVER_LOCK_FILE); } catch { /* ignore */ }
-        }
-      }
-    }
-
-    // Also reap stale browser lock file if the recorded browser PID is dead
     const browserLockFile = path.join(_SERVER_LOCK_DIR, ".weavetab.lock");
     if (fs.existsSync(browserLockFile)) {
-      try {
-        const lockData = JSON.parse(fs.readFileSync(browserLockFile, "utf-8"));
-        if (lockData.pid && !_isProcessAlive(lockData.pid)) {
-          fs.unlinkSync(browserLockFile);
-        }
-      } catch { /* malformed lock, ignore */ }
-    }
-
-    fs.writeFileSync(_SERVER_LOCK_FILE, String(process.pid), "utf-8");
-    return true;
-  } catch {
-    return true; // If we can't write the lock, proceed anyway (non-fatal)
-  }
-}
-
-function _releaseServerLock(): void {
-  try {
-    if (fs.existsSync(_SERVER_LOCK_FILE)) {
-      const pid = parseInt(fs.readFileSync(_SERVER_LOCK_FILE, "utf-8").trim(), 10);
-      if (pid === process.pid) fs.unlinkSync(_SERVER_LOCK_FILE);
+      const lockData = JSON.parse(fs.readFileSync(browserLockFile, "utf-8"));
+      if (lockData.pid && !_isProcessAlive(lockData.pid)) {
+        fs.unlinkSync(browserLockFile);
+      }
     }
   } catch { /* ignore */ }
 }
 
-// Ensure process.stdin is accessible for TTY check
 const isInteractive = process.stdin.isTTY;
-
-// ─── Safe Logging Helper ───────────────────────────────────────────────────────
-// In MCP server mode, console.log corrupts the stdio protocol stream. Use
-// process.stderr.write for server mode, console.log for interactive CLI mode.
-function safeLog(message: string): void {
-  if ((global as any).__wt_is_server) {
-    process.stderr.write(message + "\n");
-  } else {
-    console.log(message);
-  }
-}
 
 function printBootBanner(port: number, isWs = false): void {
   process.stderr.write("\n");
@@ -101,14 +53,15 @@ async function main(): Promise<void> {
 
   const args = process.argv.slice(2);
 
-  // Global flags: --version always works; --ws starts the WebSocket daemon.
-  if (args.includes("--version") || args.includes("-v")) {
+  // Global flags only when invoked at top level (never hijack subcommand flags like `plugin update --version`)
+  if (args[0] === "--version" || args[0] === "-v") {
     const _v = createRequire(import.meta.url);
     const ver = _v("../package.json").version || WEAVETAB_VERSION;
     console.log(`@weavetab/mcp v${ver}`);
     process.exit(0);
   }
-  if (args.includes("--ws")) {
+  if (args[0] === "--ws" || (args[0]?.startsWith("-") && args.includes("--ws"))) {
+    (global as any).__wt_is_server = true;
     let wsPort = 3000;
     const pi = args.findIndex((a) => a === "--port");
     const eq = args.find((a) => a.startsWith("--port="));
@@ -121,8 +74,8 @@ async function main(): Promise<void> {
       }
       wsPort = parsed;
     }
+    _reapStaleBrowserLock();
     const config = await loadConfig();
-    (global as any).__wt_is_server = true;
     printBootBanner(wsPort, true);
     await startServer(config, "ws", wsPort);
     return;
@@ -130,19 +83,10 @@ async function main(): Promise<void> {
 
   // If NOT in a TTY environment (e.g. spawned by Claude Code as MCP server)
   if (!isInteractive && args.length === 0) {
-    // Singleton guard — exit immediately if another MCP server is alive.
-    // Prevents RAM spam from IDE reconnects / multiple IDE windows.
-    if (!_acquireServerLock()) {
-      process.exit(0);
-    }
-    // Release the PID lock on exit so the next invocation can take over.
-    process.on("exit", _releaseServerLock);
-    process.on("SIGINT", () => { _releaseServerLock(); process.exit(0); });
-    process.on("SIGTERM", () => { _releaseServerLock(); process.exit(0); });
-
-    const config = await loadConfig();
     (global as any).__wt_is_server = true;
-    await printBootBanner(getConfigAttachPort(config));
+    _reapStaleBrowserLock();
+    const config = await loadConfig();
+    printBootBanner(getConfigAttachPort(config));
     await startServer(config, "stdio", 3000);
     return;
   }
@@ -180,17 +124,14 @@ async function main(): Promise<void> {
       process.exit(0);
     }
     if (cmd === "plugin") {
-      // Delegate to plugin CLI: enforces 3-tier trust verification (@weavetab/* official,
-      // community verified registry allowlist, and interactive confirmation + permission
-      // manifest inspection for unverified packages).
       const { runPluginCli } = await import("./cli/plugin.js");
       await runPluginCli(args.slice(1));
-      process.exit(0);
+      process.exit(Number(process.exitCode) || 0);
     }
     if (cmd === "use") {
       const { runPluginCli } = await import("./cli/plugin.js");
       await runPluginCli(["use", ...args.slice(1)]);
-      process.exit(0);
+      process.exit(Number(process.exitCode) || 0);
     }
     if (cmd === "skills") {
       const { spawnSync } = await import("node:child_process");
@@ -209,6 +150,8 @@ async function main(): Promise<void> {
       console.log(pc.dim("SDK documentation:          ") + pc.cyan("https://weavetab.dev/docs/sdk-overview\n"));
       process.exit(0);
     }
+    console.error(pc.red(`[ERROR] Unknown command: "${args[0]}". Run 'weavetab help' to see available commands.`));
+    process.exit(1);
   }
 
   // Interactive UI Flow
@@ -216,7 +159,6 @@ async function main(): Promise<void> {
   const isFirstRun = !fs.existsSync(configPath);
 
   if (isFirstRun) {
-    // Lazy initialization for config directories on first startup
     try {
       const { getSystemDir } = await import("./config/loader.js");
       if (!fs.existsSync(GLOBAL_CONFIG_DIR)) {
@@ -229,11 +171,10 @@ async function main(): Promise<void> {
     }
 
     await runConfigWizard();
-
-
     await loadConfig();
-    await runMainUI();
   }
+
+  await runMainUI();
 
   // ─── IDE Detection Utilities ─────────────────────────────────────────────────────
 
@@ -246,22 +187,25 @@ async function main(): Promise<void> {
   function detectIDEs(): DetectedIDE[] {
     const detected: DetectedIDE[] = [];
     const home = os.homedir();
+    const plat = os.platform();
 
-    // Claude Desktop
-    const claudeConfigPath = path.join(home, ".config", "Claude", "claude_desktop_config.json");
-    if (fs.existsSync(claudeConfigPath)) {
+    const claudePaths = plat === "win32"
+      ? [path.join(process.env.APPDATA || path.join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json")]
+      : plat === "darwin"
+        ? [path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")]
+        : [path.join(home, ".config", "Claude", "claude_desktop_config.json")];
+    const claudeConfigPath = claudePaths.find(p => fs.existsSync(p));
+    if (claudeConfigPath) {
       detected.push({ name: "Claude Desktop", configPath: claudeConfigPath, configFormat: "claude" });
     }
 
-    // Cursor
-    const cursorConfigPath = path.join(home, ".cursor", "mcp_config.json");
-    if (fs.existsSync(cursorConfigPath)) {
+    const cursorConfigPath = [path.join(home, ".cursor", "mcp.json"), path.join(home, ".cursor", "mcp_config.json")].find(p => fs.existsSync(p));
+    if (cursorConfigPath) {
       detected.push({ name: "Cursor", configPath: cursorConfigPath, configFormat: "cursor" });
     }
 
-    // Windsurf
-    const windsurfConfigPath = path.join(home, ".windsurf", "mcp_config.json");
-    if (fs.existsSync(windsurfConfigPath)) {
+    const windsurfConfigPath = [path.join(home, ".codeium", "windsurf", "mcp_config.json"), path.join(home, ".windsurf", "mcp_config.json")].find(p => fs.existsSync(p));
+    if (windsurfConfigPath) {
       detected.push({ name: "Windsurf", configPath: windsurfConfigPath, configFormat: "windsurf" });
     }
 
@@ -498,7 +442,9 @@ async function main(): Promise<void> {
             S.tx("Extra browser flags (space-separated)", "browserFlagsRaw", ""),
             S.tx("Custom browser profile directory", "profileDir", ""),
           ])) === "back") process.exit(0);
-          a.browserFlags = typeof a.browserFlagsRaw === "string" && a.browserFlagsRaw.trim() ? a.browserFlagsRaw.split(/\s+/).filter(Boolean) : [];
+          a.browserFlags = typeof a.browserFlagsRaw === "string" && a.browserFlagsRaw.trim()
+            ? (a.browserFlagsRaw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || []).map(f => f.replace(/^(['"])(.*)\1$/, "$2"))
+            : [];
           delete a.browserFlagsRaw;
         }
 
@@ -510,7 +456,7 @@ async function main(): Promise<void> {
             S.tx("Navigation timeout (ms)", "navigationTimeout", "30000", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 1000 || n > 120000) return "1000-120000 ms."; }),
             S.tx("Idle timeout (ms)", "idleTimeout", "60000", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 5000) return "Min 5000 ms."; }),
             S.tx("Max actions per minute", "maxActionsPerMinute", "60", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 1) return "Positive integer."; }),
-            S.tx("Actionability timeout (ms)", "actionabilityTimeout", "500", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 100) return "Min 100 ms."; }),
+            S.tx("Actionability timeout (ms)", "actionabilityTimeoutMs", "300", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 50 || n > 15000) return "50-15000 ms."; }),
             S.tx("Ref cache TTL (ms) — stale element handle expiry", "refCacheTtlMs", "30000", (v) => { const n = parseInt(v ?? ""); if (isNaN(n) || n < 1000) return "Min 1000 ms."; }),
           ])) === "back") process.exit(0);
         }
@@ -531,7 +477,6 @@ async function main(): Promise<void> {
             S.tx("PDF output directory", "pdfDir", ""),
             S.tx("Snapshot directory (screenshots)", "snapshotDir", ""),
             S.tx("Recording output directory", "recordingDir", ""),
-            S.tx("Design extraction directory", "designDir", ""),
             S.tx("Proxy URL (or $WT_PROXY_URL)", "proxy", ""),
           ])) === "back") process.exit(0);
         }
@@ -571,34 +516,32 @@ async function main(): Promise<void> {
         role: a.role,
         headless: a.headless,
         devMode: a.devMode,
-        maxTabs: parseInt(a.maxTabs as string),
+        maxTabs: parseInt(a.maxTabs as string, 10),
+        actionabilityTimeoutMs: parseInt(a.actionabilityTimeout as string, 10) || 500,
         block: a.block,
         allow: a.allow,
       };
 
       if (a.advanced) {
-        Object.assign(partialConfig, {
-          browserType: a.browserType || "chromium",
-          extension: a.extension !== undefined ? a.extension : true,
-          cookies: a.cookies || false,
-          syncDataAcrossBrowsers: a.syncDataAcrossBrowsers || false,
-          browserFlags: a.browserFlags || [],
-          profileDir: a.profileDir || "",
-          sessionTimeout: parseInt(a.sessionTimeout as string) || 3600,
-          navigationTimeout: parseInt(a.navigationTimeout as string) || 30000,
-          idleTimeout: parseInt(a.idleTimeout as string) || 60000,
-          maxActionsPerMinute: parseInt(a.maxActionsPerMinute as string) || 60,
-          actionabilityTimeout: parseInt(a.actionabilityTimeout as string) || 500,
-          refCacheTtlMs: parseInt(a.refCacheTtlMs as string) || 30000,
-          telemetry: a.telemetry || false,
-          downloadDir: a.downloadDir || "",
-          pdfDir: a.pdfDir || "",
-          snapshotDir: a.snapshotDir || "",
-          recordingDir: a.recordingDir || "",
-          designDir: a.designDir || "",
-          proxy: typeof a.proxy === "string" && a.proxy.trim() ? a.proxy.trim() : undefined,
-          policies: a.policies || [],
-        });
+        if (a.browserType !== undefined) partialConfig.browserType = a.browserType;
+        if (a.extension !== undefined) partialConfig.extension = a.extension;
+        if (a.cookies !== undefined) partialConfig.cookies = a.cookies;
+        if (a.syncDataAcrossBrowsers !== undefined) partialConfig.syncDataAcrossBrowsers = a.syncDataAcrossBrowsers;
+        if (a.browserFlags !== undefined) partialConfig.browserFlags = a.browserFlags;
+        if (a.profileDir !== undefined) partialConfig.profileDir = a.profileDir;
+        if (a.sessionTimeout !== undefined) partialConfig.sessionTimeout = parseInt(a.sessionTimeout as string, 10) || 3600;
+        if (a.navigationTimeout !== undefined) partialConfig.navigationTimeout = parseInt(a.navigationTimeout as string, 10) || 30000;
+        if (a.idleTimeout !== undefined) partialConfig.idleTimeout = parseInt(a.idleTimeout as string, 10) || 60000;
+        if (a.maxActionsPerMinute !== undefined) partialConfig.maxActionsPerMinute = parseInt(a.maxActionsPerMinute as string, 10) || 60;
+        if (a.actionabilityTimeoutMs !== undefined) partialConfig.actionabilityTimeoutMs = parseInt(a.actionabilityTimeoutMs as string, 10) || 300;
+        if (a.refCacheTtlMs !== undefined) partialConfig.refCacheTtlMs = parseInt(a.refCacheTtlMs as string, 10) || 30000;
+        if (a.telemetry !== undefined) partialConfig.telemetry = a.telemetry;
+        if (a.downloadDir !== undefined) partialConfig.downloadDir = a.downloadDir;
+        if (a.pdfDir !== undefined) partialConfig.pdfDir = a.pdfDir;
+        if (a.snapshotDir !== undefined) partialConfig.snapshotDir = a.snapshotDir;
+        if (a.recordingDir !== undefined) partialConfig.recordingDir = a.recordingDir;
+        if (a.proxy !== undefined) partialConfig.proxy = typeof a.proxy === "string" && a.proxy.trim() ? a.proxy.trim() : undefined;
+        if (a.policies !== undefined) partialConfig.policies = a.policies;
       }
 
       const configDir = GLOBAL_CONFIG_DIR;
@@ -633,7 +576,8 @@ async function main(): Promise<void> {
             }));
 
           if (!p.isCancel(targetIDE)) {
-            const ide = detectedIDEs.find(i => i.name === targetIDE);
+            const targetName = typeof targetIDE === "string" ? targetIDE : targetIDE.name;
+            const ide = detectedIDEs.find(i => i.name === targetName);
             if (ide) {
               const action = await p.select({
                 message: "How would you like to add the config?",
@@ -817,11 +761,16 @@ async function main(): Promise<void> {
     try {
       const lockDir = path.join(os.homedir(), ".weavetab-system", "locks");
       const lockFile = path.join(lockDir, ".weavetab.lock");
+      const defaultProfilePath = path.join(os.homedir(), ".weavetab-system", "session-profile");
+      let profilePath = defaultProfilePath;
 
-      // Step 1: Kill process from lock file
+      // Step 1: Read profileDir and kill process from lock file BEFORE unlinking
       if (fs.existsSync(lockFile)) {
         try {
           const lockData = JSON.parse(fs.readFileSync(lockFile, "utf-8"));
+          if (lockData.profileDir && typeof lockData.profileDir === "string" && lockData.profileDir.trim()) {
+            profilePath = lockData.profileDir;
+          }
           if (lockData.pid) {
             try {
               process.kill(lockData.pid);
@@ -874,16 +823,6 @@ async function main(): Promise<void> {
 
       // Step 4: Kill orphan browser processes
       spinner.text = "Terminating orphan browser processes...";
-      const defaultProfilePath = path.join(os.homedir(), ".weavetab-system", "session-profile");
-      let profilePath = defaultProfilePath;
-      try {
-        if (fs.existsSync(lockFile)) {
-          const lockData = JSON.parse(fs.readFileSync(lockFile, "utf-8"));
-          if (lockData.profileDir && typeof lockData.profileDir === "string" && lockData.profileDir.trim()) {
-            profilePath = lockData.profileDir;
-          }
-        }
-      } catch { /* use default */ }
 
       // Never interpolate profilePath into a shell command string.
       // Windows: parse tasklist output in JS, kill each matching PID with taskkill args array.
@@ -1098,6 +1037,10 @@ async function main(): Promise<void> {
     console.log(configLines.join("\n"));
     console.log();
 
+    if (!process.stdin.isTTY) {
+      return;
+    }
+
     // Raw config option
     console.log(pc.dim("Press [R] to view raw JSON, [Q] to quit"));
 
@@ -1114,14 +1057,13 @@ async function main(): Promise<void> {
           resolve();
         } else if (key.toLowerCase() === "r") {
           process.stdin.removeListener("data", onKey);
-          process.stdin.setRawMode(false);
-          process.stdin.pause();
 
           console.clear();
           console.log(boxen(pc.cyan("RAW CONFIGURATION JSON"), { padding: 1, borderStyle: 'round', borderColor: 'cyan' }));
           console.log(JSON.stringify(config, null, 2));
           console.log(pc.dim("\nPress any key to return..."));
 
+          process.stdin.resume();
           process.stdin.once("data", () => {
             process.stdin.setRawMode(false);
             process.stdin.pause();
@@ -1246,7 +1188,7 @@ async function main(): Promise<void> {
         await open("https://www.npmjs.com/package/@weavetab/mcp");
       }
       if (k === "w") {
-        await open("https://github.com/weavetab/mcp");
+        await open("https://weavetab.dev");
       }
     };
 
@@ -1257,7 +1199,7 @@ async function main(): Promise<void> {
     const _require = createRequire(import.meta.url);
     const version = _require("../package.json").version || WEAVETAB_VERSION;
 
-    console.clear();
+    if (process.stdout.isTTY) console.clear();
 
     console.log(boxen(pc.cyan(`Weavetab v${version}`), { padding: 1, borderStyle: 'round', borderColor: 'cyan' }));
 
@@ -1269,7 +1211,8 @@ async function main(): Promise<void> {
     console.log();
 
     console.log(pc.bold("COMMANDS"));
-    console.log(`  ${pc.cyan("plugin")}        Manage Weavetab plugins (add, list, remove, search, browse, verify)`);
+    console.log(`  ${pc.cyan("plugin")}        Manage Weavetab plugins (add, remove, list, info, use, enable, disable, update, verify)`);
+    console.log(`  ${pc.cyan("use")}           Shorthand for 'weavetab plugin use <pkg> [cmd]'`);
     console.log(`  ${pc.cyan("config")}        Launch the interactive configuration wizard`);
     console.log(`  ${pc.cyan("skills")}        Install or update AI agent skills (@weavetab/skills)`);
     console.log(`  ${pc.cyan("view")}          Display the current active configuration`);
@@ -1287,14 +1230,19 @@ async function main(): Promise<void> {
     console.log();
 
     console.log(pc.bold("PLUGIN COMMANDS (User & AI Agent)"));
-    console.log(`  ${pc.cyan("weavetab plugin use <pkg> <cmd>")}   Run a plugin CLI command or MCP tool (e.g. weavetab plugin use github repo-summary)`);
-    console.log(`  ${pc.cyan("weavetab plugin agents [pkg]")}      Print the context-safe AGENTS.md playbook for a plugin`);
-    console.log(`  ${pc.cyan("weavetab plugin add <pkg>")}         Install a plugin from npm (or a local path: ./my-plugin)`);
-    console.log(`  ${pc.cyan("weavetab plugin browse")}            Interactive terminal explorer to browse & 1-click install`);
-    console.log(`  ${pc.cyan("weavetab plugin search <query>")}    Search plugins across registry & npm`);
-    console.log(`  ${pc.cyan("weavetab plugin list")}              List all installed Weavetab plugins, CLI commands, tools, and utilities`);
-    console.log(`  ${pc.cyan("weavetab plugin remove <pkg>")}      Uninstall a plugin`);
-    console.log(`  ${pc.cyan("weavetab plugin verify <pkg>")}      Check trust tier and AGENTS.md compliance`);
+    console.log(`  ${pc.cyan("weavetab plugin use <pkg> [cmd]")}     Run a plugin CLI command, MCP tool, or inspect its surface`);
+    console.log(`  ${pc.cyan("weavetab use <pkg> [cmd]")}            Shorthand alias for 'weavetab plugin use'`);
+    console.log(`  ${pc.cyan("weavetab plugin info <pkg>")}          Inspect an installed plugin's manifest, tools & permissions`);
+    console.log(`  ${pc.cyan("weavetab plugin enable <pkg>")}        Enable a disabled plugin`);
+    console.log(`  ${pc.cyan("weavetab plugin disable <pkg>")}       Disable a plugin without uninstalling it`);
+    console.log(`  ${pc.cyan("weavetab plugin instructions [pkg]")}  Print bounded operational instructions from weavetab.json`);
+    console.log(`  ${pc.cyan("weavetab plugin add <pkg|path>")}      Install a plugin from npm or local path (alias: install)`);
+    console.log(`  ${pc.cyan("weavetab plugin update <pkg>")}        Upgrade an installed plugin to a newer published version`);
+    console.log(`  ${pc.cyan("weavetab plugin list")}                List all installed plugins, status, commands, tools & utilities`);
+    console.log(`  ${pc.cyan("weavetab plugin remove <pkg>")}        Uninstall a plugin (alias: rm, uninstall)`);
+    console.log(`  ${pc.cyan("weavetab plugin browse")}              Interactive terminal explorer to browse & install`);
+    console.log(`  ${pc.cyan("weavetab plugin search [query]")}      Search plugins across registry & npm`);
+    console.log(`  ${pc.cyan("weavetab plugin verify <pkg>")}        Check trust tier and instructions compliance`);
     console.log();
 
     console.log(pc.bold("PLUGIN DEVELOPER SDK (@weavetab/sdk)"));
@@ -1323,39 +1271,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[Weavetab] Fatal: ${message}\n`);
-    if (!process.stdin.isTTY) process.exit(1);
-  });
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`[Weavetab] Fatal: ${message}\n`);
+  if (!process.stdin.isTTY) process.exit(1);
+});
 
-  async function shutdown() {
-    if (!(global as any).__wt_is_server) {
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      process.exit(0);
-    }
-    process.stderr.write("\n[Weavetab] graceful shutdown. detaching sessions...\n");
-    try {
-      const { sessionRegistry } = await import("./state/session.js");
-      const clients = sessionRegistry.getAll();
-      await Promise.all(clients.map(c => c.session.close().catch(() => { })));
-      process.stderr.write("[Weavetab] sessions detached.\n");
-    } catch { }
-    process.exit(0);
-  }
-
-  // Only register index.ts signal handlers when NOT running as MCP server.
-  // Both index.ts and server.ts would otherwise register SIGINT/SIGTERM handlers
-  // in the same process, and since the last-registered handler wins, index.ts's
-  // shutdown() would race server.ts's cleanup(). In server mode, server.ts is the
-  // sole owner of signal handling.
-  if (!(global as any).__wt_is_server) {
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
-  }
-
-
-  async function runSecretsCommand(args: string[]) {
+async function runSecretsCommand(args: string[]) {
     const { secretStore } = await import("./security/secrets.js");
     const p = await import("@clack/prompts");
 

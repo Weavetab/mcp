@@ -4,6 +4,8 @@ import {
   resolvePluginTrust,
   getVerifiedPackages,
   invalidateRegistryCache,
+  stripNpmVersion,
+  encodeNpmPackageName,
 } from "../../src/plugin/registry.js";
 import {
   inspectInstalledPackage,
@@ -13,10 +15,12 @@ import {
   getPluginCommands,
   buildPluginInstructions,
   touchPluginEpoch,
+  setPluginEnabled,
+  isPluginDisabled,
   MAX_INSTRUCTIONS_LINES,
   MAX_INSTRUCTIONS_CHARS,
 } from "../../src/plugin/loader.js";
-import { compareSemver } from "../../src/cli/plugin.js";
+import { compareSemver, parseCliInvokeArgs, runPluginCli } from "../../src/cli/plugin.js";
 import { PluginStorageManager } from "../../src/plugin/storage.js";
 import { PluginExtensionBridge } from "../../src/plugin/extension_bridge.js";
 import { toPluginInputShape, toPromptShape } from "../../src/plugin/schema.js";
@@ -468,5 +472,153 @@ describe("Plugin CLI Commands and Instructions Context Budgeting", () => {
     assert.ok(fs.existsSync(epochPath));
     const content = fs.readFileSync(epochPath, "utf-8");
     assert.ok(Number(content) > 0);
+  });
+
+  it("enforces strict opt-in permissions on PluginExtensionBridge and routes HUD/panel calls", async () => {
+    const evals: string[] = [];
+    const fakeSession: any = {
+      Runtime: {
+        evaluate: async ({ expression }: { expression: string }) => {
+          evals.push(expression);
+          return { result: { value: true } };
+        },
+      },
+    };
+
+    const denied = new PluginExtensionBridge("no-perms");
+    await denied.setHudState(fakeSession, { action: "Running", badge: "Run" });
+    assert.strictEqual(evals.length, 0);
+    await assert.rejects(() => denied.injectStyles(fakeSession, "body{}"), /Permission Denied/);
+    await assert.rejects(() => denied.mountPanel(fakeSession, "panel"), /Permission Denied/);
+
+    const granted = new PluginExtensionBridge("with-perms", {
+      extension: { hud: true, overlay: true, styles: true, scripts: false },
+    });
+    await granted.setHudState(fakeSession, { action: "Auditing", badge: "Audit", badgeColor: "#005EFA" });
+    await granted.mountPanel(fakeSession, { title: "Audit", text: "OK" });
+    await granted.clearPanel(fakeSession);
+    assert.ok(evals.some((expr) => expr.includes("WT_HUD_UPDATE")));
+    assert.ok(evals.some((expr) => expr.includes("__wt_plugin_panel_with-perms")));
+
+    const storage = new PluginStorageManager("with-perms");
+    const hooks = {
+      onBeforeAction: () => {},
+      onAfterAction: () => {},
+      onDOMMutation: () => {},
+      beforeToolCall: () => {},
+      afterToolCall: () => {},
+    };
+    const ctx = buildPluginContext({ name: "with-perms", version: "1.0.0", manifest: {} } as any, storage, granted, {}, hooks);
+    assert.strictEqual(ctx.extension, granted);
+  });
+
+  it("does not populate unused permission categories for flat string arrays", () => {
+    const perms = normalizePermissions(["browser.evaluate"]);
+    assert.strictEqual(perms.cdp?.evaluate, true);
+    assert.strictEqual(perms.fs, undefined);
+    assert.strictEqual(perms.tools, undefined);
+    assert.strictEqual(perms.hooks, undefined);
+  });
+
+  it("strips npm version specs and encodes scoped package names cleanly", async () => {
+    assert.deepStrictEqual(stripNpmVersion("@weavetab/plugin-foo@1.2.3"), {
+      name: "@weavetab/plugin-foo",
+      version: "1.2.3",
+    });
+    assert.deepStrictEqual(stripNpmVersion("my-plugin@latest"), {
+      name: "my-plugin",
+      version: "latest",
+    });
+    assert.deepStrictEqual(stripNpmVersion("@weavetab/plugin-foo"), {
+      name: "@weavetab/plugin-foo",
+    });
+    assert.strictEqual(encodeNpmPackageName("@weavetab/plugin-foo"), "@weavetab%2Fplugin-foo");
+
+    const { resolvePluginCandidates } = await import("../../src/plugin/registry.js");
+    const cands = await resolvePluginCandidates("@weavetab/plugin-foo@1.2.3", new Set());
+    assert.strictEqual(cands[0].tier, "official");
+    assert.strictEqual(cands[0].packageName, "@weavetab/plugin-foo@1.2.3");
+  });
+
+  it("parses CLI flags safely: blocks prototype keys, handles negative numbers, rejects bare --json", () => {
+    const parsed = parseCliInvokeArgs([
+      "pos1",
+      "--offset",
+      "-50",
+      "--__proto__=polluted",
+      "--constructor",
+      "bad",
+      "--flag",
+      "--json",
+      '{"count":3,"__proto__":{"evil":true}}',
+    ]);
+    assert.deepStrictEqual(parsed.positional, ["pos1"]);
+    assert.strictEqual(parsed.flags.offset, -50);
+    assert.strictEqual(parsed.flags.flag, true);
+    assert.strictEqual(parsed.flags.count, 3);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(parsed.flags, "__proto__"), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(parsed.flags, "constructor"), false);
+
+    assert.throws(() => parseCliInvokeArgs(["--json"]), /Missing JSON value/);
+  });
+
+  it("persists plugin enable/disable state cleanly", () => {
+    const testPkg = `unit-test-toggle-${Date.now()}`;
+    try {
+      assert.strictEqual(isPluginDisabled(testPkg), false);
+      setPluginEnabled(testPkg, false);
+      assert.strictEqual(isPluginDisabled(testPkg), true);
+      setPluginEnabled(testPkg, true);
+      assert.strictEqual(isPluginDisabled(testPkg), false);
+    } finally {
+      setPluginEnabled(testPkg, true);
+    }
+  });
+
+  it("supports onDOMMutation registration via buildPluginContext and merges defaultConfig in storage", () => {
+    const pkgName = `unit-test-dom-cfg-${Date.now()}`;
+    const storage = new PluginStorageManager(pkgName);
+    try {
+      storage.saveConfig({ existingKey: "custom" });
+      const merged = storage.loadConfig({ existingKey: "default", newKey: 42 });
+      assert.strictEqual(merged.existingKey, "custom");
+      assert.strictEqual(merged.newKey, 42);
+
+      const hooks: any = { beforeToolCall: [], afterToolCall: [], onPageNavigate: [] };
+      const plugin: any = {
+        name: pkgName,
+        version: "1.0.0",
+        manifest: { permissions: { hooks: { onDOMMutation: true }, tools: { override: ["browser_eval"] } } },
+      };
+      const ctx = buildPluginContext(plugin, storage, new PluginExtensionBridge(pkgName, {}), {}, hooks);
+      const fn = () => {};
+      ctx.hooks.onDOMMutation(fn);
+      assert.strictEqual(hooks.onDOMMutation.length, 1);
+
+      ctx.mcp.overrideTool?.("browser_eval", { description: "wrapped", handler: async () => ({}) });
+      assert.strictEqual(plugin.overrides.length, 1);
+      assert.strictEqual(plugin.overrides[0].description, "wrapped");
+    } finally {
+      try { fs.rmSync(storage.getDirectory(), { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("sets non-zero exitCode on unknown plugin CLI subcommand and missing targets", async () => {
+    const prev = process.exitCode;
+    try {
+      process.exitCode = 0;
+      await runPluginCli(["nonexistent-subcmd-xyz"]);
+      assert.strictEqual(process.exitCode, 1);
+
+      process.exitCode = 0;
+      await runPluginCli(["info", "nonexistent-plugin-xyz"]);
+      assert.strictEqual(process.exitCode, 1);
+
+      process.exitCode = 0;
+      await runPluginCli(["disable", "nonexistent-plugin-xyz"]);
+      assert.strictEqual(process.exitCode, 1);
+    } finally {
+      process.exitCode = prev;
+    }
   });
 });

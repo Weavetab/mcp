@@ -46,7 +46,7 @@ async function resolveRefToCoords(session: CDP.Client, targetId: string, ref: st
     cacheActionMap(targetId, map);
   }
 
-  let element = map.elements.find((el) => el.id === ref || el.id.endsWith(ref.startsWith("w:") ? ref.slice(2) : ref));
+  let element = map.elements.find((el) => el.id === ref || el.id === `w:${ref}`);
   if (!element && ref && !ref.startsWith("w:")) {
     element = {
       id: ref,
@@ -152,7 +152,7 @@ export interface PointerStep {
 }
 
 export interface PointerArgs {
-  action?: "click" | "double_click" | "hover" | "drag_and_drop" | "hover_chain";
+  action?: "click" | "double_click" | "hover" | "move" | "drag_and_drop" | "hover_chain";
   ref?: string;
   selector?: string;
   target?: string;
@@ -343,7 +343,7 @@ export async function browserPointer(
 
   // Move to target using human-like motion
   await withTimeout((async () => {
-    if (action === "hover") {
+    if (action === "hover" || action === "move") {
       await Promise.race([
         ghostMove(session, startX, startY, config),
         new Promise<void>(r => setTimeout(r, 3000)).then(() => ghostMove(session, startX, startY, config, undefined, "instant"))
@@ -355,8 +355,12 @@ export async function browserPointer(
 
   let preBox: { x: number; y: number; w: number; h: number; tag: string } | null = null;
   let isCanvasTarget = false;
+  let resolvedEndX = end_x;
+  let resolvedEndY = end_y;
 
-  if (action === "hover") {
+  if (action === "move") {
+    await Input.dispatchMouseEvent({ type: "mouseMoved", x: startX, y: startY, pointerType: "mouse" });
+  } else if (action === "hover") {
     // Dispatch both mouseenter AND mouseover (some sites only listen to one)
     if (startSelector) {
       await session.Runtime.evaluate({
@@ -401,6 +405,8 @@ export async function browserPointer(
     if (destX === undefined || destY === undefined) {
       throw new Error("drag_and_drop requires either end_ref or end_x/end_y");
     }
+    resolvedEndX = destX;
+    resolvedEndY = destY;
 
     // ── Pre-drag: snapshot the element bounding box for verification ──────
     const preDragBBox = await session.Runtime.evaluate({
@@ -511,81 +517,58 @@ export async function browserPointer(
       }).catch(() => {});
     }
 
-    // ── Strategy 3: CDP pointer/mouse sequence (primary for canvas apps) ──
-    // For canvas apps (Excalidraw, Figma, tldraw, etc.) that use
-    // PointerEvents + setPointerCapture. The REAL CDP mousePressed creates
-    // the active pointer that the app's pointerdown handler can capture.
-    // We then augment each CDP mouseMoved with a synthetic PointerEvent
-    // dispatched on the CAPTURED element so pointermove reaches it even
-    // though the cursor has left its bounds.
-    //
-    // The old code dispatched synthetic pointerdown BEFORE CDP mousePressed,
-    // which meant setPointerCapture(pointerId) threw NotFoundError because no
-    // real pointer existed yet. The CDP press comes first, establishing the
-    // pointer, and synthetic events only augment the move/release phases.
+    // Strategy 3: CDP pointer/mouse sequence (only when Strategy 1 didn't succeed, or on canvas)
+    if (!cdpDragWorked || isCanvasTarget) {
+      await Input.dispatchMouseEvent({ type: "mousePressed", x: startX, y: startY, button: "left", clickCount: 1, pointerType: "mouse" });
+      await new Promise(r => setTimeout(r, 120));
 
-    // Step 1: CDP mousePressed — creates the real active pointer
-    await Input.dispatchMouseEvent({ type: "mousePressed", x: startX, y: startY, button: "left", clickCount: 1, pointerType: "mouse" });
-    await new Promise(r => setTimeout(r, 120));
+      const dragSteps = 16;
+      for (let i = 1; i <= dragSteps; i++) {
+        const t = i / dragSteps;
+        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        const mx = Math.round(startX + (destX - startX) * eased);
+        const my = Math.round(startY + (destY - startY) * eased);
 
-    // Step 2: Interpolated drag — CDP mouseMoved + synthetic PointerEvent
-    const dragSteps = 16;
-    for (let i = 1; i <= dragSteps; i++) {
-      const t = i / dragSteps;
-      // Ease-in-out for natural motion
-      const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-      const mx = Math.round(startX + (destX - startX) * eased);
-      const my = Math.round(startY + (destY - startY) * eased);
+        await Input.dispatchMouseEvent({ type: "mouseMoved", x: mx, y: my, button: "left", buttons: 1, clickCount: 1, pointerType: "mouse" });
 
-      // CDP mouse move (generates a real pointer event internally)
-      await Input.dispatchMouseEvent({ type: "mouseMoved", x: mx, y: my, button: "left", clickCount: 1, pointerType: "mouse" });
+        if (isCanvasTarget) {
+          await session.Runtime.evaluate({
+            expression: `(function(sx, sy, mx, my) {
+              var el = document.elementFromPoint(sx, sy) || document.elementFromPoint(mx, my);
+              if (!el) return;
+              el.dispatchEvent(new PointerEvent('pointermove', {
+                bubbles: true, cancelable: true, view: window,
+                pointerId: 1, pointerType: 'mouse', isPrimary: true,
+                width: 1, height: 1, pressure: 0.5,
+                button: -1, buttons: 1,
+                clientX: ${mx}, clientY: ${my}
+              }));
+            })(${startX}, ${startY}, ${mx}, ${my})`,
+            returnByValue: false,
+          }).catch(() => {});
+        }
 
-      // Augment with synthetic pointermove on the source element.
-      // If the app called setPointerCapture, the browser routes real
-      // pointer events to the capturing element. But some apps also
-      // listen on document/window, so we fire on the original element
-      // for belt-and-suspenders coverage.
+        await new Promise(r => setTimeout(r, 18));
+      }
+
+      await new Promise(r => setTimeout(r, 80));
+      await Input.dispatchMouseEvent({ type: "mouseReleased", x: destX, y: destY, button: "left", clickCount: 1, pointerType: "mouse" });
+
       if (isCanvasTarget) {
         await session.Runtime.evaluate({
-          expression: `(function(sx, sy, mx, my) {
-            var el = document.elementFromPoint(sx, sy) || document.elementFromPoint(mx, my);
+          expression: `(function(sx, sy, dx, dy) {
+            var el = document.elementFromPoint(sx, sy) || document.elementFromPoint(dx, dy);
             if (!el) return;
-            el.dispatchEvent(new PointerEvent('pointermove', {
+            el.dispatchEvent(new PointerEvent('pointerup', {
               bubbles: true, cancelable: true, view: window,
               pointerId: 1, pointerType: 'mouse', isPrimary: true,
-              width: 1, height: 1, pressure: 0.5,
-              button: -1, buttons: 1,
-              clientX: ${mx}, clientY: ${my}
+              width: 1, height: 1, pressure: 0, button: 0, buttons: 0,
+              clientX: ${destX}, clientY: ${destY}
             }));
-          })(${startX}, ${startY}, ${mx}, ${my})`,
+          })(${startX}, ${startY}, ${destX}, ${destY})`,
           returnByValue: false,
         }).catch(() => {});
       }
-
-      await new Promise(r => setTimeout(r, 18));
-    }
-
-    // Small settle before release
-    await new Promise(r => setTimeout(r, 80));
-
-    // Step 3: Release at destination
-    await Input.dispatchMouseEvent({ type: "mouseReleased", x: destX, y: destY, button: "left", clickCount: 1, pointerType: "mouse" });
-
-    // Augment with synthetic pointerup for canvas apps
-    if (isCanvasTarget) {
-      await session.Runtime.evaluate({
-        expression: `(function(sx, sy, dx, dy) {
-          var el = document.elementFromPoint(sx, sy) || document.elementFromPoint(dx, dy);
-          if (!el) return;
-          el.dispatchEvent(new PointerEvent('pointerup', {
-            bubbles: true, cancelable: true, view: window,
-            pointerId: 1, pointerType: 'mouse', isPrimary: true,
-            width: 1, height: 1, pressure: 0, button: 0, buttons: 0,
-            clientX: ${destX}, clientY: ${destY}
-          }));
-        })(${startX}, ${startY}, ${destX}, ${destY})`,
-        returnByValue: false,
-      }).catch(() => {});
     }
 
     // Clean up stuck drag CSS classes
@@ -617,28 +600,21 @@ export async function browserPointer(
   const changesCount = diff ? diff.added.length + diff.removed.length + diff.changed.length : 0;
   const domChanged = changesCount > 0 || finalUrl !== initialUrl;
 
-  // ── Post-drag verification for drag_and_drop ───────────────────────────
-  // Check whether the element actually moved by comparing its bounding box
-  // before and after. For canvas apps we check if the source element's box
-  // shifted by at least 60% of the drag vector. For DOM-based drops we
-  // probe for common drop-indicator patterns.
   let dragVerified: boolean | undefined = undefined;
-  if (action === "drag_and_drop" && startX !== undefined && startY !== undefined && end_x !== undefined && end_y !== undefined) {
-    await new Promise(r => setTimeout(r, 200)); // let animations settle
+  if (action === "drag_and_drop" && startX !== undefined && startY !== undefined && resolvedEndX !== undefined && resolvedEndY !== undefined) {
+    await new Promise(r => setTimeout(r, 200));
 
-    // Check 1: bounding-box delta on the originally-clicked element
     const postDragBBox = await session.Runtime.evaluate({
       expression: `(function(dx, dy, sel) {
         var el = sel ? document.querySelector(sel) : document.elementFromPoint(dx, dy);
         if (!el) return null;
         var r = el.getBoundingClientRect();
         return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
-      })(${end_x}, ${end_y}, ${startSelector ? JSON.stringify(startSelector) : 'null'})`,
+      })(${resolvedEndX}, ${resolvedEndY}, ${startSelector ? JSON.stringify(startSelector) : 'null'})`,
       returnByValue: true,
     }).catch(() => null);
     const postBox = postDragBBox?.result?.value as { x: number; y: number; w: number; h: number } | null;
 
-    // Check 2: probe for drop-zone indicators (text change, class change)
     const dropProbe = await session.Runtime.evaluate({
       expression: `(function(dx, dy) {
         var el = document.elementFromPoint(dx, dy);
@@ -646,43 +622,25 @@ export async function browserPointer(
         var text = (el.textContent || '').trim().substring(0, 100);
         var classes = el.className || '';
         return { found: true, text: text, classes: typeof classes === 'string' ? classes : '' };
-      })(${end_x}, ${end_y})`,
+      })(${resolvedEndX}, ${resolvedEndY})`,
       returnByValue: true,
     }).catch(() => null);
     const probe = dropProbe?.result?.value as { found: boolean; text?: string; classes?: string } | null;
 
-    if (postBox && startSelector) {
-      // DOM element with a selector — check if it moved
-      const curBBoxRes = await session.Runtime.evaluate({
-        expression: `(function(sel) {
-          var el = document.querySelector(sel);
-          if (!el) return null;
-          var r = el.getBoundingClientRect();
-          return { x: Math.round(r.left), y: Math.round(r.top) };
-        })(${JSON.stringify(startSelector)})`,
-        returnByValue: true,
-      }).catch(() => null);
-      const curBox = curBBoxRes?.result?.value as { x: number; y: number } | null;
-
-      if (curBox && preBox) {
-        const movedX = Math.abs(curBox.x - preBox.x);
-        const movedY = Math.abs(curBox.y - preBox.y);
-        const dragDist = Math.sqrt(Math.pow((end_x || 0) - startX, 2) + Math.pow((end_y || 0) - startY, 2));
-        dragVerified = (movedX + movedY) > Math.max(5, dragDist * 0.3);
-      }
+    if (postBox && startSelector && preBox) {
+      const movedX = Math.abs(postBox.x - preBox.x);
+      const movedY = Math.abs(postBox.y - preBox.y);
+      const dragDist = Math.sqrt(Math.pow(resolvedEndX - startX, 2) + Math.pow(resolvedEndY - startY, 2));
+      dragVerified = (movedX + movedY) > Math.max(5, dragDist * 0.3);
     } else if (domChanged) {
-      // DOM changed after drag — likely a sortable/drop zone interaction
       dragVerified = true;
     } else if (probe?.found) {
-      // Check for common drop indicator patterns
       const dropIndicators = ['dropped', 'drop-success', 'drag-complete', 'moved'];
       const probeText = (probe.text || '').toLowerCase();
       const probeClasses = (probe.classes || '').toLowerCase();
       dragVerified = dropIndicators.some(ind => probeText.includes(ind) || probeClasses.includes(ind));
     }
 
-    // For canvas targets where we can't easily verify, don't claim failure —
-    // leave dragVerified as undefined (unknown) rather than false
     if (dragVerified === undefined && !domChanged) {
       dragVerified = false;
     }
@@ -703,8 +661,8 @@ export async function browserPointer(
     action,
     x: startX,
     y: startY,
-    end_x,
-    end_y,
+    end_x: resolvedEndX,
+    end_y: resolvedEndY,
     execution_ms: executionMs,
     tab_id: targetId,
     url: finalUrl,

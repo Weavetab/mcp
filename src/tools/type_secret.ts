@@ -15,7 +15,7 @@
  * Weavetab by fy2ne
  */
 import CDP from "chrome-remote-interface";
-import { buildActionMap, findBestMatch, findAllMatches } from "../cdp/walker.js";
+import { buildActionMap, findAllMatches } from "../cdp/walker.js";
 import { logAction } from "../audit/logger.js";
 import { recordAction } from "../intelligence/trail.js";
 import { SessionSecretTracker, secretStore } from "../security/secrets.js";
@@ -45,6 +45,9 @@ export async function weaveTypeSecret(
   try {
     currentHostname = new URL(url).hostname;
   } catch {
+    currentHostname = "";
+  }
+  if (!currentHostname) {
     return {
       success: false,
       error_code: "INVALID_URL",
@@ -102,11 +105,10 @@ export async function weaveTypeSecret(
     return { success: false, error_code: "INVALID_ARGS", message: "[!] Must provide id, target, or selector" };
   }
 
-  let target = map.elements.find(el => 
-    el.id === query || 
-    el.id === `w:${query}` || 
-    el.selector === query ||
-    el.id.endsWith(query.startsWith("w:") ? query.slice(2) : query)
+  let target = map.elements.find(el =>
+    el.id === query ||
+    el.id === `w:${query}` ||
+    el.selector === query
   );
 
   let selector = "";
@@ -140,100 +142,91 @@ export async function weaveTypeSecret(
     selector = target.selector || `[data-wt-id="${rawId}"]`;
   }
 
-  await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `injecting [REDACTED]...` } });
+  await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `injecting [REDACTED]...` } }).catch(() => {});
 
-  // ── Step 5: Resolve DOM node, mark as secret, focus ───────────────────────
-  const nodeInfo = await session.Runtime.evaluate({
-    expression: `(function(sel) {
-      const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
-      if (!el) throw new Error('NOT_FOUND');
-      
-      const tag = el.tagName.toLowerCase();
-      const isEditable = tag === 'input' || tag === 'textarea' || el.isContentEditable;
-      if (!isEditable) throw new Error('NOT_EDITABLE');
+  try {
+    const nodeInfo = await session.Runtime.evaluate({
+      expression: `(function(sel) {
+        const el = sel === 'document.activeElement'
+          ? document.activeElement
+          : (document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null));
+        if (!el || el === document.body) throw new Error('NOT_FOUND');
 
-      // Mark as secret so all subsequent read tools redact this element
-      el.setAttribute('data-wt-secret', 'true');
-      if (typeof el.select === 'function') { el.select(); }
-      else if (el.isContentEditable) { el.textContent = ''; el.dispatchEvent(new Event('input',{bubbles:true})); }
-      else { el.value = ''; el.dispatchEvent(new Event('input',{bubbles:true})); }
-      
-      return el;
-    })(${JSON.stringify(selector)})`,
-    returnByValue: false
-  });
+        const tag = el.tagName.toLowerCase();
+        const isEditable = tag === 'input' || tag === 'textarea' || el.isContentEditable;
+        if (!isEditable) throw new Error('NOT_EDITABLE');
 
-  if (nodeInfo.exceptionDetails) {
-    const errMsg = nodeInfo.exceptionDetails.exception?.description || "";
-    if (errMsg.includes('NOT_EDITABLE')) {
-      return { success: false, error_code: "NOT_EDITABLE", message: `[!] Target ${selector} is not an editable field.` };
+        el.setAttribute('data-wt-secret', 'true');
+        if (typeof el.select === 'function') { el.select(); }
+        else if (el.isContentEditable) { el.textContent = ''; el.dispatchEvent(new Event('input',{bubbles:true})); }
+        else { el.value = ''; el.dispatchEvent(new Event('input',{bubbles:true})); }
+
+        return el;
+      })(${JSON.stringify(selector)})`,
+      returnByValue: false
+    });
+
+    if (nodeInfo.exceptionDetails) {
+      const errMsg = nodeInfo.exceptionDetails.exception?.description || "";
+      if (errMsg.includes('NOT_EDITABLE')) {
+        return { success: false, error_code: "NOT_EDITABLE", message: `[!] Target ${selector} is not an editable field.` };
+      }
+      if (errMsg.includes('NOT_FOUND')) {
+        return { success: false, error_code: "ELEMENT_NOT_FOUND", message: `[!] Could not find element ${selector}.` };
+      }
+      return { success: false, error_code: "DOM_EVAL_FAILED", message: `[!] Evaluation failed while resolving target.` };
     }
-    if (errMsg.includes('NOT_FOUND')) {
-      return { success: false, error_code: "ELEMENT_NOT_FOUND", message: `[!] Could not find element ${selector}.` };
+
+    if (!nodeInfo.result?.objectId) {
+      return { success: false, error_code: "DOM_RESOLUTION_FAILED", message: `[!] Failed to resolve DOM node for ${selector}` };
     }
-    return { success: false, error_code: "DOM_EVAL_FAILED", message: `[!] Evaluation failed while resolving target.` };
-  }
 
-  if (!nodeInfo.result?.objectId) {
-    return { success: false, error_code: "DOM_RESOLUTION_FAILED", message: `[!] Failed to resolve DOM node for ${selector}` };
-  }
-
-  // Request node to get backendNodeId for SessionSecretTracker
-  const nodeDetails = await session.DOM.requestNode({ objectId: nodeInfo.result.objectId });
-  if (nodeDetails.nodeId) {
-    const desc = await session.DOM.describeNode({ nodeId: nodeDetails.nodeId });
-    if (desc.node.backendNodeId) {
-      SessionSecretTracker.markNodeAsSecret(targetId, desc.node.backendNodeId);
+    const nodeDetails = await session.DOM.requestNode({ objectId: nodeInfo.result.objectId });
+    if (nodeDetails.nodeId) {
+      const desc = await session.DOM.describeNode({ nodeId: nodeDetails.nodeId });
+      if (desc.node.backendNodeId) {
+        SessionSecretTracker.markNodeAsSecret(targetId, desc.node.backendNodeId);
+      }
     }
+
+    await session.Runtime.callFunctionOn({
+      functionDeclaration: `function() {
+        if (this.scrollIntoViewIfNeeded) this.scrollIntoViewIfNeeded();
+        else this.scrollIntoView({behavior:'smooth',block:'center'});
+        this.focus();
+        this.click();
+      }`,
+      objectId: nodeInfo.result.objectId,
+      silent: true
+    });
+
+    SessionSecretTracker.registerSecretValue(targetId, secretValue);
+    await session.Input.insertText({ text: secretValue });
+
+    await applySecretHardening(session, nodeInfo.result.objectId, selector);
+
+    const executionMs = Date.now() - startTime;
+
+    const targetLabel = target?.label || selector;
+    const targetIdStr = target?.id || query;
+    const finalRef = targetIdStr.startsWith('w:') ? targetIdStr : `w:${targetIdStr}`;
+    logAction("browser_type_secret", finalRef, `[secret injected: ${args.envKey}@${currentHostname}] into ${targetLabel} (exec: ${executionMs}ms)`);
+    recordAction({
+      timestamp: new Date().toISOString(),
+      tool: "browser_type_secret",
+      input: { ref: finalRef, label: targetLabel, envKey: args.envKey, domain: currentHostname },
+      result: { success: true },
+    });
+
+    return {
+      success: true,
+      typed_into: targetLabel,
+      ref: finalRef,
+      key: args.envKey,
+      domain: currentHostname,
+      execution_ms: executionMs,
+    };
+  } finally {
+    sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } }).catch(() => {});
   }
-
-  // ── Step 6: Focus element ─────────────────────────────────────────────────
-  await session.Runtime.callFunctionOn({
-    functionDeclaration: `function() {
-      if (this.scrollIntoViewIfNeeded) this.scrollIntoViewIfNeeded();
-      else this.scrollIntoView({behavior:'smooth',block:'center'});
-      this.focus();
-      this.click();
-    }`,
-    objectId: nodeInfo.result.objectId,
-    silent: true
-  });
-
-  // ── Step 7: Inject secret via CDP insertText ───────────────────────────────
-  // This is the ONLY point where secretValue is used.
-  // It goes directly to CDP — never into any variable that could be returned.
-  SessionSecretTracker.registerSecretValue(targetId, secretValue);
-  await session.Input.insertText({ text: secretValue });
-
-  // ── Step 7.5: Hardened Proxy & Shadow DOM Isolation ───────────────────────
-  await applySecretHardening(session, nodeInfo.result.objectId, selector);
-
-  // Immediately zero out the local binding after use
-  // (TypeScript doesn't guarantee this but it signals intent to reviewers)
-  // secretValue = undefined; // can't reassign const — variable goes out of scope here
-
-  const executionMs = Date.now() - startTime;
-
-  // ── Step 8: Trail — key name + domain only, NEVER value ──────────────────
-  const targetLabel = target?.label || selector;
-  const targetIdStr = target?.id || query;
-  const finalRef = targetIdStr.startsWith('w:') ? targetIdStr : `w:${targetIdStr}`;
-  logAction("browser_type_secret", finalRef, `[secret injected: ${args.envKey}@${currentHostname}] into ${targetLabel} (exec: ${executionMs}ms)`);
-  recordAction({
-    timestamp: new Date().toISOString(),
-    tool: "browser_type_secret",
-    // input contains key name and domain ONLY — value is excluded intentionally
-    input: { ref: finalRef, label: targetLabel, envKey: args.envKey, domain: currentHostname },
-    result: { success: true },
-  });
-
-  // ── Step 9: Return — no secret value in result ────────────────────────────
-  return {
-    success: true,
-    typed_into: targetLabel,
-    ref: finalRef,
-    key: args.envKey,
-    domain: currentHostname,
-    execution_ms: executionMs,
-  };
 }

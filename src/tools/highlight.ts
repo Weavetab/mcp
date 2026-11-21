@@ -70,6 +70,8 @@ export async function browserHighlight(
     returnByValue: true,
   }).catch(() => {});
 
+  const safeColor = customColor && /^[#a-zA-Z0-9(),.\s%-]+$/.test(customColor.trim()) ? customColor.trim() : undefined;
+
   function getOverlayCss(styleName: HighlightStyle, durMs: number, colorOverride?: string): string {
     if (colorOverride) {
       return `border:2px solid ${colorOverride};box-shadow:0 0 14px ${colorOverride};background:${colorOverride}1a;border-radius:4px;transition:opacity 0.2s ease-out;`;
@@ -89,63 +91,51 @@ export async function browserHighlight(
     }
   }
 
-  // Draw overlay at raw coordinates
-  function makeCoordOverlay(x: number, y: number, w: number, h: number, badgeLabel?: string): string {
-    const styleCss = getOverlayCss(style, duration, customColor);
-    const escapedBadge = badgeLabel ? badgeLabel.replace(/"/g, '&quot;') : '';
-    const badgeHtml = escapedBadge
-      ? `<span style="position:absolute;top:-20px;left:0;background:#09090b;border:1px solid #27272a;color:#f4f4f5;font-size:10px;font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',sans-serif;font-weight:500;padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,0.5);">${escapedBadge}</span>`
-      : '';
+  function makeOverlayExpr(
+    target: { kind: "coords"; x: number; y: number; w: number; h: number } | { kind: "selector"; sel: string },
+    badgeLabel?: string
+  ): string {
+    const styleCss = getOverlayCss(style, duration, safeColor);
+    const rectSetup = target.kind === "coords"
+      ? `var r = { left: ${target.x}, top: ${target.y}, width: ${target.w}, height: ${target.h} };`
+      : `var el;
+         try { el = document.querySelector(${JSON.stringify(target.sel)}); } catch(e) {}
+         if (!el && window.__Weavetab_shadowQuery) {
+           try { el = window.__Weavetab_shadowQuery(${JSON.stringify(target.sel)}); } catch(e) {}
+         }
+         if (!el) return false;
+         var r = el.getBoundingClientRect();
+         if (r.width === 0 && r.height === 0) return false;`;
 
-    return `(function(){
+    return `(function(styleCss, badgeText, dur){
+      ${rectSetup}
+      var host = (document.getElementById('Weavetab-root')?.shadowRoot || document.getElementById('Weavetab-root') || document.body || document.documentElement);
+      if (!host) return false;
       var div = document.createElement('div');
       div.setAttribute('data-wt-ignore', 'true');
-      div.style.cssText = 'position:fixed;left:${x}px;top:${y}px;width:${w}px;height:${h}px;z-index:2147483647;pointer-events:none;${styleCss}';
-      if (${JSON.stringify(badgeHtml)}) {
-        div.innerHTML = ${JSON.stringify(badgeHtml)};
+      div.style.cssText = 'position:fixed;left:' + r.left + 'px;top:' + r.top + 'px;width:' + r.width + 'px;height:' + r.height + 'px;z-index:2147483647;pointer-events:none;' + styleCss;
+      if (badgeText) {
+        var sp = document.createElement('span');
+        sp.style.cssText = "position:absolute;top:-20px;left:0;background:#09090b;border:1px solid #27272a;color:#f4f4f5;font-size:10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:500;padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,0.5);";
+        sp.textContent = badgeText;
+        div.appendChild(sp);
       }
-      (document.getElementById('Weavetab-root')?.shadowRoot || document.getElementById('Weavetab-root') || document.body).appendChild(div);
+      host.appendChild(div);
       setTimeout(function(){
         div.style.transition = 'opacity 0.2s ease-out';
         div.style.opacity = '0';
         setTimeout(function(){ if(div.parentNode) div.parentNode.removeChild(div); }, 220);
-      }, ${duration});
+      }, dur);
       return true;
-    })()`;
+    })(${JSON.stringify(styleCss)}, ${JSON.stringify(badgeLabel || "")}, ${duration})`;
   }
 
-  // Draw overlay by querying selector
-  function makeSelectorOverlay(sel: string, badgeLabel?: string): string {
-    const escaped = sel.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const styleCss = getOverlayCss(style, duration, customColor);
-    const escapedBadge = badgeLabel ? badgeLabel.replace(/"/g, '&quot;') : '';
-    const badgeHtml = escapedBadge
-      ? `<span style="position:absolute;top:-20px;left:0;background:#09090b;border:1px solid #27272a;color:#f4f4f5;font-size:10px;font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',sans-serif;font-weight:500;padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,0.5);">${escapedBadge}</span>`
-      : '';
+  function makeCoordOverlay(x: number, y: number, w: number, h: number, badgeLabel?: string): string {
+    return makeOverlayExpr({ kind: "coords", x, y, w, h }, badgeLabel);
+  }
 
-    return `(function(){
-      var el;
-      try { el = document.querySelector('${escaped}'); } catch(e) {}
-      if (!el && window.__Weavetab_shadowQuery) {
-        try { el = window.__Weavetab_shadowQuery('${escaped}'); } catch(e) {}
-      }
-      if (!el) return false;
-      var r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) return false;
-      var div = document.createElement('div');
-      div.setAttribute('data-wt-ignore', 'true');
-      div.style.cssText = 'position:fixed;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px;z-index:2147483647;pointer-events:none;${styleCss}';
-      if (${JSON.stringify(badgeHtml)}) {
-        div.innerHTML = ${JSON.stringify(badgeHtml)};
-      }
-      (document.getElementById('Weavetab-root')?.shadowRoot || document.getElementById('Weavetab-root') || document.body).appendChild(div);
-      setTimeout(function(){
-        div.style.transition = 'opacity 0.2s ease-out';
-        div.style.opacity = '0';
-        setTimeout(function(){ if(div.parentNode) div.parentNode.removeChild(div); }, 220);
-      }, ${duration});
-      return true;
-    })()`;
+  function makeSelectorOverlay(sel: string, badgeLabel?: string): string {
+    return makeOverlayExpr({ kind: "selector", sel }, badgeLabel);
   }
 
   async function trySelector(sel: string, badgeLabel?: string): Promise<boolean> {

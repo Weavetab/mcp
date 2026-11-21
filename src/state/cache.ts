@@ -1,9 +1,3 @@
-/**
- * Weavetab — state/cache.ts
- * Per-tab action map and box model cache with mutation-based TTL invalidation.
- * Weavetab by fy2ne
- */
-
 import CDP from "chrome-remote-interface";
 import type { ActionMap } from "../cdp/walker.js";
 
@@ -12,8 +6,8 @@ interface CacheState {
   url: string | null;
   lastReadTime: number;
   lastMutationTime: number;
-  boxModels: Map<number, any>; // backendNodeId -> BoxModel
-  domNodes: Map<number, any>; // backendNodeId -> Node
+  boxModels: Map<number, any>;
+  domNodes: Map<number, any>;
 }
 
 const tabCache = new Map<string, CacheState>();
@@ -21,13 +15,11 @@ const tabCache = new Map<string, CacheState>();
 export function getCachedActionMap(targetId: string, currentUrl?: string): ActionMap | null {
   const state = tabCache.get(targetId);
   if (!state) return null;
-  
-  // Ref ID Caching Layer: validity TTL based on DOM mutations
+
   if (state.lastMutationTime > state.lastReadTime) {
-    return null; // Mutated since last read, cache invalid
+    return null;
   }
-  
-  // URL validation to prevent stale cache across page loads/navigations
+
   if (currentUrl && state.map && state.map.url !== currentUrl) {
     return null;
   }
@@ -37,7 +29,7 @@ export function getCachedActionMap(targetId: string, currentUrl?: string): Actio
 export function getRawCachedActionMap(targetId: string, currentUrl?: string): ActionMap | null {
   const state = tabCache.get(targetId);
   if (!state) return null;
-  
+
   if (currentUrl && state.map && state.map.url !== currentUrl) {
     return null;
   }
@@ -45,10 +37,19 @@ export function getRawCachedActionMap(targetId: string, currentUrl?: string): Ac
 }
 
 export function cacheActionMap(targetId: string, map: ActionMap) {
-  const state = tabCache.get(targetId) || { lastMutationTime: 0, lastReadTime: 0, map: null, url: null, boxModels: new Map(), domNodes: new Map() };
+  const state = tabCache.get(targetId) || {
+    lastMutationTime: 0,
+    lastReadTime: 0,
+    map: null,
+    url: null,
+    boxModels: new Map(),
+    domNodes: new Map(),
+  };
   state.map = map;
   state.url = map.url;
   state.lastReadTime = Date.now();
+  state.boxModels.clear();
+  state.domNodes.clear();
   tabCache.set(targetId, state);
 }
 
@@ -78,36 +79,59 @@ export function clearTabCache(targetId: string) {
   tabCache.delete(targetId);
 }
 
-// Smarter Idle Detection: Event-driven MutationObserver
-// Guard: only register listeners once per CDP session object to prevent
-// accumulation when the same session is passed through multiple init paths.
-const registeredSessions = new WeakSet<CDP.Client>();
+const sessionUnsubs = new WeakMap<CDP.Client, Array<() => void>>();
 
 export function registerMutationListener(session: CDP.Client, targetId: string) {
-  // Bail out early if this session already has listeners attached.
-  // Without this guard, connectToTab + initSession could both call this function
-  // for the same session, stacking duplicate listeners that are never removed.
-  if (registeredSessions.has(session)) return;
-  registeredSessions.add(session);
+  if (sessionUnsubs.has(session)) return;
+
+  const unsubs: Array<() => void> = [];
+  sessionUnsubs.set(session, unsubs);
 
   let debounceTimer: NodeJS.Timeout | undefined;
 
+  const invalidateNow = () => {
+    const state = tabCache.get(targetId);
+    if (state) {
+      state.lastMutationTime = Math.max(Date.now(), state.lastReadTime + 1);
+      state.boxModels.clear();
+      state.domNodes.clear();
+    }
+  };
+
   const markMutated = () => {
-    // Debounce to avoid flooding the cache invalidation
+    invalidateNow();
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = undefined;
-      const state = tabCache.get(targetId);
-      if (state) {
-        state.lastMutationTime = Date.now();
-        // Clear box models and dom nodes as they are no longer reliable
-        state.boxModels.clear();
-        state.domNodes.clear();
-      }
-    }, 50); // 50ms debounced quiet window
+      invalidateNow();
+    }, 50);
+    debounceTimer.unref?.();
   };
 
-  session.DOM.on("childNodeCountUpdated", markMutated);
-  session.DOM.on("attributeModified", markMutated);
-  session.DOM.on("characterDataModified", markMutated);
+  const events = [
+    "childNodeCountUpdated",
+    "attributeModified",
+    "characterDataModified",
+    "documentUpdated",
+    "childNodeInserted",
+    "childNodeRemoved",
+    "attributeRemoved",
+  ] as const;
+
+  const dom: any = session.DOM;
+  if (!dom) return;
+
+  for (const ev of events) {
+    const ret =
+      typeof dom.on === "function"
+        ? dom.on(ev, markMutated)
+        : typeof dom[ev] === "function"
+        ? dom[ev](markMutated)
+        : undefined;
+    if (typeof ret === "function") {
+      unsubs.push(ret);
+    } else if (typeof dom.removeListener === "function") {
+      unsubs.push(() => dom.removeListener(ev, markMutated));
+    }
+  }
 }

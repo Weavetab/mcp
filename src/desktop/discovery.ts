@@ -1,16 +1,3 @@
-/**
- * Weavetab — desktop/discovery.ts
- * Auto-discovery scanner for running Electron desktop applications.
- *
- * Detects:
- *   1. Active Electron instances with open CDP remote debugging ports
- *      (Slack, Discord, VS Code, Notion, Obsidian, Linear, Cursor, etc.).
- *   2. Running Electron processes without remote debugging enabled,
- *      providing actionable launch flags.
- *
- * Weavetab by fy2ne
- */
-
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -37,6 +24,8 @@ const KNOWN_ELECTRON_PROCS: Record<string, string> = {
   slack: "Slack",
   discord: "Discord",
   code: "VS Code",
+  vscode: "VS Code",
+  "vs code": "VS Code",
   "visual studio code": "VS Code",
   notion: "Notion",
   obsidian: "Obsidian",
@@ -47,10 +36,11 @@ const KNOWN_ELECTRON_PROCS: Record<string, string> = {
   figma: "Figma",
 };
 
-/**
- * Fast probe of a potential CDP debug port on 127.0.0.1.
- * Resolves with version/target metadata if open, or null if unreachable.
- */
+export function normalizeElectronAppName(name: string): string {
+  const k = name.toLowerCase().trim();
+  return (KNOWN_ELECTRON_PROCS[k] || name.trim()).toLowerCase();
+}
+
 export async function probeDebugPort(
   port: number,
   timeoutMs = 300
@@ -64,11 +54,11 @@ export async function probeDebugPort(
           res.resume();
           return resolve(null);
         }
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
+        let raw = "";
+        res.on("data", (chunk) => (raw += chunk));
         res.on("end", async () => {
           try {
-            const versionInfo = JSON.parse(data);
+            const versionInfo = JSON.parse(raw);
             const targets = await fetchTargets(port, timeoutMs).catch(() => []);
             resolve({ versionInfo, targets });
           } catch {
@@ -96,11 +86,11 @@ export async function fetchTargets(port: number, timeoutMs = 300): Promise<any[]
           res.resume();
           return resolve([]);
         }
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
+        let raw = "";
+        res.on("data", (chunk) => (raw += chunk));
         res.on("end", () => {
           try {
-            resolve(JSON.parse(data));
+            resolve(JSON.parse(raw));
           } catch {
             resolve([]);
           }
@@ -115,9 +105,14 @@ export async function fetchTargets(port: number, timeoutMs = 300): Promise<any[]
   });
 }
 
-/**
- * Infers an application name from CDP version and target metadata.
- */
+function matchesAppKeyword(text: string, key: string): boolean {
+  if (key === "code") {
+    return /\b(vs\s*code|visual\s+studio\s+code|vscode-file|vscode-app|code\.exe)\b/i.test(text);
+  }
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(text);
+}
+
 export function identifyElectronAppName(versionInfo: any, targets: any[]): string {
   const allText = [
     versionInfo?.Browser || "",
@@ -126,12 +121,11 @@ export function identifyElectronAppName(versionInfo: any, targets: any[]): strin
   ].join(" ").toLowerCase();
 
   for (const [key, displayName] of Object.entries(KNOWN_ELECTRON_PROCS)) {
-    if (allText.includes(key)) {
+    if (matchesAppKeyword(allText, key)) {
       return displayName;
     }
   }
 
-  // Fallback to first non-empty page title
   const primaryTarget = targets.find((t) => t.type === "page" && t.title);
   if (primaryTarget?.title) {
     return primaryTarget.title.slice(0, 30);
@@ -140,18 +134,12 @@ export function identifyElectronAppName(versionInfo: any, targets: any[]): strin
   return "Electron Application";
 }
 
-/**
- * Discovers running Electron apps on the host machine.
- * 1. Probes common and provided debug ports for open CDP listeners.
- * 2. Checks OS process list for running Electron apps lacking debug ports.
- */
 export async function discoverElectronApps(
   customPorts: number[] = []
 ): Promise<DiscoveredElectronApp[]> {
   const discovered: DiscoveredElectronApp[] = [];
   const portsToScan = Array.from(new Set([...COMMON_DEBUG_PORTS, ...customPorts]));
 
-  // 1. Probe all candidate debug ports in parallel
   const probeResults = await Promise.all(
     portsToScan.map(async (port) => ({
       port,
@@ -176,7 +164,6 @@ export async function discoverElectronApps(
     }
   }
 
-  // 2. Scan OS process list for known Electron apps without debug ports
   try {
     const runningProcs = await getRunningElectronProcesses();
     for (const proc of runningProcs) {
@@ -190,7 +177,7 @@ export async function discoverElectronApps(
       }
     }
   } catch {
-    // Process list scan is best-effort across restricted OS environments
+    // best-effort across restricted OS environments
   }
 
   return discovered;
@@ -201,31 +188,39 @@ interface RunningProcess {
   pid: number;
 }
 
+function matchesProcessName(exeOrCmd: string, key: string): boolean {
+  const base = path.basename(exeOrCmd).toLowerCase().replace(/\.exe$/, "");
+  if (key === "code") {
+    return base === "code" || base === "vscode" || /\bvisual studio code\b/i.test(exeOrCmd);
+  }
+  return base === key || matchesAppKeyword(base, key);
+}
+
 async function getRunningElectronProcesses(): Promise<RunningProcess[]> {
   const platform = process.platform;
   const running: RunningProcess[] = [];
 
   try {
     if (platform === "win32") {
-      const { stdout } = await execAsync('tasklist /FO CSV /NH', { timeout: 1500 });
-      const lines = stdout.split("\r\n");
+      const { stdout } = await execAsync("tasklist /FO CSV /NH", { timeout: 1500 });
+      const lines = stdout.split(/\r?\n/);
       const seenNames = new Set<string>();
 
       for (const line of lines) {
         if (!line.trim()) continue;
         const parts = line.split('","').map((p) => p.replace(/"/g, ""));
         const exeName = (parts[0] || "").toLowerCase();
-        const pid = parseInt(parts[1], 10);
+        const pid = parseInt(parts[1] || "0", 10);
 
         for (const [key, displayName] of Object.entries(KNOWN_ELECTRON_PROCS)) {
-          if (exeName.includes(key) && !seenNames.has(displayName)) {
+          if (matchesProcessName(exeName, key) && !seenNames.has(displayName)) {
             seenNames.add(displayName);
             running.push({ name: displayName, pid });
           }
         }
       }
     } else {
-      const { stdout } = await execAsync('ps -eo pid,comm', { timeout: 1500 });
+      const { stdout } = await execAsync("ps -eo pid,comm", { timeout: 1500 });
       const lines = stdout.split("\n");
       const seenNames = new Set<string>();
 
@@ -234,10 +229,10 @@ async function getRunningElectronProcesses(): Promise<RunningProcess[]> {
         if (!trimmed) continue;
         const [pidStr, ...cmdParts] = trimmed.split(/\s+/);
         const cmd = cmdParts.join(" ").toLowerCase();
-        const pid = parseInt(pidStr, 10);
+        const pid = parseInt(pidStr || "0", 10);
 
         for (const [key, displayName] of Object.entries(KNOWN_ELECTRON_PROCS)) {
-          if (cmd.includes(key) && !seenNames.has(displayName)) {
+          if (matchesProcessName(cmd, key) && !seenNames.has(displayName)) {
             seenNames.add(displayName);
             running.push({ name: displayName, pid });
           }
@@ -251,47 +246,60 @@ async function getRunningElectronProcesses(): Promise<RunningProcess[]> {
   return running;
 }
 
+const BLOCKED_SCRIPT_EXTENSIONS = new Set([".bat", ".cmd", ".ps1", ".vbs", ".sh", ".js", ".wsf"]);
+const BLOCKED_SHELL_BINARIES = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "fish",
+  "cmd",
+  "cmd.exe",
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+  "wscript",
+  "wscript.exe",
+  "cscript",
+  "cscript.exe",
+]);
+
 export function isValidElectronExecutablePath(execPath: string): boolean {
   if (!execPath || typeof execPath !== "string") return false;
-  const normalizedPath = execPath.toLowerCase().trim();
+  const trimmed = execPath.trim();
+  const normalizedPath = trimmed.toLowerCase();
 
-  // Block shell metacharacters or URL encoding in paths
-  const forbiddenChars = ["%", ";", "|", "&", "`", "$", "\n", "\r"];
+  const forbiddenChars = ["%", ";", "|", "&", "`", "$", "\n", "\r", "\0"];
   if (forbiddenChars.some((ch) => normalizedPath.includes(ch))) {
     logDebug(`[SECURITY] Electron path validation failed: forbidden char in path: ${execPath}`);
     return false;
   }
 
-  // Block direct shell interpreters by executable basename (never substring match full path, which breaks /usr/share on Linux)
-  const baseName = path.basename(normalizedPath);
-  const blockedBinaries = new Set([
-    "sh",
-    "bash",
-    "zsh",
-    "dash",
-    "fish",
-    "cmd",
-    "cmd.exe",
-    "powershell",
-    "powershell.exe",
-    "pwsh",
-    "pwsh.exe",
-    "wscript",
-    "wscript.exe",
-    "cscript",
-    "cscript.exe",
-  ]);
+  const rawSegments = trimmed.split(/[\\/]+/);
+  if (rawSegments.includes("..")) {
+    logDebug(`[SECURITY] Electron path validation failed: traversal segment in path: ${execPath}`);
+    return false;
+  }
 
-  if (blockedBinaries.has(baseName)) {
+  const baseName = path.basename(normalizedPath);
+  const ext = path.extname(baseName);
+  if (BLOCKED_SCRIPT_EXTENSIONS.has(ext)) {
+    logDebug(`[SECURITY] Electron path validation failed: script extension blocked: ${execPath}`);
+    return false;
+  }
+
+  if (BLOCKED_SHELL_BINARIES.has(baseName)) {
     logDebug(`[SECURITY] Electron path validation failed: blocked shell binary: ${execPath}`);
     return false;
   }
 
   try {
-    if (!fs.existsSync(execPath)) {
+    const resolved = path.resolve(trimmed);
+    if (!fs.existsSync(resolved)) {
       return false;
     }
-    const stat = fs.statSync(execPath);
+    const stat = fs.statSync(resolved);
     if (!stat.isFile()) {
       return false;
     }
@@ -302,15 +310,18 @@ export function isValidElectronExecutablePath(execPath: string): boolean {
   return true;
 }
 
+function isSquirrelVersionDir(dirName: string): boolean {
+  const low = dirName.toLowerCase();
+  return low.startsWith("app-") || low.startsWith("app_");
+}
+
 export function resolveElectronExecutablePath(appName: string, configuredPath?: string): string | null {
   const normApp = appName.toLowerCase().trim();
 
-  // 1. If configuredPath is provided and valid, return it
   if (configuredPath && isValidElectronExecutablePath(configuredPath)) {
     return path.resolve(configuredPath);
   }
 
-  // 2. If configuredPath was provided, but does not exist, check versioned parent folder (e.g. Squirrel app-*)
   if (configuredPath) {
     try {
       const parsed = path.parse(path.resolve(configuredPath));
@@ -319,7 +330,7 @@ export function resolveElectronExecutablePath(appName: string, configuredPath?: 
       const parentBase = path.basename(parentDir);
 
       const searchDirs: string[] = [];
-      if (parentBase.toLowerCase().startsWith("app-") || parentBase.toLowerCase().startsWith("app_")) {
+      if (isSquirrelVersionDir(parentBase)) {
         searchDirs.push(path.dirname(parentDir));
       } else {
         searchDirs.push(parentDir);
@@ -329,9 +340,9 @@ export function resolveElectronExecutablePath(appName: string, configuredPath?: 
         if (fs.existsSync(sDir)) {
           const entries = fs.readdirSync(sDir, { withFileTypes: true });
           const versionDirs = entries
-            .filter(e => e.isDirectory() && (e.name.startsWith("app-") || e.name.startsWith("app_")))
+            .filter(e => e.isDirectory() && isSquirrelVersionDir(e.name))
             .map(e => e.name)
-            .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+            .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: "base" }));
 
           for (const vDir of versionDirs) {
             const candidate = path.join(sDir, vDir, baseExe);
@@ -349,61 +360,66 @@ export function resolveElectronExecutablePath(appName: string, configuredPath?: 
     } catch { /* ignore fallback errors */ }
   }
 
-  // 3. Platform-specific auto-discovery for known apps
   const platform = process.platform;
   const candidates: string[] = [];
 
   if (platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA || "";
+    const localAppData = process.env.LOCALAPPDATA?.trim() || "";
     const progFiles = process.env.ProgramFiles || "C:\\Program Files";
     const progFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
 
     if (normApp === "discord") {
-      const discordDir = path.join(localAppData, "Discord");
-      if (fs.existsSync(discordDir)) {
-        try {
-          const entries = fs.readdirSync(discordDir, { withFileTypes: true });
-          const vDirs = entries
-            .filter(e => e.isDirectory() && e.name.startsWith("app-"))
-            .map(e => e.name)
-            .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
-          for (const v of vDirs) {
-            candidates.push(path.join(discordDir, v, "Discord.exe"));
-          }
-        } catch {}
+      if (localAppData) {
+        const discordDir = path.join(localAppData, "Discord");
+        if (fs.existsSync(discordDir)) {
+          try {
+            const entries = fs.readdirSync(discordDir, { withFileTypes: true });
+            const vDirs = entries
+              .filter(e => e.isDirectory() && isSquirrelVersionDir(e.name))
+              .map(e => e.name)
+              .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: "base" }));
+            for (const v of vDirs) {
+              candidates.push(path.join(discordDir, v, "Discord.exe"));
+            }
+          } catch {}
+        }
       }
       candidates.push(path.join(progFiles, "Discord", "Discord.exe"));
       candidates.push(path.join(progFilesX86, "Discord", "Discord.exe"));
     } else if (normApp === "slack") {
-      const slackDir = path.join(localAppData, "slack");
-      if (fs.existsSync(slackDir)) {
-        try {
-          const entries = fs.readdirSync(slackDir, { withFileTypes: true });
-          const vDirs = entries
-            .filter(e => e.isDirectory() && e.name.startsWith("app-"))
-            .map(e => e.name)
-            .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
-          for (const v of vDirs) {
-            candidates.push(path.join(slackDir, v, "slack.exe"));
-          }
-        } catch {}
+      if (localAppData) {
+        const slackDir = path.join(localAppData, "slack");
+        if (fs.existsSync(slackDir)) {
+          try {
+            const entries = fs.readdirSync(slackDir, { withFileTypes: true });
+            const vDirs = entries
+              .filter(e => e.isDirectory() && isSquirrelVersionDir(e.name))
+              .map(e => e.name)
+              .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: "base" }));
+            for (const v of vDirs) {
+              candidates.push(path.join(slackDir, v, "slack.exe"));
+            }
+          } catch {}
+        }
       }
       candidates.push(path.join(progFiles, "Slack", "slack.exe"));
       candidates.push(path.join(progFilesX86, "Slack", "slack.exe"));
     } else if (normApp === "antigravity") {
-      candidates.push(path.join(localAppData, "Programs", "antigravity", "Antigravity.exe"));
+      if (localAppData) candidates.push(path.join(localAppData, "Programs", "antigravity", "Antigravity.exe"));
     } else if (normApp === "antigravity-ide") {
-      candidates.push(path.join(localAppData, "Programs", "Antigravity IDE", "Antigravity IDE.exe"));
-    } else if (normApp === "code" || normApp === "vscode") {
-      candidates.push(path.join(localAppData, "Programs", "Microsoft VS Code", "Code.exe"));
+      if (localAppData) candidates.push(path.join(localAppData, "Programs", "Antigravity IDE", "Antigravity IDE.exe"));
+    } else if (normApp === "code" || normApp === "vscode" || normApp === "vs code") {
+      if (localAppData) candidates.push(path.join(localAppData, "Programs", "Microsoft VS Code", "Code.exe"));
       candidates.push(path.join(progFiles, "Microsoft VS Code", "Code.exe"));
       candidates.push(path.join(progFilesX86, "Microsoft VS Code", "Code.exe"));
+    } else if (normApp === "cursor") {
+      if (localAppData) candidates.push(path.join(localAppData, "Programs", "cursor", "Cursor.exe"));
     } else if (normApp === "linear") {
-      candidates.push(path.join(localAppData, "Programs", "Linear", "Linear.exe"));
+      if (localAppData) candidates.push(path.join(localAppData, "Programs", "Linear", "Linear.exe"));
     } else if (normApp === "notion") {
-      candidates.push(path.join(localAppData, "Programs", "Notion", "Notion.exe"));
+      if (localAppData) candidates.push(path.join(localAppData, "Programs", "Notion", "Notion.exe"));
     } else if (normApp === "obsidian") {
-      candidates.push(path.join(localAppData, "Programs", "obsidian", "Obsidian.exe"));
+      if (localAppData) candidates.push(path.join(localAppData, "Programs", "obsidian", "Obsidian.exe"));
     }
   } else if (platform === "darwin") {
     const homeApps = path.join(process.env.HOME || "", "Applications");
@@ -413,7 +429,7 @@ export function resolveElectronExecutablePath(appName: string, configuredPath?: 
     } else if (normApp === "slack") {
       candidates.push("/Applications/Slack.app/Contents/MacOS/Slack");
       candidates.push(path.join(homeApps, "Slack.app/Contents/MacOS/Slack"));
-    } else if (normApp === "code" || normApp === "vscode") {
+    } else if (normApp === "code" || normApp === "vscode" || normApp === "vs code") {
       candidates.push("/Applications/Visual Studio Code.app/Contents/MacOS/Electron");
       candidates.push(path.join(homeApps, "Visual Studio Code.app/Contents/MacOS/Electron"));
     } else if (normApp === "cursor") {
@@ -430,8 +446,7 @@ export function resolveElectronExecutablePath(appName: string, configuredPath?: 
       candidates.push(path.join(homeApps, "Obsidian.app/Contents/MacOS/Obsidian"));
     }
   } else {
-    // Linux (native, /opt, /usr/share, Snap, Flatpak)
-    const binName = normApp === "vscode" ? "code" : normApp;
+    const binName = (normApp === "vscode" || normApp === "vs code") ? "code" : normApp;
     candidates.push(`/usr/bin/${binName}`);
     candidates.push(`/usr/local/bin/${binName}`);
     candidates.push(`/usr/share/${binName}/${binName}`);
@@ -447,4 +462,3 @@ export function resolveElectronExecutablePath(appName: string, configuredPath?: 
 
   return null;
 }
-

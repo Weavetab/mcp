@@ -23,13 +23,13 @@ The interactive installer detects your IDE (`.agents`, `.cursorrules`, `.clineru
 
 ## Available Skills Directory
 
-- **CAPTCHA Evasion** (`general/captcha-evasion.md`) — Heuristics for resolving bot challenges and checkbox modals.
-- **Context Awareness** (`general/context-awareness.md`) — Deep page analysis and landmark scoping.
-- **Cookie Consent Banners** (`general/cookie-consent.md`) — Auto-dismissing GDPR and overlay modals.
-- **Data Extraction** (`general/data-extraction.md`) — CSS & XPath tabular scraping.
-- **Dynamic Interaction** (`general/dynamic-interaction.md`) — Precision hover, drag-and-drop, and flyout menus.
-- **Error Recovery** (`general/error-recovery.md`) — Resolving 404s, stale elements, and network timeouts.
-- **File Upload** (`general/file-upload.md`) — Direct CDP file attachments.
-- **Form Filling** (`general/form-filling.md`) — Multi-field smart form batch completion.
-- **Infinite Scroll** (`general/infinite-scroll.md`) — Pagination and dynamic lazy loading.
-- **SPA Navigation** (`general/spa-navigation.md`) — Client-side route changes in React/Vue/Angular.
+- **CAPTCHA Evasion** (`.agents/skills/weavetab/captcha-evasion.md`) — Handling verification challenges cleanly.
+- **File Upload** (`.agents/skills/weavetab/file-upload.md`) — Direct CDP file attachments via `browser_upload`.
+- **Form Filling** (`.agents/skills/weavetab/form-filling.md`) — Multi-field smart form batch completion via `browser_fill`.
+- **Guardrails** (`.agents/skills/weavetab/guardrails.md`) — Safety, domain policy, and secret containment guardrails.
+- **Iframe Handling** (`.agents/skills/weavetab/iframe-handling.md`) — Navigating and acting inside nested iframes.
+- **Infinite Scroll** (`.agents/skills/weavetab/infinite-scroll.md`) — Pagination and dynamic lazy loading.
+- **Login Flow** (`.agents/skills/weavetab/login-flow.md`) — Blind credential injection via `secrets.json`.
+- **Multi-Tab Management** (`.agents/skills/weavetab/multi-tab-management.md`) — Opening, switching, and isolating tabs.
+- **SPA Navigation** (`.agents/skills/weavetab/spa-navigation.md`) — Client-side route changes in React/Vue/Angular.
+- **Table Scraping** (`.agents/skills/weavetab/table-scraping.md`) — CSS & XPath structured tabular extraction.

@@ -356,24 +356,6 @@ export async function browserMap(
 ): Promise<string | BrowserMapResult> {
   logDebug(`[browserMap] Initiating read for targetId: ${targetId}, options: ${JSON.stringify(options)}`);
 
-  // ── Wait for DOM and Visual Stability ──────────────────────────────────────
-  try {
-    await session.Runtime.evaluate({
-      expression: `
-        new Promise(resolve => {
-          if (document.readyState === 'complete') {
-            setTimeout(resolve, 300); // 300ms visual stability delay
-          } else {
-            window.addEventListener('load', () => setTimeout(resolve, 300));
-          }
-        })
-      `,
-      awaitPromise: true
-    });
-  } catch (e) {
-    logDebug(`[browserMap] Stability wait failed: ${e}`);
-  }
-
   // Signal reading state via HUD only
   sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'reading the page...' } }).catch(() => {});
   
@@ -433,6 +415,20 @@ export async function browserMap(
   }
 
   if (!map) {
+    // Bounded load settle only on cache miss (never blocks cache hits or stalled assets)
+    await withTimeout(
+      session.Runtime.evaluate({
+        expression: `new Promise(r => {
+          if (document.readyState === 'complete') return setTimeout(r, 50);
+          const done = () => { clearTimeout(t); setTimeout(r, 50); };
+          const t = setTimeout(r, 1500);
+          window.addEventListener('load', done, { once: true });
+        })`,
+        awaitPromise: true,
+      }),
+      1800
+    ).catch(() => {});
+
     if (options.ax_tree) {
       // Explicit AX tree mode — skips DOM walker entirely
       map = await buildAXTreeMap(session, {
@@ -489,8 +485,8 @@ export async function browserMap(
     }
 
     try {
-      // Request document first to prevent CDP error
-      await session.DOM.getDocument({ depth: -1 }).catch(() => {});
+      // depth:0 initializes DOM domain without serializing the whole tree over CDP
+      await session.DOM.getDocument({ depth: 0 }).catch(() => {});
       
       // Calculate domHash if not already calculated (e.g. from AX tree fallback)
       try {
@@ -533,21 +529,25 @@ export async function browserMap(
       const backendIds = map.elements.map(e => e.backendNodeId).filter((id): id is number => id !== undefined);
       logDebug(`[browserMap] Resolving ${backendIds.length} backend node IDs.`);
 
-      const resolved = await session.DOM.pushNodesByBackendIdsToFrontend({
-        backendNodeIds: backendIds
-      });
-
-      if (resolved.nodeIds) {
-        logDebug(`[browserMap] Resolved ${resolved.nodeIds.length} node IDs.`);
-        const validIds = new Set(resolved.nodeIds.filter(id => id !== 0));
-        map!.elements = map!.elements.filter(el => {
-          if (el.backendNodeId === undefined) return true;
-          const nodeId = resolved.nodeIds[map!.elements.indexOf(el)];
-          return nodeId !== undefined && validIds.has(nodeId);
+      if (backendIds.length > 0) {
+        const resolved = await session.DOM.pushNodesByBackendIdsToFrontend({
+          backendNodeIds: backendIds
         });
-        logDebug(`[browserMap] Elements after resolution filter: ${map.elements.length}`);
-      } else {
-        logDebug(`[browserMap] No node IDs resolved.`);
+
+        if (resolved.nodeIds) {
+          logDebug(`[browserMap] Resolved ${resolved.nodeIds.length} node IDs.`);
+          const byBackend = new Map<number, number>();
+          for (let i = 0; i < backendIds.length; i++) {
+            byBackend.set(backendIds[i], resolved.nodeIds[i] ?? 0);
+          }
+          map!.elements = map!.elements.filter(el => {
+            if (el.backendNodeId === undefined) return true;
+            return (byBackend.get(el.backendNodeId) ?? 0) !== 0;
+          });
+          logDebug(`[browserMap] Elements after resolution filter: ${map.elements.length}`);
+        } else {
+          logDebug(`[browserMap] No node IDs resolved.`);
+        }
       }
     } catch (e) {
       logDebug(`[browserMap] Error during read: ${e}`);

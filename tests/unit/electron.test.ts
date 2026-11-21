@@ -265,6 +265,37 @@ test("electron discovery: discoverElectronApps probes candidate ports without th
   assert.ok(Array.isArray(discovered));
 });
 
+test("config compatibility: merges apps alias, skips auto path, applies WT_PROXY_URL, sets actionabilityTimeoutMs", () => {
+  const dummyExe = path.join(os.tmpdir(), `dummy-alias-${Date.now()}.exe`);
+  fs.writeFileSync(dummyExe, "dummy binary");
+  const prevProxy = process.env.WT_PROXY_URL;
+  process.env.WT_PROXY_URL = "http://127.0.0.1:8899";
+
+  try {
+    const cfg = validateConfigInternal({
+      headless: true,
+      actionabilityTimeoutMs: 450,
+      electron: { slack: dummyExe },
+      apps: {
+        slack: { path: "auto", args: ["--enable-features=WaylandWindowDecorations"] },
+        figma: { port: 9229 },
+      },
+    });
+
+    assert.equal(cfg.headless, true);
+    assert.equal(cfg.actionabilityTimeoutMs, 450);
+    assert.equal(cfg.proxy, "http://127.0.0.1:8899");
+    assert.equal(cfg.electron?.slack?.path, dummyExe);
+    assert.deepEqual(cfg.electron?.slack?.args, ["--enable-features=WaylandWindowDecorations"]);
+    assert.equal(cfg.electron?.figma?.port, 9229);
+    assert.equal(validateConfigInternal({}).actionabilityTimeoutMs, 300);
+  } finally {
+    if (prevProxy === undefined) delete process.env.WT_PROXY_URL;
+    else process.env.WT_PROXY_URL = prevProxy;
+    try { fs.unlinkSync(dummyExe); } catch { /* ignore */ }
+  }
+});
+
 
 
 

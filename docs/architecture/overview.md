@@ -25,11 +25,11 @@ Weavetab is decomposed into **five functional layers**, all running in-process w
 
 ```text
 Agent → withSecurity()
-        ├── Rate limiter (mutex)
-        ├── Domain policy check (allow/deny/audit/read-only)
-        ├── RBAC role verification
-        ├── User-stop polling
-        ├── Chat queue draining
+        ├── Rate limiter (sliding window)
+        ├── Specificity-ordered domain policy check (allow/deny/audit-only/read-only)
+        ├── Fail-closed RBAC role & action verification
+        ├── Hook pipeline (beforeToolCall / afterToolCall)
+        ├── Per-tool timeout budget (.unref() timer)
         ├── Agent state transition (idle → weaving → reading)
         └── Tool handler → CDP Bridge → Browser / Desktop App
 ```
@@ -42,8 +42,8 @@ Any validation or security failure short-circuits the pipeline immediately and r
 |---|---|---|---|---|
 | **Architecture** | Direct CDP WebSocket | Node bridge abstraction | CDP wrapper | WebDriver |
 | **Execution model** | **In-process local socket** | IPC binary bridge | IPC binary bridge | HTTP WebDriver relay |
-| **Token efficiency** | **Semantic Deltas (97% reduction)** | Full DOM dumps | Full DOM dumps | Full DOM dumps |
+| **Token efficiency** | **Semantic Deltas (changed nodes only)** | Full DOM dumps | Full DOM dumps | Full DOM dumps |
 | **Desktop Electron Apps** | **Native (any Electron app)** | Experimental | Limited | Third-party driver |
 | **CAPTCHA Solver** | **Autonomous Zero-API** | None | None | None |
-| **MCP native** | **Yes (41 Tools)** | No | No | No |
+| **MCP native** | **Yes (40 Tools)** | No | No | No |
 | **Cloud dependency** | **Zero** | Optional | Optional | Grid required |

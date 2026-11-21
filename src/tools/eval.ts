@@ -31,23 +31,23 @@ export async function browserEval(
 
   sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'evaluating...' } }).catch(() => {});
 
-  // Always capture current page state so agent can detect navigation
   let currentUrl = "";
   let pageTitle = "";
   try {
-    const { frameTree } = await session.Page.getFrameTree();
-    currentUrl = frameTree.frame.url;
-    try {
-      const titleRes = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
-      if (titleRes?.result?.value) {
-        pageTitle = titleRes.result.value as string;
-      }
-    } catch {}
-    if (!pageTitle) {
-      const { result: t } = await session.Runtime.evaluate({ expression: 'document.title', returnByValue: true });
-      pageTitle = (t?.value as string) || "";
+    const meta = await session.Runtime.evaluate({
+      expression: `({ url: location.href, title: document.title })`,
+      returnByValue: true,
+    });
+    if (meta?.result?.value && typeof meta.result.value === "object") {
+      currentUrl = meta.result.value.url || "";
+      pageTitle = meta.result.value.title || "";
     }
-  } catch { /* non-fatal */ }
+  } catch {
+    try {
+      const { frameTree } = await session.Page.getFrameTree();
+      currentUrl = frameTree.frame.url;
+    } catch {}
+  }
 
   // Special intercept: Weavetab.usage() — returns in-process session metrics
   if (expression.trim() === "Weavetab.usage()") {
@@ -56,10 +56,12 @@ export async function browserEval(
   }
 
   let evalExpr = expression.trim();
-  const isFunctionDecl = /^(?:async\s+)?function\b/.test(evalExpr) || /^(?:async\s*)?(?:\([^)]*\)|[a-zA-Z_$][a-zA-Z0-9_$]*)\s*=>\s*\{/.test(evalExpr);
-  const isAlreadyIIFE = /^\s*\((?:async\s+)?function/.test(evalExpr) || /^\s*\((?:async\s*)?\(/.test(evalExpr);
+  const isFunctionDecl = /^(?:async\s+)?function\b/.test(evalExpr)
+    || /^(?:async\s*)?(?:\(\s*\)|[a-zA-Z_$][a-zA-Z0-9_$]*)\s*=>/.test(evalExpr);
+  const isAlreadyIIFE = /^\s*\((?:async\s+)?function/.test(evalExpr)
+    || /^\s*\((?:async\s*)?\(/.test(evalExpr);
   if (!isAlreadyIIFE && isFunctionDecl) {
-    evalExpr = `(${evalExpr})`;
+    evalExpr = `(${evalExpr})()`;
   }
 
   let result: any, exceptionDetails: any;
@@ -105,9 +107,7 @@ export async function browserEval(
   const rawResult = result.type === 'undefined'
     ? "(eval returned undefined. append ; 'ok' or return a string explicitly.)"
     : result.value !== undefined ? result.value : result.description;
-  const redactedResult = typeof rawResult === 'string' 
-    ? SessionSecretTracker.redact(targetId, rawResult) 
-    : rawResult;
+  const redactedResult = SessionSecretTracker.redactValue(targetId, rawResult);
 
   return {
     success: true,

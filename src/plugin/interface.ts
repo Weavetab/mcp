@@ -39,6 +39,8 @@ export interface WeavetabManifestTool {
   description: string;
   inputSchema?: Record<string, any>;
   parameters?: Record<string, any>;
+  schema?: Record<string, any>;
+  requiresSession?: boolean;
 }
 
 export interface WeavetabManifestCommand {
@@ -53,12 +55,14 @@ export interface WeavetabManifestCommand {
 
 export interface WeavetabManifestPrompt {
   name: string;
+  title?: string;
   description?: string;
   arguments?: Record<string, any>;
 }
 
 export interface WeavetabManifestResource {
   name: string;
+  title?: string;
   uri?: string;
   uriTemplate?: string;
   description?: string;
@@ -106,6 +110,7 @@ export interface WeavetabPermissions {
   };
   cdp?: {
     evaluate?: boolean;
+    network?: boolean;
     navigate?: boolean;
     click?: boolean;
     input?: boolean;
@@ -158,8 +163,10 @@ export interface WeavetabManifestLinks {
   github?: string;
   npm?: string;
   docs?: string;
+  discord?: string;
   issues?: string;
   homepage?: string;
+  [key: string]: string | undefined;
 }
 
 export interface WeavetabManifest {
@@ -219,6 +226,8 @@ export interface PluginCommandContext {
   tab?: any;
   desktop?: any;
   storage: IPluginStorage;
+  extension?: IPluginExtensionBridge;
+  memory?: PluginMemoryContext;
   config: Record<string, any>;
   logger: PluginContext["logger"];
   session?: any;
@@ -397,8 +406,10 @@ export interface PluginContext {
 
 export interface WeavetabPluginDefinition {
   name: string;
+  displayName?: string;
   version?: string;
   description?: string;
+  tags?: string[];
   tools?: WeavetabPluginTool[];
   commands?: WeavetabPluginCommand[];
   prompts?: WeavetabPluginPrompt[];
@@ -409,9 +420,22 @@ export interface WeavetabPluginDefinition {
   removeTools?: string[];
   defaultConfig?: Record<string, any>;
   permissions?: WeavetabPermissions;
+  hooks?: {
+    beforeToolCall?: BeforeActionHook | BeforeActionHook[];
+    afterToolCall?:
+      | ((toolName: string, args: Record<string, any>, result: any, session?: any) => Promise<any> | any)
+      | Array<(toolName: string, args: Record<string, any>, result: any, session?: any) => Promise<any> | any>;
+    onBeforeAction?: BeforeActionHook | BeforeActionHook[];
+    onAfterAction?: AfterActionHook | AfterActionHook[];
+    onDOMMutation?: DOMMutationHook | DOMMutationHook[];
+    onPageNavigate?:
+      | ((url: string, session?: any) => Promise<void> | void)
+      | Array<(url: string, session?: any) => Promise<void> | void>;
+  };
   onBeforeAction?: BeforeActionHook;
   onAfterAction?: AfterActionHook;
   onDOMMutation?: DOMMutationHook;
+  onPageNavigate?: (url: string, session?: any) => Promise<void> | void;
   onLoad?: (ctx: PluginContext) => Promise<void> | void;
   onUnload?: (ctx: PluginContext) => Promise<void> | void;
 }

@@ -50,24 +50,33 @@ export async function browserEmulate(
   try {
     // 1. Network Throttling
     if (options.network) {
-      await session.Network.enable();
-      let params = typeof options.network === "string" 
+      let params = typeof options.network === "string"
         ? PRESET_NETWORK_PROFILES[options.network]
         : options.network;
 
-      if (params) {
-        await session.Network.emulateNetworkConditions({
-          offline: params.offline ?? false,
-          latency: params.latency ?? 0,
-          downloadThroughput: params.downloadThroughput ?? -1,
-          uploadThroughput: params.uploadThroughput ?? -1,
-        });
-        applied.push(`network: ${typeof options.network === "string" ? options.network : "custom"}`);
+      if (!params) {
+        return {
+          success: false,
+          applied,
+          error: `Unknown network profile "${String(options.network)}". Valid: ${Object.keys(PRESET_NETWORK_PROFILES).join(", ")}`,
+        };
       }
+
+      await session.Network.enable();
+      await session.Network.emulateNetworkConditions({
+        offline: params.offline ?? false,
+        latency: params.latency ?? 0,
+        downloadThroughput: params.downloadThroughput ?? -1,
+        uploadThroughput: params.uploadThroughput ?? -1,
+      });
+      applied.push(`network: ${typeof options.network === "string" ? options.network : "custom"}`);
     }
 
     // 2. CPU Throttling
     if (options.cpuThrottlingRate !== undefined) {
+      if (!Number.isFinite(options.cpuThrottlingRate) || options.cpuThrottlingRate < 1) {
+        return { success: false, applied, error: "cpuThrottlingRate must be a finite number >= 1" };
+      }
       await session.Emulation.setCPUThrottlingRate({
         rate: options.cpuThrottlingRate,
       });
@@ -102,8 +111,9 @@ export async function browserEmulate(
 
     // 6. Color Scheme (prefers-color-scheme) Override
     if (options.colorScheme) {
+      const value = options.colorScheme === "no-preference" ? "" : options.colorScheme;
       await session.Emulation.setEmulatedMedia({
-        features: [{ name: "prefers-color-scheme", value: options.colorScheme }],
+        features: [{ name: "prefers-color-scheme", value }],
       });
       applied.push(`colorScheme: ${options.colorScheme}`);
     }

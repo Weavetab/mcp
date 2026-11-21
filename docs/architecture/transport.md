@@ -38,4 +38,4 @@ The MCP client spawns Weavetab as a child process and pipes messages over stdin/
 weavetab --ws --port 3000
 ```
 
-Starts the daemon on `127.0.0.1:3000` (override with `--port <n>` / `--port=<n>`). The daemon binds strictly to loopback for local security — front it with your own TLS/auth layer if exposing across a private network.
+Starts the daemon on `127.0.0.1:3000` (override with `--port <n>` / `--port=<n>`). The daemon binds strictly to loopback, validates IPv4 (`127.0.0.1`/`localhost`) and IPv6 (`[::1]`) `Host` headers, enforces per-socket shared-secret authentication (`~/.weavetab-system/ws-secret`, `0o600` + Windows `icacls`) with a 5-second authentication timeout, and rejects concurrent socket connections while an active socket is open.

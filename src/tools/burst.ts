@@ -29,7 +29,9 @@ import { cacheActionMap } from "../state/cache.js";
 import { buildActionMap } from "../cdp/walker.js";
 import { sessionRegistry } from "../state/session.js";
 import type { Config } from "../config/loader.js";
-import { getConfigAgentId, getConfigBrowserType, getConfigMaxTabs } from "../config/loader.js";
+import { getConfigAgentId, getConfigBrowserType, getConfigMaxActionsPerMinute } from "../config/loader.js";
+import { checkDomain, isToolAllowedForRole } from "../security/blacklist.js";
+import { checkRateLimit } from "../security/ratelimit.js";
 import type { ReadOptions } from "./read.js";
 import { sendToExtension } from "../cdp/helpers.js";
 import { resetLoopCounter, getTrail, type TrailEntry } from "../intelligence/trail.js";
@@ -121,7 +123,7 @@ function expandMacro(step: BurstMacroStep): BurstStep[] {
     };
     const steps: BurstStep[] = [{ tool: "browser_click", args: clickArgs }];
     if (wait_for) {
-      steps.push({ tool: "browser_wait", args: { wait_for, value: wait_value } });
+      steps.push({ tool: "browser_wait", args: { for: wait_for, value: wait_value } });
     }
     return steps;
   }
@@ -134,19 +136,23 @@ function expandMacro(step: BurstMacroStep): BurstStep[] {
   }
   if (step.tool === "fill_form") {
     const { fields, submit } = args as any;
-    const steps: BurstStep[] = [];
+    const fillFields: Record<string, unknown>[] = [];
     if (Array.isArray(fields)) {
       for (const f of fields) {
         if (f && typeof f === "object") {
           const target = extractTarget(f);
-          steps.push({ tool: "browser_fill", args: { ...target, value: f.value } });
+          fillFields.push({ ...target, value: f.value });
         }
       }
     } else if (fields && typeof fields === "object") {
       for (const [key, value] of Object.entries(fields)) {
-        const target = key.startsWith("w:") ? { ref: key } : { id: key };
-        steps.push({ tool: "browser_fill", args: { ...target, value } });
+        const target = key.startsWith("w:") ? { ref: key } : { selector: key };
+        fillFields.push({ ...target, value });
       }
+    }
+    const steps: BurstStep[] = [];
+    if (fillFields.length > 0) {
+      steps.push({ tool: "browser_fill", args: { fields: fillFields } });
     }
     if (submit) {
       steps.push({ tool: "browser_key", args: { key: "Enter" } });
@@ -344,9 +350,41 @@ export async function browserBurst(
     const step = steps[i]!;
     let result: unknown;
     let stepError: string | undefined;
+    const stepTool = step.tool === "browser_go" ? "browser_navigate" : step.tool;
 
     try {
-      switch (step.tool) {
+      let currentUrl = sessionRegistry.getActive(getConfigAgentId(config), args.app)?.url || "";
+      if (!currentUrl && session?.Page?.getFrameTree) {
+        try {
+          const ft = await session.Page.getFrameTree();
+          currentUrl = ft?.frameTree?.frame?.url || "";
+        } catch { /* ignore */ }
+      }
+
+      const roleCheck = isToolAllowedForRole(config?.role ?? "operator", stepTool, step.args, currentUrl, config);
+      if (!roleCheck.allowed) {
+        stepError = roleCheck.reason || `Role '${config?.role}' does not have permission to use '${stepTool}'`;
+      } else {
+        const rl = checkRateLimit(getConfigMaxActionsPerMinute(config) ?? 60);
+        if (!rl.allowed) {
+          stepError = `Rate limit exceeded. Retry in ${rl.retryAfterMs}ms`;
+        } else {
+          if (currentUrl) {
+            const domainCheck = checkDomain(currentUrl, stepTool, config, step.args);
+            if (!domainCheck.allowed) {
+              stepError = domainCheck.reason;
+            }
+          }
+          if (!stepError && stepTool === "browser_navigate" && typeof step.args?.url === "string") {
+            const targetCheck = checkDomain(String(step.args.url), stepTool, config, step.args);
+            if (!targetCheck.allowed) {
+              stepError = targetCheck.reason;
+            }
+          }
+        }
+      }
+
+      if (!stepError) switch (step.tool) {
         case "browser_click":
           result = await weaveClick(session, step.args as any, config);
           break;
@@ -540,7 +578,7 @@ export async function browserBurst(
   }
 
   if (batch) {
-    const targetId = sessionRegistry.getActive(getConfigAgentId(config))?.targetId || "default";
+    const targetId = sessionRegistry.getActive(getConfigAgentId(config), args.app)?.targetId || "default";
     const map = await buildActionMap(session, { lite: true }, targetId);
     cacheActionMap(targetId, map);
   }

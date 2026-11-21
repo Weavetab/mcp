@@ -7,7 +7,9 @@
  */
 import CDP from "chrome-remote-interface";
 import type { Config } from "../config/loader.js";
-import { buildActionMap, findAllMatches, resolveByAria } from "../cdp/walker.js";
+import { getConfigAgentId } from "../config/loader.js";
+import { SessionSecretTracker } from "../security/secrets.js";
+import { sessionRegistry } from "../state/session.js";
 
 export interface FindOptions {
   query: string;
@@ -43,15 +45,30 @@ export async function browserFind(
   options: FindOptions,
   _config: Config
 ): Promise<FindResult> {
-  const { query, all = false, limit = 10 } = options;
+  const { query, role, all = false, limit = 10 } = options;
 
   if (!query) throw new Error("browser_find requires a query string");
 
+  const targetId = sessionRegistry.getActive(getConfigAgentId(_config))?.targetId ?? "default";
+
   const { result } = await session.Runtime.evaluate({
-    expression: `(function(q, returnAll, maxMatches) {
+    expression: `(function(q, roleFilter, returnAll, maxMatches) {
       function norm(s) { return (s || '').toLowerCase().replace(/[.\\u2026\\s]+/g, ' ').trim(); }
+      var root = document.body || document.documentElement;
+      if (!root) return null;
       var qLow = norm(q);
-      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null, false);
+      var roleLow = roleFilter ? roleFilter.toLowerCase().trim() : '';
+      function matchesRole(el) {
+        if (!roleLow) return true;
+        var explicit = (el.getAttribute('role') || '').toLowerCase();
+        if (explicit === roleLow) return true;
+        var tag = (el.tagName || '').toLowerCase();
+        if (roleLow === 'link' && tag === 'a') return true;
+        if (roleLow === 'button' && (tag === 'button' || (tag === 'input' && (el.type === 'submit' || el.type === 'button')))) return true;
+        if (roleLow === 'textbox' && (tag === 'textarea' || tag === 'input')) return true;
+        return tag === roleLow;
+      }
+      var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null, false);
       var matchedNodes = [];
       var seenElements = new Set();
 
@@ -62,7 +79,7 @@ export async function browserFind(
           var t = norm(node.nodeValue);
           if (t && t.includes(qLow)) {
             var p = node.parentElement;
-            if (p && !seenElements.has(p)) {
+            if (p && !seenElements.has(p) && matchesRole(p)) {
               var pTag = p.tagName ? p.tagName.toLowerCase() : '';
               if (ignoredTags.has(pTag)) continue;
               if (p.closest && p.closest('#wt-shadow-host, [data-wt-ignore], weavetab-host')) continue;
@@ -74,7 +91,7 @@ export async function browserFind(
           }
         } else if (node.nodeType === Node.ELEMENT_NODE) {
           var el = node;
-          if (seenElements.has(el)) continue;
+          if (seenElements.has(el) || !matchesRole(el)) continue;
           var elTag = el.tagName ? el.tagName.toLowerCase() : '';
           if (ignoredTags.has(elTag)) continue;
           if (el.closest && el.closest('#wt-shadow-host, [data-wt-ignore], weavetab-host')) continue;
@@ -90,7 +107,7 @@ export async function browserFind(
 
       if (matchedNodes.length === 0) return null;
 
-      var out = matchedNodes.map(function(match, i) {
+      var out = matchedNodes.map(function(match) {
         var r = match.getBoundingClientRect();
         var wtId = match.getAttribute('data-wt-id');
         var sel = '';
@@ -99,7 +116,6 @@ export async function browserFind(
         } else if (match.id) {
           sel = '#' + CSS.escape(match.id);
         } else {
-          // Construct clean selector path without dirtying the DOM
           var path = [];
           var curr = match;
           while (curr && curr.nodeType === Node.ELEMENT_NODE && curr !== document.body && curr !== document.documentElement) {
@@ -133,26 +149,27 @@ export async function browserFind(
       });
 
       return JSON.stringify(out);
-    })(${JSON.stringify(query)}, ${JSON.stringify(all)}, ${JSON.stringify(limit)})`,
+    })(${JSON.stringify(query)}, ${JSON.stringify(role ?? "")}, ${JSON.stringify(all)}, ${JSON.stringify(limit)})`,
     returnByValue: true
   }).catch(() => ({ result: { value: null } }));
 
   if (result && result.value) {
     const list: any[] = JSON.parse((result.value as string) || '[]');
     if (list.length > 0) {
-      const first = list[0];
+      const sanitized = list.map(m => ({
+        ref: m.ref,
+        selector: m.selector,
+        label: SessionSecretTracker.redact(targetId, String(m.label ?? "")),
+        tag: m.tag,
+        rect: { x: m.x, y: m.y, width: m.width, height: m.height }
+      }));
+      const first = sanitized[0]!;
       return {
         success: true,
         found: true,
-        total_matches: list.length,
-        matches: list.map(m => ({
-          ref: m.ref,
-          selector: m.selector,
-          label: m.label,
-          tag: m.tag,
-          rect: { x: m.x, y: m.y, width: m.width, height: m.height }
-        })),
-        rect: { x: first.x, y: first.y, width: first.width, height: first.height },
+        total_matches: sanitized.length,
+        matches: sanitized,
+        rect: first.rect,
         selector: first.selector,
         label: first.label
       };

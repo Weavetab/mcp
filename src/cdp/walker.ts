@@ -1,55 +1,64 @@
 import { logDebug } from "../audit/logger.js";
-/**
- * Weavetab — cdp/walker.ts
- * Accessibility tree walker: builds w:N ref IDs, viewport culling, and heuristic pointer sweep.
- * Weavetab by fy2ne
- */
-
 import CDP from "chrome-remote-interface";
-import { filterHidden } from "../security/filter.js";
+import * as FilterMod from "../security/filter.js";
 import { SessionSecretTracker } from "../security/secrets.js";
 import { getStoredRef, getStoredProps, type RefEntry } from "../state/delta.js";
 import { getRawCachedActionMap } from "../state/cache.js";
+import { getCachedConfig, getConfigExtension } from "../config/loader.js";
 
-// ─── Public types ─────────────────────────────────────────────────────────────
+function cleanInvisibleText(text: string): string {
+  if (!text) return text;
+  if (typeof (FilterMod as any).stripInvisibleChars === "function") {
+    return (FilterMod as any).stripInvisibleChars(text);
+  }
+  return text.replace(/[\u200B-\u200F\uFEFF\u00AD\u2060\u180E\u2028\u2029\u202A-\u202E\u2066-\u2069\u034F\uFE00-\uFE0E\u2000-\u200A\u{E0000}-\u{E007F}]/gu, "");
+}
 
-export const WT_REGISTRY_INIT_EXPR = `
-  window.__weavetab = window.__weavetab || {};
-  window.__weavetab.registry = window.__weavetab.registry || new WeakMap();
-`;
+function applySecurityFilter(elements: ActionElement[]): ActionElement[] {
+  const cleaned = elements.map((el) => ({
+    ...el,
+    label: cleanInvisibleText(el.label),
+  }));
+  if (typeof FilterMod.filterHidden === "function") {
+    try {
+      const res = (FilterMod.filterHidden as any)(cleaned);
+      if (Array.isArray(res)) return res;
+    } catch { /* fallback below */ }
+  }
+  return cleaned;
+}
 
 export type HrefType =
   | "same-origin" | "external" | "anchor" | "email" | "unknown";
 
 export interface ActionElement {
-  id: string;           // "w:42" — Rule 8
+  id: string;
   role: string;
   label: string;
   value?: string;
   backendNodeId?: number;
-  selector?: string;    // Stable CSS selector for extension coordination
+  selector?: string;
   group: "navigation" | "main_content" | "sidebar" | "form" | "modal" | "utility";
   type?: string;
   href?: string;
   hrefType?: HrefType;
   placeholder?: string;
   testId?: string;
-  textContent?: string; // visible text content for delta diffing (Phase 5e)
-  className?: string;   // class attribute for tracking CSS changes (Phase 5e)
-  frameUrl?: string;    // origin URL of iframe containing this element (if any)
-  fingerprint: string;  // "button:sign-in:form:3" — used for cache + delta
-  isFixed?: boolean;    // for position:fixed/sticky elements (never culled)
-  disabled?: boolean;   // true when element is aria-disabled or disabled attr
+  textContent?: string;
+  className?: string;
+  frameUrl?: string;
+  fingerprint: string;
+  isFixed?: boolean;
+  disabled?: boolean;
   depth: number;
   x?: number;
   y?: number;
   viewport?: string;
-  structuralIdiom?: string; // Captured structural hints (e.g. "aria-controls")
-  containerContext?: string; // e.g. "Pro Plan ($29/mo)" or "User: fy2ne (Admin)"
-  isModal?: boolean;         // true if inside an active dialog/modal
-  modalTitle?: string;       // enclosing modal title
+  structuralIdiom?: string;
+  containerContext?: string;
+  isModal?: boolean;
+  modalTitle?: string;
 }
-
 
 export interface ActionMap {
   url: string;
@@ -61,137 +70,88 @@ export interface ActionMap {
 }
 
 export interface WalkerOptions {
-  scope?: ActionElement["group"];
+  scope?: ActionElement["group"] | string;
   query?: string;
   limit?: number;
   lite?: boolean;
   fast?: boolean;
-  /** If true, returns delta info instead of full element list (caller handles) */
   forDelta?: boolean;
-  /** Viewport dimensions — used for culling. Defaults fetched from browser if not passed. */
   viewport?: { width: number; height: number; scrollX: number; scrollY: number };
-  /** If true, skip the flat-first optimization and go straight to deep shadow DOM traversal */
   deep?: boolean;
-  /** Pre-resolved page URL — avoids redundant Page.getFrameTree() call */
   url?: string;
-  /** Pre-resolved page title */
   title?: string;
-  /**
-   * If true, run semantic DOM pruning before returning elements.
-   * Drops hidden elements with no interactive descendants and no known toggle-trigger.
-   * Replaces SVG icons with [SVG Icon: label] tokens.
-   * NOTE: distinct from delta (which diffs across time). Pruning compresses the
-   * current snapshot once, before it is returned.
-   */
   prune?: boolean;
 }
 
-// ─── Viewport info ────────────────────────────────────────────────────────────
-
-interface Viewport {
-  width: number;
-  height: number;
-  scrollX: number;
-  scrollY: number;
-}
-
-const viewportCache = new Map<string, Viewport>();
-
-export function clearViewportCache(targetId: string) {
-  viewportCache.delete(targetId);
-}
-
-// ─── Per-navigation fallback ID counter (legacy — kept for external callers) ──
-// NOTE: This counter is NO LONGER used for collision dedup — see walkPassGlobalRefCounter.
-// Kept only so callers of resetFallbackIdCounter() don't break.
-let wtFallbackIdCounter = 1;
-
-export function resetFallbackIdCounter(): void {
-  wtFallbackIdCounter = 1;
-}
-
-// ─── Global atomic walk-pass ref counter (Bug #5 fix) ────────────────────────
-// A single monotonically-incrementing integer shared across ALL walk passes,
-// ALL frames, ALL tabs, and ALL tools in the process lifetime.
-// It is NEVER reset — only ever incremented — so no two elements across any
-// code path can ever receive the same numeric suffix in their ref ID.
-//
-// Design invariants:
-//   • walkPassGlobalRefCounter ticks forward on every fallback ID assignment.
-//   • walkPassSeenIds is the authoritative dedup registry for one top-level
-//     buildActionMap / buildAXTreeMap call (cross-frame scope).
-//   • beginWalkPass() is called ONCE at the top of each public entry point.
-//   • The JS collision counter injected into in-page code is seeded with
-//     walkPassGlobalRefCounter so iframe B's counter starts where iframe A ended.
 let walkPassGlobalRefCounter = 1;
-let walkPassSeenIds = new Map<string, number>();
 
-/**
- * Must be called at the start of every buildActionMap / buildAXTreeMap
- * invocation.  Returns the counter base captured for this pass so the
- * in-page JS can be seeded with it.
- */
-function beginWalkPass(): number {
-  walkPassSeenIds = new Map<string, number>();
-  return walkPassGlobalRefCounter;
+function beginWalkPass(): { passCounterBase: number; seenIds: Map<string, number> } {
+  return {
+    passCounterBase: walkPassGlobalRefCounter,
+    seenIds: new Map<string, number>(),
+  };
 }
 
-/**
- * Reserves the next N IDs from the global counter and returns the first.
- * Thread-safe within a single Node.js event-loop tick (synchronous).
- */
 function allocateRefIds(count: number): number {
   const base = walkPassGlobalRefCounter;
   walkPassGlobalRefCounter += Math.max(count, 1);
   return base;
 }
 
-/**
- * Deduplicates a ref ID within the current walk pass (cross-frame scope).
- * If `id` is already taken, appends _2, _3, … until unique, then records it.
- * Uses walkPassSeenIds so collisions from different iframes are caught.
- */
-function dedupeRefId(id: string): string {
-  if (!walkPassSeenIds.has(id)) {
-    walkPassSeenIds.set(id, 1);
+function dedupeRefId(id: string, seenIds: Map<string, number>): string {
+  if (!seenIds.has(id)) {
+    seenIds.set(id, 1);
     return id;
   }
-  const next = walkPassSeenIds.get(id)! + 1;
-  walkPassSeenIds.set(id, next);
-  // Append _N suffix; recursively check in case _N itself is taken
-  return dedupeRefId(`${id}_${next}`);
+  const next = seenIds.get(id)! + 1;
+  seenIds.set(id, next);
+  return dedupeRefId(`${id}_${next}`, seenIds);
 }
 
-// ─── Shadow DOM reference cache (Phase 2a) ───────────────────────────────────
-// Caches whether a page has discovered shadow DOM content per targetId.
-// Avoids the overhead of a two-phase (flat → deep) query on every browser_map.
 const shadowDomCache = new Map<string, boolean>();
 
 export function setShadowDomCache(targetId: string, hasShadow: boolean): void {
   shadowDomCache.set(targetId, hasShadow);
 }
 
-export function clearShadowDomCache(targetId: string): void {
-  shadowDomCache.delete(targetId);
+export function clearShadowDomCache(targetId?: string): void {
+  if (targetId) {
+    shadowDomCache.delete(targetId);
+  } else {
+    shadowDomCache.clear();
+  }
 }
 
-// ─── Main walker ─────────────────────────────────────────────────────────────
+export function clearViewportCache(_targetId?: string): void {}
 
-// Shared helper that identifies WeaveTab's own overlay/UI elements.
-// Applied in both buildActionMap (DOM walker path) and buildAXTreeMap (AX tree
-// path) so overlay elements never appear in delta output regardless of code path.
+export function resetFallbackIdCounter(): void {}
+
+export function sanitizeElementIds(
+  els: ActionElement[],
+  counter: { value: number }
+): number {
+  let fixed = 0;
+  for (const el of els) {
+    if (!el.id || el.id === "w:undefined" || el.id === "w:null" || el.id === "w:") {
+      el.id = `w:${counter.value++}`;
+      fixed++;
+    }
+  }
+  return fixed;
+}
+
 function isWeaveTabOverlay(label?: string, selector?: string): boolean {
-  const lbl = label?.toLowerCase().trim() || '';
-  const sel = selector?.toLowerCase() || '';
+  const lbl = label?.toLowerCase().trim() || "";
+  const sel = selector?.toLowerCase() || "";
   const WT_LABELS = new Set([
-    'chat with weavetab', 'weavetab', 'wt-msg-input', 'wt-msg-send',
-    'wt-msg-panel', 'wt-ghost-cursor', 'wt-ghost-bubble', 'weavetab-tactical-overlay',
-    'wt-shadow-host', 'wt-chat-icon', 'wt-chat-panel', 'wt-chat-input',
-    'f3', 'toggle theme', 'minimize', 'send feedback...'
+    "chat with weavetab", "weavetab", "wt-msg-input", "wt-msg-send",
+    "wt-msg-panel", "wt-ghost-cursor", "wt-ghost-bubble", "weavetab-tactical-overlay",
+    "wt-shadow-host", "wt-chat-icon", "wt-chat-panel", "wt-chat-input",
+    "f3", "toggle theme", "minimize", "send feedback..."
   ]);
   if (WT_LABELS.has(lbl)) return true;
   if (/^(chat with weavetab|weavetab hud|weave.*tab.*chat|send feedback|redirect, add a note, change goal|\u2191$|wt-(chat|shadow))/i.test(lbl)) return true;
-  if (sel.includes('wt-shadow') || sel.includes('data-wt-ignore') || sel.startsWith('#wt-')) return true;
+  if (sel.includes("wt-shadow") || sel.includes("data-wt-ignore") || sel.startsWith("#wt-")) return true;
   return false;
 }
 
@@ -200,9 +160,12 @@ export async function buildActionMap(
   options: WalkerOptions = {},
   targetId = "default"
 ): Promise<ActionMap> {
-  // ── Begin a new walk pass — resets per-pass dedup registry ─────────────────
-  const passCounterBase = beginWalkPass();
+  const { passCounterBase, seenIds: walkPassSeenIds } = beginWalkPass();
   const url = options.url ?? (await session.Page.getFrameTree()).frameTree.frame.url;
+
+  const { sessionRegistry } = await import("../state/session.js");
+  const client = sessionRegistry.getAll().find(c => c.targetId === targetId);
+
   let title = options.title;
   if (!title) {
     try {
@@ -216,110 +179,97 @@ export async function buildActionMap(
     } catch { /* ignore */ }
   }
   if (!title) {
-    const { sessionRegistry } = await import("../state/session.js");
-    title = sessionRegistry.getAll().find(c => c.targetId === targetId)?.title || "";
+    title = client?.title || "";
   }
 
-  // Inherit sticky pruning state from session if not explicitly set in options
-  if (options.prune === undefined) {
-    const { sessionRegistry } = await import("../state/session.js");
-    const client = sessionRegistry.getAll().find(c => c.targetId === targetId);
-    if (client?.pruneActive) {
-      options.prune = true;
+  if (options.prune === undefined && client?.pruneActive) {
+    options.prune = true;
+  }
+
+  const cfg = getCachedConfig();
+  const skipExtension = Boolean(client?.isElectron) || !getConfigExtension(cfg);
+
+  let extensionMap: any = null;
+  if (!skipExtension) {
+    const { getFromExtension } = await import("./helpers.js");
+    extensionMap = await getFromExtension(session, { type: "GET_SEMANTIC_MAP" });
+
+    if (extensionMap && Array.isArray(extensionMap)) {
+      const invalidCount = extensionMap.filter(
+        (el: any) => el.id === undefined || el.id === null || el.id === ""
+      ).length;
+      if (invalidCount > 0) {
+        logDebug(`[Walker] Extension returned ${invalidCount}/${extensionMap.length} elements with invalid IDs, forcing CDP fallback`);
+        extensionMap = null;
+      }
     }
-  }
 
-  const { getFromExtension } = await import("./helpers.js");
-  let extensionMap = await getFromExtension(session, { type: 'GET_SEMANTIC_MAP' });
-
-  // Validate the extension result — reject if any element has undefined ID
-  if (extensionMap && Array.isArray(extensionMap)) {
-    const invalidCount = extensionMap.filter(
-      (el: any) => el.id === undefined || el.id === null || el.id === ''
-    ).length;
-    if (invalidCount > 0) {
-      logDebug(`[Walker] Extension returned ${invalidCount}/${extensionMap.length} elements with invalid IDs, forcing CDP fallback`);
-      extensionMap = null;
-    }
-  }
-
-  // Phase 0.2: DOM ID verification — confirm extension IDs are actually written as
-  // data-wt-id attributes in the live DOM. If the majority are missing the extension
-  // built a map but never applied the attributes; fall through to CDP fallback.
-  if (extensionMap && Array.isArray(extensionMap) && extensionMap.length > 0) {
-    const sampleSize = Math.min(5, extensionMap.length);
-    const sampleIds = (extensionMap as any[]).slice(0, sampleSize).map((el: any) => el.id).filter(Boolean);
-    if (sampleIds.length > 0) {
-      try {
-        const { result: domVerify } = await session.Runtime.evaluate({
-          expression: `(function(ids) {
-            return ids.filter(function(id) {
-              return !document.querySelector('[data-wt-id="' + id + '"]');
-            }).length;
-          })(${JSON.stringify(sampleIds)})`,
-          returnByValue: true
-        });
-        const missingCount = (domVerify?.value as number) ?? sampleIds.length;
-        if (missingCount > Math.ceil(sampleIds.length / 2)) {
-          logDebug(`[Walker] Extension ID DOM verification: ${missingCount}/${sampleIds.length} IDs not found in DOM \u2014 falling through to CDP fallback`);
-          extensionMap = null;
-        }
-      } catch { /* non-fatal \u2014 keep extensionMap as-is and proceed */ }
-    }
-  }
-
-  
-  if (!extensionMap || !Array.isArray(extensionMap)) {
-    // Architecture change: Try to read from extension's live index first
-    // The extension now maintains window.__wt_liveIndex via continuous MutationObserver
-    const { result: liveIndexResult } = await session.Runtime.evaluate({
-      expression: `(function() {
-        if (typeof window.__wt_liveIndex !== 'undefined' && Array.isArray(window.__wt_liveIndex)) {
-          return JSON.stringify({ 
-            elements: window.__wt_liveIndex,
-            source: 'live-index'
+    if (extensionMap && Array.isArray(extensionMap) && extensionMap.length > 0) {
+      const sampleSize = Math.min(5, extensionMap.length);
+      const sampleIds = (extensionMap as any[]).slice(0, sampleSize).map((el: any) => el.id).filter(Boolean);
+      if (sampleIds.length > 0) {
+        try {
+          const { result: domVerify } = await session.Runtime.evaluate({
+            expression: `(function(ids) {
+              return ids.filter(function(id) {
+                return !document.querySelector('[data-wt-id="' + String(id).replace(/["\\\\]/g, '\\\\$&') + '"]');
+              }).length;
+            })(${JSON.stringify(sampleIds)})`,
+            returnByValue: true
           });
-        }
-        return JSON.stringify({ elements: null, source: 'unavailable' });
-      })()`,
-      returnByValue: true
-    });
+          const missingCount = (domVerify?.value as number) ?? sampleIds.length;
+          if (missingCount > Math.ceil(sampleIds.length / 2)) {
+            logDebug(`[Walker] Extension ID DOM verification: ${missingCount}/${sampleIds.length} IDs not found in DOM — falling through to CDP fallback`);
+            extensionMap = null;
+          }
+        } catch { /* non-fatal */ }
+      }
+    }
 
-    if (liveIndexResult && liveIndexResult.value) {
-      try {
-        const parsed = JSON.parse(liveIndexResult.value as string);
-        if (parsed.source === 'live-index' && parsed.elements && Array.isArray(parsed.elements)) {
-          logDebug(`[Walker] read ${parsed.elements.length} elements from extension live index`);
-          extensionMap = parsed.elements;
+    if (!extensionMap || !Array.isArray(extensionMap)) {
+      const { result: liveIndexResult } = await session.Runtime.evaluate({
+        expression: `(function() {
+          if (typeof window.__wt_liveIndex !== 'undefined' && Array.isArray(window.__wt_liveIndex)) {
+            return JSON.stringify({
+              elements: window.__wt_liveIndex,
+              source: 'live-index'
+            });
+          }
+          return JSON.stringify({ elements: null, source: 'unavailable' });
+        })()`,
+        returnByValue: true
+      });
+
+      if (liveIndexResult && liveIndexResult.value) {
+        try {
+          const parsed = JSON.parse(liveIndexResult.value as string);
+          if (parsed.source === "live-index" && parsed.elements && Array.isArray(parsed.elements)) {
+            logDebug(`[Walker] read ${parsed.elements.length} elements from extension live index`);
+            extensionMap = parsed.elements;
+          }
+        } catch (e) {
+          logDebug(`[Walker] Failed to parse live index result: ${e}`);
         }
-      } catch (e) {
-        logDebug(`[Walker] Failed to parse live index result: ${e}`);
       }
     }
   }
 
   if (!extensionMap || !Array.isArray(extensionMap)) {
-    // Fallback: inject a script to get interactable elements when extension is missing
-    // Hardened with per-element try-catch — one bad node no longer kills the entire map
-    // Deep shadow DOM traversal — falls back to recursive shadow-penetrating query when flat query is sparse
     const { result } = await session.Runtime.evaluate({
       expression: `(function() {
         var INTERACTIVE_SEL = 'a, button, input, textarea, select, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="combobox"], [role="searchbox"], [role="menuitem"], [role="tab"], [tabindex]:not([tabindex="-1"])';
 
-        // deepQuery has a hard depth limit and a visited-set guard so circular
-        // shadow root references can't cause a stack overflow.
         function deepQuery(root, selector, visited, depth) {
           if (!visited) visited = new Set();
           if (depth === undefined) depth = 0;
-          if (depth > 10) return [];  // hard depth limit
-          if (visited.has(root)) return [];  // break cycles
+          if (depth > 10) return [];
+          if (visited.has(root)) return [];
           visited.add(root);
           var all = [];
           try {
             var direct = root.querySelectorAll(selector);
             for (var i = 0; i < direct.length; i++) all.push(direct[i]);
           } catch (e) {}
-          // TreeWalker — lazy DOM traversal, avoids building a static NodeList of every element
           try {
             var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null, false);
             while (walker.nextNode()) {
@@ -336,22 +286,20 @@ export async function buildActionMap(
         }
 
         var hasShadowCache = ${JSON.stringify(!!shadowDomCache.get(targetId))};
-        var useDeep = ${JSON.stringify(!!(options as any).deep)} || hasShadowCache;
+        var useDeep = ${JSON.stringify(!!options.deep)} || hasShadowCache;
         var els = [];
+        var flatEls;
 
-        // Phase 1: flat query (skip when cache confirms shadow DOM exists — deepQuery covers root too)
         if (!hasShadowCache) {
           try {
-            var flatEls = document.querySelectorAll(INTERACTIVE_SEL);
+            flatEls = document.querySelectorAll(INTERACTIVE_SEL);
             for (var fi = 0; fi < flatEls.length; fi++) els.push(flatEls[fi]);
           } catch (e) {}
         }
 
-        // Phase 2: deep query if cache hit OR flat results are sparse
         if (useDeep || els.length < 3) {
           try {
             var deepEls = deepQuery(document, INTERACTIVE_SEL);
-            // Deduplicate by comparing tagName + label + position fingerprint
             var seen = new Set();
             for (var di = 0; di < els.length; di++) {
               try {
@@ -373,47 +321,42 @@ export async function buildActionMap(
           } catch (e) {}
         }
 
-        // ── Content-addressable IDs — stable across re-renders ────────────────
-        // djb2 hash of (tagName + role + trimmed text/label + sibling-index + parent context).
-        // Same element always gets the same ID even if the walker runs multiple
-        // times. Sequential counter only used as collision fallback.
-        function wtHashId(el) {
+        function wtHashId(el, rect) {
           var tag = el.tagName || '';
           var role = el.getAttribute('role') || '';
           var text = (el.getAttribute('aria-label') || el.textContent || el.value || el.placeholder || '').slice(0, 60).trim();
-          var rect = el.getBoundingClientRect();
           var absX = Math.round(rect.left + (window.scrollX || 0));
           var absY = Math.round(rect.top + (window.scrollY || 0));
-          var path = '';
+          var pathStr = '';
           try {
             var curr = el;
-            for(var level = 0; level < 3 && curr; level++) {
-                var p = curr.parentElement;
-                if (!p) break;
-                var idx = 0;
-                var siblings = p.children;
-                for (var si = 0; si < siblings.length; si++) {
-                  if (siblings[si] === curr) { idx = si; break; }
-                }
-                path += '|' + (curr.tagName||'') + '[' + idx + ']';
-                curr = p;
+            for (var level = 0; level < 3 && curr; level++) {
+              var p = curr.parentElement;
+              if (!p) break;
+              var idx = 0;
+              var siblings = p.children;
+              for (var si = 0; si < siblings.length; si++) {
+                if (siblings[si] === curr) { idx = si; break; }
+              }
+              pathStr += '|' + (curr.tagName || '') + '[' + idx + ']';
+              curr = p;
             }
           } catch(e) {}
-          var raw = tag + '|' + role + '|' + text + '|' + absX + '|' + absY + path;
+          var raw = tag + '|' + role + '|' + text + '|' + absX + '|' + absY + pathStr;
           var h = 5381;
           for (var ci = 0; ci < raw.length; ci++) {
             h = ((h << 5) + h) ^ raw.charCodeAt(ci);
-            h = h >>> 0; // keep unsigned 32-bit
+            h = h >>> 0;
           }
           return 'wt' + h.toString(36);
         }
+
         var usedHashes = {};
-        // Bug #5 fix: seed collision counter from the global walk-pass base so that
-        // elements in different iframes processed in the same pass never share a
-        // numeric suffix.  passCounterBase is injected by the TypeScript host.
         var collisionCounter = ${JSON.stringify(passCounterBase)};
         var _coIdx = 0;
         var results = [];
+        var pendingAttrWrites = [];
+
         for (var i2 = 0; i2 < els.length; i2++) {
           try {
             var el = els[i2];
@@ -422,14 +365,13 @@ export async function buildActionMap(
             if (rect.width === 0 || rect.height === 0 || rect.bottom < 0 || rect.top > window.innerHeight) continue;
             var id = el.getAttribute('data-wt-id');
             if (!id) {
-              var hid = wtHashId(el);
-              // Resolve collision: if same hash already used, append counter
+              var hid = wtHashId(el, rect);
               if (usedHashes[hid]) {
                 hid = hid + '_' + (collisionCounter++);
               }
               usedHashes[hid] = true;
               id = hid;
-              el.setAttribute('data-wt-id', id);
+              pendingAttrWrites.push([el, id]);
             }
             var role = el.tagName.toLowerCase();
             if (role === 'a') role = 'link';
@@ -438,7 +380,7 @@ export async function buildActionMap(
             try { if (el.ownerDocument !== document) frameUrl = el.ownerDocument.defaultView.location.href; } catch(e) { frameUrl = 'cross-origin-' + (_coIdx++); }
             var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
             var isSecret = el.hasAttribute('data-wt-secret') ||
-              (el.tagName === 'INPUT' && (
+              ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && (
                 el.type === 'password' ||
                 secretRegex.test(el.getAttribute('autocomplete') || '') ||
                 secretRegex.test(el.getAttribute('name') || '') ||
@@ -447,13 +389,11 @@ export async function buildActionMap(
               ));
             var richPh = el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-placeholder') || (el.querySelector ? (el.querySelector('[data-slate-placeholder]')?.textContent || '') : '') || '';
             var labelStr = el.getAttribute('aria-label') || el.innerText || (isSecret ? '' : el.value) || richPh || '';
-            // For radio/checkbox, serialize checked state as 'true'/'false' so the agent
-            // can see which option is selected without having to scrape the DOM separately.
             var elType = (el.type || '').toLowerCase();
             var elRole = (el.getAttribute('role') || el.tagName.toLowerCase());
             var isCheckable = elType === 'radio' || elType === 'checkbox' ||
                               elRole === 'radio' || elRole === 'checkbox';
-            var isOption   = el.tagName === 'OPTION';
+            var isOption = el.tagName === 'OPTION';
             var valStr;
             if (isCheckable) {
               valStr = el.checked ? 'true' : 'false';
@@ -472,7 +412,6 @@ export async function buildActionMap(
               txtContent = '[REDACTED]';
             }
 
-            // Capture structural idiom (e.g. aria-controls, aria-owns, etc.)
             var idiom = '';
             var CONTROLS_ATTRS = ['aria-controls', 'aria-owns', 'data-target', 'data-bs-target'];
             for (var ca = 0; ca < CONTROLS_ATTRS.length; ca++) {
@@ -482,9 +421,6 @@ export async function buildActionMap(
               }
             }
 
-            // ── Container context binding ─────────────────────────────────────
-            // Walk up the DOM to find a meaningful card/row/list-item heading that
-            // describes this element's entity context, e.g. "Pro Plan ($29/mo)".
             var containerCtx = '';
             try {
               var CARD_SEL = '[class*="card"],[class*="row"],[class*="item"],[class*="product"],[class*="plan"],[class*="entry"],[class*="result"],[class*="tile"],[class*="option"],[data-entity]';
@@ -497,7 +433,7 @@ export async function buildActionMap(
                     var hText = (heading.innerText || heading.textContent || '').trim().slice(0, 60);
                     if (hText && hText !== labelStr) { containerCtx = hText; break; }
                   }
-                  var allText = (ancestor.innerText || ancestor.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+                  var allText = (ancestor.innerText || ancestor.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
                   if (allText && allText !== labelStr) { containerCtx = allText; break; }
                 }
                 ancestor = ancestor.parentElement;
@@ -505,7 +441,6 @@ export async function buildActionMap(
               }
             } catch(e) {}
 
-            // ── Modal detection ───────────────────────────────────────────────
             var inModal = false;
             var modalTitleStr = '';
             try {
@@ -549,64 +484,125 @@ export async function buildActionMap(
               disabled: (el.disabled || el.getAttribute('aria-disabled') === 'true') || undefined,
               checked: isCheckable ? el.checked : undefined,
             });
-          } catch (e) {
-            // Silently skip elements that cause errors (cross-origin SVG, detached nodes, etc.)
-          }
+          } catch (e) {}
         }
+
+        for (var wi = 0; wi < pendingAttrWrites.length; wi++) {
+          try { pendingAttrWrites[wi][0].setAttribute('data-wt-id', pendingAttrWrites[wi][1]); } catch (e) {}
+        }
+
         return JSON.stringify({ elements: results, shadowFound: results.length > 0 && typeof flatEls !== 'undefined' && els.length > flatEls.length });
       })()`,
       returnByValue: true
     });
     if (result && result.value) {
       try {
-        var parsed = JSON.parse(result.value as string);
-        // New format: { elements: [...], shadowFound: boolean }
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.elements) {
+        const parsed = JSON.parse(result.value as string);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.elements) {
           extensionMap = parsed.elements;
           if (parsed.shadowFound) {
             shadowDomCache.set(targetId, true);
           }
         } else {
-          // Old format: bare array
           extensionMap = parsed;
         }
-      } catch (e) {
+      } catch {
         extensionMap = [];
       }
     }
   }
 
-  // Merge elements from child webviews and iframes managed by OmniBroker
   try {
     const { getOmniSessions } = await import("./omni_broker.js");
     const childSessions = getOmniSessions(targetId);
     if (childSessions && childSessions.size > 0) {
+      let frameOrigins: Array<{ url: string; left: number; top: number }> = [];
+      try {
+        const { result: frameRectsRes } = await session.Runtime.evaluate({
+          expression: `(function() {
+            var frames = document.querySelectorAll('iframe, webview');
+            var out = [];
+            for (var i = 0; i < frames.length; i++) {
+              var f = frames[i];
+              var r = f.getBoundingClientRect();
+              out.push({ url: f.src || f.getAttribute('src') || '', left: Math.round(r.left), top: Math.round(r.top) });
+            }
+            return JSON.stringify(out);
+          })()`,
+          returnByValue: true,
+        });
+        if (frameRectsRes?.value) {
+          frameOrigins = JSON.parse(frameRectsRes.value as string);
+        }
+      } catch { /* best-effort frame offset */ }
+
       for (const [, childSession] of childSessions.entries()) {
         try {
           const { result: childResult } = await childSession.Runtime.evaluate({
             expression: `(function() {
               var INTERACTIVE_SEL = 'a, button, input, textarea, select, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="combobox"], [role="searchbox"], [role="menuitem"], [role="tab"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
               var els = document.querySelectorAll(INTERACTIVE_SEL);
+              var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+              var usedHashes = {};
               var results = [];
+              var pendingWrites = [];
+
+              function wtHashId(el, rect) {
+                var tag = el.tagName || '';
+                var role = el.getAttribute('role') || '';
+                var text = (el.getAttribute('aria-label') || el.textContent || el.value || el.placeholder || '').slice(0, 60).trim();
+                var raw = 'wv|' + tag + '|' + role + '|' + text + '|' + Math.round(rect.left) + '|' + Math.round(rect.top);
+                var h = 5381;
+                for (var ci = 0; ci < raw.length; ci++) {
+                  h = ((h << 5) + h) ^ raw.charCodeAt(ci);
+                  h = h >>> 0;
+                }
+                return 'wv' + h.toString(36);
+              }
+
               for (var i = 0; i < els.length; i++) {
                 var el = els[i];
                 var rect = el.getBoundingClientRect();
                 if (rect.width === 0 || rect.height === 0 || rect.bottom < 0 || rect.top > window.innerHeight) continue;
                 var id = el.getAttribute('data-wt-id');
                 if (!id) {
-                  id = 'wv_' + Math.random().toString(36).slice(2, 9);
-                  el.setAttribute('data-wt-id', id);
+                  var hid = wtHashId(el, rect);
+                  if (usedHashes[hid]) {
+                    var c = ++usedHashes[hid];
+                    hid = hid + '_' + c;
+                  } else {
+                    usedHashes[hid] = 1;
+                  }
+                  id = hid;
+                  pendingWrites.push([el, id]);
+                }
+                var isSecret = el.hasAttribute('data-wt-secret') ||
+                  ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && (
+                    el.type === 'password' ||
+                    secretRegex.test(el.getAttribute('autocomplete') || '') ||
+                    secretRegex.test(el.getAttribute('name') || '') ||
+                    secretRegex.test(el.getAttribute('id') || '') ||
+                    secretRegex.test(el.getAttribute('aria-label') || '')
+                  ));
+                var labelStr = el.getAttribute('aria-label') || el.innerText || (isSecret ? '' : el.value) || el.placeholder || '';
+                var valStr = el.value !== undefined ? String(el.value) : undefined;
+                if (isSecret) {
+                  labelStr = el.getAttribute('aria-label') || el.placeholder || '[REDACTED SECRET FIELD]';
+                  if (valStr !== undefined) valStr = '[REDACTED]';
                 }
                 results.push({
                   id: id,
                   role: el.getAttribute('role') || el.tagName.toLowerCase(),
-                  label: el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || '',
-                  value: el.value,
+                  label: labelStr,
+                  value: valStr,
                   x: Math.round(rect.left + rect.width / 2),
                   y: Math.round(rect.top + rect.height / 2),
                   selector: '[data-wt-id="' + id + '"]',
                   frameUrl: window.location.href,
                 });
+              }
+              for (var w = 0; w < pendingWrites.length; w++) {
+                try { pendingWrites[w][0].setAttribute('data-wt-id', pendingWrites[w][1]); } catch(e) {}
               }
               return JSON.stringify(results);
             })()`,
@@ -615,6 +611,14 @@ export async function buildActionMap(
           if (childResult && childResult.value) {
             const childEls = JSON.parse(childResult.value as string);
             if (Array.isArray(childEls) && childEls.length > 0) {
+              const fUrl = childEls[0]?.frameUrl || "";
+              const matchedFrame = frameOrigins.find(fo => fo.url && (fUrl === fo.url || fUrl.startsWith(fo.url) || fo.url.startsWith(fUrl))) || frameOrigins[0];
+              const offsetX = matchedFrame ? matchedFrame.left : 0;
+              const offsetY = matchedFrame ? matchedFrame.top : 0;
+              for (const ce of childEls) {
+                if (typeof ce.x === "number") ce.x += offsetX;
+                if (typeof ce.y === "number") ce.y += offsetY;
+              }
               if (!Array.isArray(extensionMap)) extensionMap = [];
               extensionMap = extensionMap.concat(childEls);
             }
@@ -628,16 +632,15 @@ export async function buildActionMap(
     return { url, title, elements: [], targetId };
   }
 
-  // Accept both extension format ({tag, text, coords}) and fallback format ({role, label, x, y})
   const mappedElements: ActionElement[] = extensionMap.map((el: any) => ({
     id: `w:${el.id}`,
-    role: el.role || el.tag || 'generic',
-    label: el.label || el.text || el.placeholder || '',
+    role: el.role || el.tag || "generic",
+    label: el.label || el.text || el.placeholder || "",
     value: el.value,
     placeholder: el.placeholder || undefined,
     type: el.type || undefined,
-    group: 'main_content',
-    fingerprint: `${el.role || el.tag || 'generic'}:${el.label || el.text || ''}:${el.id}`,
+    group: "main_content",
+    fingerprint: `${el.role || el.tag || "generic"}:${el.label || el.text || ""}:${el.id}`,
     depth: 0,
     x: el.x ?? (el.coords ? el.coords.x : undefined),
     y: el.y ?? (el.coords ? el.coords.y : undefined),
@@ -646,7 +649,7 @@ export async function buildActionMap(
     selector: el.selector,
     backendNodeId: undefined,
     textContent: el.textContent || undefined,
-    className: el.className || el.attributes?.class || '',
+    className: el.className || el.attributes?.class || "",
     structuralIdiom: el.structuralIdiom || undefined,
     frameUrl: el.frameUrl || undefined,
     containerContext: el.containerContext || undefined,
@@ -655,14 +658,10 @@ export async function buildActionMap(
     disabled: el.disabled || undefined,
   }));
 
-  // Post-mapping sanitizer — catch any w:undefined/w:null and reassign.
-  // Uses a stable hash derived from the element's fingerprint, coordinates, and
-  // index rather than an incrementing global counter (which would yield unstable
-  // IDs across map calls).
   let invalidIdCount = 0;
   const usedFallbackHashes = new Set<string>();
   for (let i = 0; i < mappedElements.length; i++) {
-    if (!mappedElements[i].id || mappedElements[i].id === 'w:undefined' || mappedElements[i].id === 'w:null' || mappedElements[i].id === 'w:') {
+    if (!mappedElements[i].id || mappedElements[i].id === "w:undefined" || mappedElements[i].id === "w:null" || mappedElements[i].id === "w:") {
       const baseStr = `${mappedElements[i].role}|${mappedElements[i].label}|${mappedElements[i].x}|${mappedElements[i].y}`;
       let h = 5381;
       for (let c = 0; c < baseStr.length; c++) { h = ((h << 5) + h) ^ baseStr.charCodeAt(c); h = h >>> 0; }
@@ -673,7 +672,7 @@ export async function buildActionMap(
         hash = `${hash}_${col}`;
       }
       usedFallbackHashes.add(hash);
-      mappedElements[i].id = `w:f${hash}`; // 'f' for fallback
+      mappedElements[i].id = `w:f${hash}`;
       mappedElements[i].fingerprint = `${mappedElements[i].role}:${mappedElements[i].label}:fb-${hash}`;
       invalidIdCount++;
     }
@@ -682,62 +681,41 @@ export async function buildActionMap(
     logDebug(`[Walker] Post-mapping sanitizer fixed ${invalidIdCount} element(s) with stable fallback IDs`);
   }
 
-  // ── Bug #5 fix: global cross-frame dedup using walkPassSeenIds ───────────────
-  // walkPassSeenIds is reset once per buildActionMap call (see beginWalkPass()).
-  // It spans ALL frames in this pass — not just this mappedElements array — so a
-  // hash collision between an element in the main frame and one in an iframe is
-  // caught and disambiguated here rather than silently producing two `w:X` refs.
-  {
-    for (const el of mappedElements) {
-      const original = el.id;
-      const deduped = dedupeRefId(el.id);
-      if (deduped !== original) {
-        el.id = deduped;
-        // Patch data-wt-id selector so click/type tools can still resolve the element.
-        if (el.selector && el.selector.includes('data-wt-id')) {
-          el.selector = el.selector.replace(/data-wt-id="[^"]+"/, `data-wt-id="${el.id.replace('w:', '')}"`);
-        }
-        logDebug(`[Walker] Bug#5 cross-frame dedup: ${original} → ${el.id}`);
-      }
+  for (const el of mappedElements) {
+    const original = el.id;
+    const deduped = dedupeRefId(el.id, walkPassSeenIds);
+    if (deduped !== original) {
+      el.id = deduped;
+      logDebug(`[Walker] Bug#5 cross-frame dedup: ${original} → ${el.id}`);
     }
   }
 
-  // ── AI-blind: strip Weavetab overlay elements from the map ─────────────────
-  // The chat panel, ghost cursor, HUD, and overlay UI are for the USER only.
-  // The AI must never see, click, or type into them.
-  // Uses shared isWeaveTabOverlay() helper — also applied in buildAXTreeMap.
-
   const visibleElements = mappedElements.filter((el) => {
-    // Use shared isWeaveTabOverlay helper for consistent filtering
     if (isWeaveTabOverlay(el.label, el.selector)) return false;
-    // Defense-in-depth: skip elements with empty labels and non-interactive roles
-    // Catches overlay elements that slipped through (e.g. plain divs with onclick)
-    const lbl = el.label?.toLowerCase().trim() || '';
+    const lbl = el.label?.toLowerCase().trim() || "";
     if (!lbl && !el.value && !el.placeholder && !el.href &&
-        (el.role === 'generic' || el.role === '' || el.role === 'div')) return false;
+        (el.role === "generic" || el.role === "" || el.role === "div")) return false;
     return true;
   });
-  // ──────────────────────────────────────────────────────────────────────────
 
-  // ── Semantic DOM Pruning (optional, opt-in via prune:true) ─────────────────
-  // Prune = one-shot compression of THIS snapshot before returning.
-  // Delta = diffs across time (previous call → now). They are complementary.
-  // NOTE: sequenced after data-wt-id assignment. Do not enable
-  // as default until that approach is confirmed stable.
   let prunedElements = visibleElements;
   if (options.prune) {
     try {
-      const { loadDomainProfile } = await import('../intelligence/sessionMemory.js');
-      const hostname = new URL(url).hostname;
+      const { loadDomainProfile } = await import("../intelligence/sessionMemory.js");
+      let hostname = "local";
+      try {
+        hostname = new URL(url).hostname || "local";
+      } catch {
+        hostname = "local";
+      }
       const profile = await loadDomainProfile(hostname);
       const structuralIdioms = profile?.memories
         .filter(m => m.state !== "deprecated" && m.fingerprint?.structuralIdiom)
         .map(m => m.fingerprint!.structuralIdiom!) || [];
-      
-      // Deduplicate idioms
+
       const uniqueIdioms = Array.from(new Set(structuralIdioms));
 
-      const { pruneSnapshot } = await import('./pruner.js');
+      const { pruneSnapshot } = await import("./pruner.js");
       prunedElements = await pruneSnapshot(session, visibleElements, targetId, uniqueIdioms);
     } catch (e) {
       logDebug(`[Walker] Pruner threw — falling back to unpruned list: ${e}`);
@@ -745,24 +723,35 @@ export async function buildActionMap(
     }
   }
 
-  // Scope filter — restrict to elements within a CSS selector
   let scopedElements = prunedElements;
   if (options.scope) {
+    const GROUP_SELECTOR_MAP: Record<string, string> = {
+      navigation: "nav, header, [role='navigation'], [role='banner']",
+      main_content: "main, article, [role='main']",
+      sidebar: "aside, [role='complementary']",
+      form: "form, [role='form']",
+      modal: "dialog[open], [role='dialog'], [aria-modal='true']",
+      utility: "footer, [role='contentinfo']",
+    };
+    const effectiveScopeSel = GROUP_SELECTOR_MAP[options.scope] || options.scope;
+
     const { result: scopeResult } = await session.Runtime.evaluate({
       expression: `(function(sel) {
-        const el = document.querySelector(sel);
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        const ids = [...el.querySelectorAll('[data-wt-id]')].map(e => e.getAttribute('data-wt-id')).filter(Boolean);
-        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, ids: ids };
-      })(${JSON.stringify(options.scope)})`,
+        try {
+          const el = document.querySelector(sel);
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          const ids = [...el.querySelectorAll('[data-wt-id]')].map(e => e.getAttribute('data-wt-id')).filter(Boolean);
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, ids: ids };
+        } catch(e) { return null; }
+      })(${JSON.stringify(effectiveScopeSel)})`,
       returnByValue: true,
     }).catch(() => ({ result: { value: null } }));
     const scopeData = scopeResult?.value as { left: number; top: number; right: number; bottom: number; ids: string[] } | null;
     if (scopeData) {
       const validIds = new Set(scopeData.ids);
-      scopedElements = visibleElements.filter(el => {
-        if (validIds.has(el.id.replace('w:', ''))) return true;
+      scopedElements = prunedElements.filter(el => {
+        if (validIds.has(el.id.replace("w:", ""))) return true;
         if (el.x !== undefined && el.y !== undefined) {
           return el.x >= scopeData.left && el.x <= scopeData.right &&
                  el.y >= scopeData.top && el.y <= scopeData.bottom;
@@ -772,8 +761,8 @@ export async function buildActionMap(
     }
   }
 
-  // Query filter
-  let filtered = scopedElements;
+  let filtered = applySecurityFilter(scopedElements);
+
   if (options.query) {
     const q = options.query.toLowerCase();
     filtered = filtered.filter(
@@ -785,12 +774,10 @@ export async function buildActionMap(
     );
   }
 
-  // Limit
   if (options.limit && filtered.length > options.limit) {
     filtered = filtered.slice(0, options.limit);
   }
 
-  // Apply session secret redaction over all element labels, values, placeholders
   const redactedElements = filtered.map(el => ({
     ...el,
     label: targetId ? SessionSecretTracker.redact(targetId, el.label) : el.label,
@@ -801,8 +788,6 @@ export async function buildActionMap(
 
   return { url, title, elements: redactedElements, targetId };
 }
-
-// ─── toRefEntries — converts ActionElements to RefEntry for delta tracking ───
 
 export function toRefEntries(elements: ActionElement[]): RefEntry[] {
   return elements.map((el) => ({
@@ -822,47 +807,44 @@ export function findAllMatches(
   query: string
 ): ActionElement[] {
   if (!query || !query.trim()) return [];
-  // Helper to normalize element label by stripping ellipsis/punctuation
-  const n = (str?: string) => (str || "").toLowerCase().replace(/[\.\u2026\s]+/g, ' ').trim();
+  const n = (str?: string) => (str || "").toLowerCase().replace(/[\.\u2026\s]+/g, " ").trim();
   const q = n(query);
 
   const matches: ActionElement[] = [];
+  const seenMatchIds = new Set<string>();
   const addMatch = (el: ActionElement | undefined) => {
-    if (el && !matches.find(m => m.id === el.id)) matches.push(el);
+    if (el && !seenMatchIds.has(el.id)) {
+      seenMatchIds.add(el.id);
+      matches.push(el);
+    }
   };
 
-  // 1. Exact match (highest priority)
   elements.forEach(el => { if (n(el.label) === q) addMatch(el); });
 
-  // 1.5 Prefix stripped exact match (e.g. searching "general" for "#general" or vice versa)
-  const qStripped = q.replace(/^[#@]/, '');
+  const qStripped = q.replace(/^[#@]/, "");
   if (qStripped !== q) {
     elements.forEach(el => {
-      const elLabelClean = n(el.label).replace(/^[#@]/, '');
+      const elLabelClean = n(el.label).replace(/^[#@]/, "");
       if (elLabelClean === qStripped) addMatch(el);
     });
   }
 
-  // 2. placeholder text
   elements.forEach(el => { if (n(el.placeholder) === q || n(el.placeholder) === qStripped) addMatch(el); });
 
-  // 3. data-testid
   elements.forEach(el => { if (n(el.testId) === q) addMatch(el); });
 
-  // 4. visible text content / partial label match
   elements.forEach(el => {
     const lbl = n(el.label);
     if (lbl.includes(q) || (qStripped.length >= 3 && lbl.includes(qStripped))) addMatch(el);
   });
 
-  // 4.5 fuzzy partial match (split words)
   const words = q.split(/\s+/);
   if (words.length > 1) {
     elements.forEach(el => { if (words.every(w => n(el.label).includes(w))) addMatch(el); });
   }
 
-  // 5. type match (fallback)
-  elements.forEach(el => { if (el.type === query) addMatch(el); });
+  const qLowRaw = query.trim().toLowerCase();
+  elements.forEach(el => { if (el.type && el.type.toLowerCase() === qLowRaw) addMatch(el); });
 
   return matches;
 }
@@ -874,8 +856,6 @@ export function findBestMatch(
   const matches = findAllMatches(elements, query);
   return matches.length > 0 ? matches[0] : undefined;
 }
-
-// ─── Markdown table formatter (Rule 11) ──────────────────────────────────────
 
 export function toMarkdownTable(
   elements: ActionElement[],
@@ -899,8 +879,7 @@ export function toMarkdownTable(
     const roleTag = `(${formatRole(el.role, el.type)})`;
     const ref = el.id ? ` [${el.id}]` : "";
     const value = el.value ? ` value="${el.value}"` : "";
-    
-    // Strip everything non-interactive if it doesn't have text
+
     if (!el.id && !el.label.trim()) continue;
 
     lines.push(`${indent}${roleTag} "${el.label}"${value}${ref}`);
@@ -938,19 +917,15 @@ export async function resolveByAria(
         '[role="button"],[role="link"],[role="textbox"],[role="checkbox"],' +
         '[role="radio"],[role="combobox"],[role="searchbox"],[role="menuitem"],' +
         '[role="tab"],[role="option"],[tabindex]:not([tabindex="-1"])';
-      
+
       function norm(s) { return (s || '').toLowerCase().replace(/[.\\u2026\\s]+/g, ' ').trim(); }
+      function escapeAttr(val) {
+        return String(val).replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"').replace(/\\n/g, '\\\\n').replace(/\\r/g, '');
+      }
       var qLow = norm(q);
 
-      // Score: prefer leaf elements (no interactive child = score 0, has child = score 10)
       function score(el) {
         try { return el.querySelector(INTERACTIVE) !== null ? 10 : 0; } catch(e) { return 0; }
-      }
-      function best(list) {
-        if (!list || !list.length) return null;
-        var arr = Array.prototype.slice.call(list);
-        arr.sort(function(a,b){ return score(a)-score(b); });
-        return arr[0];
       }
       function makeResult(el) {
         if (!el) return null;
@@ -960,12 +935,12 @@ export async function resolveByAria(
         var sel = '';
         var wtId = el.getAttribute('data-wt-id');
         if (wtId) {
-          sel = '[data-wt-id="' + wtId.replace(/"/g, '\\\\"') + '"]';
+          sel = '[data-wt-id="' + escapeAttr(wtId) + '"]';
         } else if (el.id) {
-          try { sel = '#' + CSS.escape(el.id); } catch(e) { sel = '#' + el.id; }
+          try { sel = '#' + CSS.escape(el.id); } catch(e) { sel = '[id="' + escapeAttr(el.id) + '"]'; }
         } else {
           var aria = el.getAttribute('aria-label');
-          if (aria) sel = el.tagName.toLowerCase() + '[aria-label="' + aria.replace(/"/g, '\\\\"') + '"]';
+          if (aria) sel = el.tagName.toLowerCase() + '[aria-label="' + escapeAttr(aria) + '"]';
         }
         if (!sel) {
           var tmp = 'wt-tmp-' + Math.random().toString(36).slice(2,8);
@@ -979,60 +954,67 @@ export async function resolveByAria(
           selector: sel
         };
       }
+      function pickFirstVisible(list) {
+        if (!list || !list.length) return null;
+        var scored = [];
+        for (var idx = 0; idx < list.length; idx++) {
+          scored.push({ el: list[idx], s: score(list[idx]) });
+        }
+        scored.sort(function(a, b) { return a.s - b.s; });
+        for (var j = 0; j < scored.length; j++) {
+          var hit = makeResult(scored[j].el);
+          if (hit) return hit;
+        }
+        return null;
+      }
 
       var all, found, i, hit;
 
-      // 1. Exact aria-label
       all = document.querySelectorAll('[aria-label]');
       found = [];
       for (i=0;i<all.length;i++) {
         if (norm(all[i].getAttribute('aria-label'))===qLow) found.push(all[i]);
       }
-      if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
+      if (found.length) { hit=pickFirstVisible(found); if(hit) return hit; }
 
-      // 1.5 Partial aria-label match (e.g. "general" in "general (text channel)")
       found = [];
       for (i=0;i<all.length;i++) {
         var aVal = norm(all[i].getAttribute('aria-label'));
         if (aVal.indexOf(qLow)>=0 && aVal.length < qLow.length*4) found.push(all[i]);
       }
-      if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
+      if (found.length) { hit=pickFirstVisible(found); if(hit) return hit; }
 
-      // 2. Exact innerText on interactive elements
       all = document.querySelectorAll(INTERACTIVE);
       found = [];
       for (i=0;i<all.length;i++) {
         var t = norm(all[i].innerText||all[i].textContent);
         if (t===qLow) found.push(all[i]);
       }
-      if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
+      if (found.length) { hit=pickFirstVisible(found); if(hit) return hit; }
 
-      // 3. Placeholder and rich placeholders (data-placeholder, aria-placeholder, data-slate-placeholder)
       all = document.querySelectorAll('[placeholder],[data-placeholder],[aria-placeholder],[data-slate-placeholder]');
       found = [];
       for (i=0;i<all.length;i++) {
         var phVal = norm(all[i].getAttribute('placeholder') || all[i].getAttribute('data-placeholder') || all[i].getAttribute('aria-placeholder') || all[i].textContent);
         if (phVal===qLow || phVal.indexOf(qLow)>=0) found.push(all[i]);
       }
-      if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
+      if (found.length) { hit=pickFirstVisible(found); if(hit) return hit; }
 
-      // 4. title / alt
       all = document.querySelectorAll('[title],[alt]');
       found = [];
       for (i=0;i<all.length;i++) {
         var v = norm(all[i].getAttribute('title')||all[i].getAttribute('alt'));
         if (v===qLow) found.push(all[i]);
       }
-      if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
+      if (found.length) { hit=pickFirstVisible(found); if(hit) return hit; }
 
-      // 5. Fuzzy partial innerText
       all = document.querySelectorAll(INTERACTIVE);
       found = [];
       for (i=0;i<all.length;i++) {
         var t5 = norm(all[i].innerText||all[i].textContent);
         if (t5.indexOf(qLow)>=0 && t5.length < qLow.length*4) found.push(all[i]);
       }
-      if (found.length) { hit=makeResult(best(found)); if(hit) return hit; }
+      if (found.length) { hit=pickFirstVisible(found); if(hit) return hit; }
 
       return null;
     })(${JSON.stringify(query)})`,
@@ -1041,16 +1023,25 @@ export async function resolveByAria(
 
   const val = resp?.result?.value as { label: string; x: number; y: number; selector: string } | null;
   if (!val) return null;
-  return { id: "aria-fallback", label: val.label, x: val.x, y: val.y, selector: val.selector };
+  return { id: "aria-fallback", label: cleanInvisibleText(val.label), x: val.x, y: val.y, selector: val.selector };
 }
-// axTreeCache is URL-keyed with an insertion-order LRU cap of 50 entries so it
-// doesn't grow without bound during long sessions visiting many URLs.
-const AX_TREE_CACHE_MAX = 50;
-const axTreeCache = new Map<string, ActionMap>();
 
-export function clearAXTreeCache(targetId: string): void {
-  // axTreeCache is URL-keyed; targetId param unused but kept for API consistency
+const AX_TREE_CACHE_MAX = 50;
+const AX_TREE_TTL_MS = 10_000;
+const axTreeCache = new Map<string, { map: ActionMap; timestamp: number }>();
+
+export function clearAXTreeCache(_targetId?: string): void {
   axTreeCache.clear();
+}
+
+function axTreeCacheGet(url: string): ActionMap | null {
+  const entry = axTreeCache.get(url);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > AX_TREE_TTL_MS) {
+    axTreeCache.delete(url);
+    return null;
+  }
+  return entry.map;
 }
 
 function axTreeCacheSet(url: string, map: ActionMap): void {
@@ -1058,30 +1049,21 @@ function axTreeCacheSet(url: string, map: ActionMap): void {
     const firstKey = axTreeCache.keys().next().value;
     if (firstKey !== undefined) axTreeCache.delete(firstKey);
   }
-  axTreeCache.set(url, map);
+  axTreeCache.set(url, { map, timestamp: Date.now() });
 }
 
-// ─── buildAXTreeMap ───────────────────────────────────────────────────────────
-// Uses CDP Accessibility.getFullAXTree() to build an ActionMap.
-// Auto-called by browserMap when DOM-based walker returns sparse or unlabeled-heavy results.
-// Agent can also force via browser_map({ ax_tree: true }).
-
 const INTERACTIVE_AX_ROLES = new Set([
-  'button', 'link', 'textbox', 'combobox', 'checkbox', 'radio',
-  'slider', 'tab', 'menuitem', 'searchbox', 'switch', 'spinbutton',
-  'treeitem', 'listbox', 'option', 'menuitemcheckbox', 'menuitemradio',
-  'scrollbar', 'tabpanel', 'tree', 'treegrid', 'alert', 'dialog',
-  'tooltip', 'status', 'timer',
+  "button", "link", "textbox", "combobox", "checkbox", "radio",
+  "slider", "tab", "menuitem", "searchbox", "switch", "spinbutton",
+  "treeitem", "listbox", "option", "menuitemcheckbox", "menuitemradio",
+  "scrollbar", "tabpanel", "tree", "treegrid", "alert", "dialog",
+  "tooltip", "status", "timer",
 ]);
 
-// These are skipped — they add noise without actionable info.
-// Role names must be lowercase because the code lowercases the role string
-// before checking the Set. PascalCase names like 'InlineTextBox' or 'StaticText'
-// would never match and let noise elements leak into every delta response.
 const NOISE_AX_ROLES = new Set([
-  'generic', 'inlinetextbox', 'statictext', 'paragraph', 'heading',
-  'list', 'listitem', 'none', 'presentation', 'row', 'cell',
-  'grid', 'group', 'region', 'document', 'rootwebarea',
+  "generic", "inlinetextbox", "statictext", "paragraph", "heading",
+  "list", "listitem", "none", "presentation", "row", "cell",
+  "grid", "group", "region", "document", "rootwebarea",
 ]);
 
 export async function buildAXTreeMap(
@@ -1089,24 +1071,17 @@ export async function buildAXTreeMap(
   _options: WalkerOptions = {},
   targetId = "default"
 ): Promise<ActionMap> {
-  // ── Bug #5 fix: begin a new walk pass for AX tree mode ───────────────────────
-  // beginWalkPass() resets walkPassSeenIds so the cross-frame dedup registry is
-  // fresh for this call.  allocateRefIds() reserves a block of IDs from the
-  // global monotonic counter so AX sequential IDs never collide with DOM-walker
-  // IDs produced in the same session.
-  beginWalkPass();
+  const { seenIds: walkPassSeenIds } = beginWalkPass();
 
   const { frameTree } = await session.Page.getFrameTree();
   const url = frameTree.frame.url;
-  const title = frameTree.frame.name ?? url ?? "";
+  const title = frameTree.frame.name || url || "";
 
-  // Check cache
-  const cached = axTreeCache.get(url);
+  const cached = axTreeCacheGet(url);
   if (cached && cached.elements.length > 0) {
     return cached;
   }
 
-  // Enable accessibility domain
   try {
     await session.Accessibility.enable();
   } catch { /* already enabled */ }
@@ -1115,56 +1090,46 @@ export async function buildAXTreeMap(
   try {
     const result = await session.Accessibility.getFullAXTree();
     nodes = result?.nodes ?? [];
-  } catch (e) {
+  } catch {
     return { url, title, elements: [], targetId };
   }
 
-  // Filter to interactive, non-ignored nodes
   const candidates = nodes.filter((n: any) => {
     if (n.ignored) return false;
-    const role = (n.role?.value || '').toLowerCase();
+    const role = (n.role?.value || "").toLowerCase();
     if (!role || NOISE_AX_ROLES.has(role)) return false;
     return INTERACTIVE_AX_ROLES.has(role) || n.name?.value || n.value?.value;
   });
 
-  // ── Bug #5 fix: allocate a contiguous block of global IDs for this AX pass ──
-  // allocateRefIds(candidates.length) advances walkPassGlobalRefCounter by the
-  // number of nodes we are about to process, guaranteeing that every w:N ID
-  // emitted here is globally unique for the lifetime of the server process.
   const axIdBase = allocateRefIds(candidates.length);
   let axIdCursor = axIdBase;
   const elements: ActionElement[] = [];
-  const backendIdsToResolve: number[] = [];
 
   for (const node of candidates) {
-    const role = (node.role?.value || 'generic').toLowerCase();
-    let label = node.name?.value || node.description?.value || '';
+    const role = (node.role?.value || "generic").toLowerCase();
+    let label = cleanInvisibleText(node.name?.value || node.description?.value || "");
 
-    // Extract value: for radio/checkbox use the checked property from AX tree.
-    // AX tree stores this as node.checked.value ('true'|'false'|'mixed') or
-    // node.selected.value ('true'|'false'). Fallback to node.value for text inputs.
     let value: string | undefined;
-    if (role === 'radio' || role === 'checkbox' || role === 'menuitemcheckbox' || role === 'menuitemradio') {
-      const checked = node.properties?.find((p: any) => p.name === 'checked')?.value?.value;
-      value = checked === true || checked === 'true' ? 'true' : 'false';
-    } else if (role === 'option') {
-      const selected = node.properties?.find((p: any) => p.name === 'selected')?.value?.value;
-      value = selected === true || selected === 'true' ? 'true' : 'false';
+    if (role === "radio" || role === "checkbox" || role === "menuitemcheckbox" || role === "menuitemradio") {
+      const checked = node.properties?.find((p: any) => p.name === "checked")?.value?.value;
+      value = checked === true || checked === "true" ? "true" : "false";
+    } else if (role === "option") {
+      const selected = node.properties?.find((p: any) => p.name === "selected")?.value?.value;
+      value = selected === true || selected === "true" ? "true" : "false";
     } else {
       value = node.value?.value !== undefined ? String(node.value.value) : undefined;
     }
 
     const SECRET_TERMS = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha|пароль|密碼|密码/i;
-    const isSecretRole = role === 'password' || SECRET_TERMS.test(node.name?.value || '') || SECRET_TERMS.test(node.description?.value || '');
+    const isSecretRole = role === "password" || SECRET_TERMS.test(node.name?.value || "") || SECRET_TERMS.test(node.description?.value || "");
     if (isSecretRole || (node.backendDOMNodeId !== undefined && SessionSecretTracker.isNodeSecret(targetId, node.backendDOMNodeId))) {
-      label = '[REDACTED]';
-      value = '[REDACTED]';
+      label = "[REDACTED]";
+      value = "[REDACTED]";
     } else {
       label = targetId ? SessionSecretTracker.redact(targetId, label) : label;
       if (value !== undefined) value = targetId ? SessionSecretTracker.redact(targetId, value) : value;
     }
-    // Use globally-unique sequential ID (Bug #5 fix: was local idCounter = 1).
-    const id = dedupeRefId(`w:${axIdCursor++}`);
+    const id = dedupeRefId(`w:${axIdCursor++}`, walkPassSeenIds);
 
     elements.push({
       id,
@@ -1172,43 +1137,52 @@ export async function buildAXTreeMap(
       label,
       value,
       backendNodeId: node.backendDOMNodeId,
-      group: 'main_content',
-      fingerprint: `ax:${role}:${label || ''}:${axIdCursor}`,
+      group: "main_content",
+      fingerprint: `ax:${role}:${label || ""}:${axIdCursor}`,
       depth: 0,
     });
+  }
 
-    if (node.backendDOMNodeId !== undefined) {
-      backendIdsToResolve.push(node.backendDOMNodeId);
+  const filteredElements = applySecurityFilter(
+    elements.filter(el => !isWeaveTabOverlay(el.label, el.selector))
+  );
+
+  const byBackendId = new Map<number, ActionElement>();
+  const backendIdsToResolve: number[] = [];
+  for (const el of filteredElements) {
+    if (el.backendNodeId !== undefined && !byBackendId.has(el.backendNodeId)) {
+      byBackendId.set(el.backendNodeId, el);
+      backendIdsToResolve.push(el.backendNodeId);
     }
   }
 
-  // Filter out WeaveTab overlay elements from AX tree results. Without this,
-  // every delta call returned ~50 extra elements from WeaveTab's own chat panel,
-  // HUD, and overlay UI injected into the page DOM.
-  const filteredElements = elements.filter(el => !isWeaveTabOverlay(el.label, el.selector));
-
-  // Batch-resolve bounding rects for backendNodeIds
   if (backendIdsToResolve.length > 0) {
     try {
       const { nodeIds } = await session.DOM.pushNodesByBackendIdsToFrontend({
         backendNodeIds: backendIdsToResolve,
       });
       if (nodeIds) {
-        await Promise.all(nodeIds.map(async (nodeId, i) => {
-          try {
-            const { model } = await session.DOM.getBoxModel({ nodeId });
-            if (model?.content) {
-              const content = model.content;
-              const cx = Math.round((content[0] + content[4]) / 2);
-              const cy = Math.round((content[1] + content[5]) / 2);
-              const el = elements.find(e => e.backendNodeId === backendIdsToResolve[i]);
-              if (el) {
-                el.x = cx;
-                el.y = cy;
+        const CHUNK_SIZE = 16;
+        for (let start = 0; start < nodeIds.length; start += CHUNK_SIZE) {
+          const slice = nodeIds.slice(start, start + CHUNK_SIZE);
+          await Promise.all(slice.map(async (nodeId, offset) => {
+            if (!nodeId) return;
+            try {
+              const { model } = await session.DOM.getBoxModel({ nodeId });
+              if (model?.content) {
+                const content = model.content;
+                const cx = Math.round((content[0] + content[4]) / 2);
+                const cy = Math.round((content[1] + content[5]) / 2);
+                const backendId = backendIdsToResolve[start + offset];
+                const el = backendId !== undefined ? byBackendId.get(backendId) : undefined;
+                if (el) {
+                  el.x = cx;
+                  el.y = cy;
+                }
               }
-            }
-          } catch { /* element may be detached — skip */ }
-        }));
+            } catch { /* detached node */ }
+          }));
+        }
       }
     } catch { /* coordinate resolution best-effort */ }
   }
@@ -1218,24 +1192,6 @@ export async function buildAXTreeMap(
   return map;
 }
 
-/**
- * Sanitizes element IDs in an ActionElement list, replacing empty or malformed
- * IDs with sequential fallback IDs.
- */
-export function sanitizeElementIds(
-  els: ActionElement[],
-  counter: { value: number }
-): number {
-  let fixed = 0;
-  for (const el of els) {
-    if (!el.id || el.id === "w:undefined" || el.id === "w:null" || el.id === "w:") {
-      el.id = `w:${counter.value++}`;
-      fixed++;
-    }
-  }
-  return fixed;
-}
-
 export interface RecoveredRefResult {
   recovered: boolean;
   element?: ActionElement;
@@ -1243,55 +1199,77 @@ export interface RecoveredRefResult {
   warning?: string;
 }
 
-/**
- * Recovers a detached or invalidated w:NN ref on reactive SPAs.
- * When hydration or DOM re-renders detach an element, this helper executes an in-memory
- * multi-tier recovery heuristic (connected node verification, stored CSS selector,
- * exact label/aria, placeholder/name match, and fuzzy substring) and re-stamps
- * data-wt-id="NN" onto the live DOM node so subsequent interaction succeeds.
- */
+function safeClassSelector(className?: string): string | undefined {
+  if (!className || typeof className !== "string") return undefined;
+  const firstToken = className.trim().split(/\s+/)[0];
+  if (!firstToken) return undefined;
+  const escaped = firstToken.replace(/([^a-zA-Z0-9_-])/g, "\\$1");
+  return `.${escaped}`;
+}
+
 export async function recoverDetachedRef(
   session: CDP.Client,
   targetId: string,
   ref: string,
   preferredCandidate?: Partial<ActionElement>
 ): Promise<RecoveredRefResult> {
-  const refNumericId = ref.replace(/^w:/, '');
+  const refNumericId = ref.replace(/^w:/, "");
 
-  // Extract known metadata for this ref
   const storedRef = getStoredRef(targetId, ref);
   const storedProps = getStoredProps(targetId, ref);
   const rawMap = getRawCachedActionMap(targetId);
   const cachedEl = rawMap?.elements?.find(e => e.id === ref || e.id === `w:${refNumericId}`);
 
-  const candidateLabel = preferredCandidate?.label || storedProps?.label || storedRef?.label || cachedEl?.label || '';
-  const candidatePlaceholder = preferredCandidate?.placeholder || storedProps?.placeholder || cachedEl?.placeholder || '';
-  const candidateRole = preferredCandidate?.role || storedProps?.role || storedRef?.role || cachedEl?.role || '';
-  const candidateSelector = preferredCandidate?.selector || cachedEl?.selector || (storedProps?.className ? `.${storedProps.className.split(' ')[0]}` : undefined);
-  const candidateText = preferredCandidate?.textContent || storedProps?.textContent || cachedEl?.textContent || '';
+  const candidateLabel = preferredCandidate?.label || storedProps?.label || storedRef?.label || cachedEl?.label || "";
+  const candidatePlaceholder = preferredCandidate?.placeholder || storedProps?.placeholder || cachedEl?.placeholder || "";
+  const candidateRole = preferredCandidate?.role || storedProps?.role || storedRef?.role || cachedEl?.role || "";
+  const candidateSelector = preferredCandidate?.selector || cachedEl?.selector || safeClassSelector(storedProps?.className);
+  const candidateText = preferredCandidate?.textContent || storedProps?.textContent || cachedEl?.textContent || "";
 
   const meta = {
-    label: candidateLabel === '[REDACTED]' ? '' : candidateLabel,
-    placeholder: candidatePlaceholder === '[REDACTED]' ? '' : candidatePlaceholder,
+    label: candidateLabel === "[REDACTED]" || candidateLabel === "[REDACTED SECRET FIELD]" ? "" : candidateLabel,
+    placeholder: candidatePlaceholder === "[REDACTED]" ? "" : candidatePlaceholder,
     role: candidateRole,
     selector: candidateSelector,
-    textContent: candidateText === '[REDACTED]' ? '' : candidateText,
+    textContent: candidateText === "[REDACTED]" ? "" : candidateText,
   };
 
   try {
     const { result } = await session.Runtime.evaluate({
       expression: `(function(refId, meta) {
-        // 1. Check if node with data-wt-id=refId is already in DOM, connected, and visible
-        const existing = document.querySelector('[data-wt-id="' + refId + '"]');
+        var secretRegex = /password|passcode|pin|passphrase|secret|token|auth.?key|access.?code|mot.?de.?passe|contrase[nñ]a|kennwort|senha/i;
+        function isSecretEl(el) {
+          if (!el || !el.tagName) return false;
+          if (el.hasAttribute && el.hasAttribute('data-wt-secret')) return true;
+          var tag = el.tagName.toLowerCase();
+          if (tag === 'input' || tag === 'textarea') {
+            var t = (el.getAttribute('type') || '').toLowerCase();
+            var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+            var name = (el.getAttribute('name') || '').toLowerCase();
+            var id = (el.getAttribute('id') || '').toLowerCase();
+            var aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            return t === 'password' || ac.includes('password') || secretRegex.test(name) || secretRegex.test(id) || secretRegex.test(aria);
+          }
+          return false;
+        }
+        function extractSafeLabel(el) {
+          if (isSecretEl(el)) {
+            return el.getAttribute('aria-label') || el.placeholder || '[REDACTED SECRET FIELD]';
+          }
+          return el.getAttribute('aria-label') || (el.innerText || el.textContent || '').trim() || el.placeholder || '';
+        }
+
+        var escapedRefId = String(refId).replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
+        var existing = document.querySelector('[data-wt-id="' + escapedRefId + '"]');
         if (existing && existing.isConnected) {
-          const r = existing.getBoundingClientRect();
+          var r = existing.getBoundingClientRect();
           if (r.width > 0 && r.height > 0) {
             return {
               success: true,
               strategy: 'connected_existing',
               x: Math.round(r.left + r.width / 2),
               y: Math.round(r.top + r.height / 2),
-              label: existing.getAttribute('aria-label') || (existing.innerText || existing.textContent || '').trim() || existing.placeholder || '',
+              label: extractSafeLabel(existing),
               role: existing.getAttribute('role') || existing.tagName.toLowerCase()
             };
           }
@@ -1299,113 +1277,113 @@ export async function recoverDetachedRef(
 
         function isValidCandidate(el) {
           if (!el || !el.isConnected) return false;
-          const r = el.getBoundingClientRect();
+          var r = el.getBoundingClientRect();
           if (r.width <= 0 || r.height <= 0) return false;
           try {
-            const style = window.getComputedStyle(el);
+            var style = window.getComputedStyle(el);
             if (style.visibility === 'hidden' || style.display === 'none') return false;
           } catch(e) {}
           return true;
         }
 
-        // 2. Strategy: Stored Selector (if stable CSS selector recorded)
         if (meta.selector && !meta.selector.startsWith('[data-wt-id')) {
           try {
-            const el = document.querySelector(meta.selector);
+            var el = document.querySelector(meta.selector);
             if (isValidCandidate(el)) {
               el.setAttribute('data-wt-id', refId);
-              const r = el.getBoundingClientRect();
+              var r2 = el.getBoundingClientRect();
               return {
                 success: true,
                 strategy: 'stored_selector',
-                x: Math.round(r.left + r.width / 2),
-                y: Math.round(r.top + r.height / 2),
-                label: el.getAttribute('aria-label') || (el.innerText || el.textContent || '').trim() || el.placeholder || '',
+                x: Math.round(r2.left + r2.width / 2),
+                y: Math.round(r2.top + r2.height / 2),
+                label: extractSafeLabel(el),
                 role: el.getAttribute('role') || el.tagName.toLowerCase()
               };
             }
           } catch(e) {}
         }
 
-        const normLabel = (meta.label || '').toLowerCase().trim();
-        const normPlaceholder = (meta.placeholder || '').toLowerCase().trim();
+        var normLabel = (meta.label || '').toLowerCase().trim();
+        var normPlaceholder = (meta.placeholder || '').toLowerCase().trim();
 
-        const candidates = Array.from(document.querySelectorAll(
+        var rawCandidates = Array.from(document.querySelectorAll(
           'button, a, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="tab"], [tabindex="0"]'
         ));
+        var validCandidates = [];
+        for (var vi = 0; vi < rawCandidates.length; vi++) {
+          if (isValidCandidate(rawCandidates[vi])) validCandidates.push(rawCandidates[vi]);
+        }
 
-        // 3. Strategy: Exact Label / Text / Aria match
         if (normLabel) {
-          for (const c of candidates) {
-            if (!isValidCandidate(c)) continue;
-            const aria = (c.getAttribute('aria-label') || '').toLowerCase().trim();
-            const text = ((c.innerText || c.textContent || '')).toLowerCase().trim();
-            const val = (c.value || '').toLowerCase().trim();
-            const placeholder = (c.placeholder || '').toLowerCase().trim();
-            const name = (c.getAttribute('name') || '').toLowerCase().trim();
+          for (var ci = 0; ci < validCandidates.length; ci++) {
+            var c = validCandidates[ci];
+            var aria = (c.getAttribute('aria-label') || '').toLowerCase().trim();
+            var text = ((c.innerText || c.textContent || '')).toLowerCase().trim();
+            var val = isSecretEl(c) ? '' : (c.value || '').toLowerCase().trim();
+            var placeholder = (c.placeholder || '').toLowerCase().trim();
+            var name = (c.getAttribute('name') || '').toLowerCase().trim();
 
             if (aria === normLabel || text === normLabel || placeholder === normLabel || name === normLabel || (val && val === normLabel)) {
               c.setAttribute('data-wt-id', refId);
-              const r = c.getBoundingClientRect();
+              var rc = c.getBoundingClientRect();
               return {
                 success: true,
                 strategy: 'exact_label',
-                x: Math.round(r.left + r.width / 2),
-                y: Math.round(r.top + r.height / 2),
-                label: c.getAttribute('aria-label') || (c.innerText || c.textContent || '').trim() || c.placeholder || '',
+                x: Math.round(rc.left + rc.width / 2),
+                y: Math.round(rc.top + rc.height / 2),
+                label: extractSafeLabel(c),
                 role: c.getAttribute('role') || c.tagName.toLowerCase()
               };
             }
           }
         }
 
-        // 4. Strategy: Placeholder or Name match
         if (normPlaceholder) {
-          for (const c of candidates) {
-            if (!isValidCandidate(c)) continue;
-            const placeholder = (c.placeholder || '').toLowerCase().trim();
-            const name = (c.getAttribute('name') || '').toLowerCase().trim();
-            if (placeholder === normPlaceholder || name === normPlaceholder) {
-              c.setAttribute('data-wt-id', refId);
-              const r = c.getBoundingClientRect();
+          for (var pi = 0; pi < validCandidates.length; pi++) {
+            var cp = validCandidates[pi];
+            var ph = (cp.placeholder || '').toLowerCase().trim();
+            var nm = (cp.getAttribute('name') || '').toLowerCase().trim();
+            if (ph === normPlaceholder || nm === normPlaceholder) {
+              cp.setAttribute('data-wt-id', refId);
+              var rp = cp.getBoundingClientRect();
               return {
                 success: true,
                 strategy: 'placeholder_or_name',
-                x: Math.round(r.left + r.width / 2),
-                y: Math.round(r.top + r.height / 2),
-                label: c.placeholder || c.getAttribute('name') || '',
-                role: c.getAttribute('role') || c.tagName.toLowerCase()
+                x: Math.round(rp.left + rp.width / 2),
+                y: Math.round(rp.top + rp.height / 2),
+                label: extractSafeLabel(cp),
+                role: cp.getAttribute('role') || cp.tagName.toLowerCase()
               };
             }
           }
         }
 
-        // 5. Strategy: Fuzzy Substring Match (if label length >= 3)
         if (normLabel && normLabel.length >= 3) {
-          let bestMatch = null;
-          let minDiff = Infinity;
-          for (const c of candidates) {
-            if (!isValidCandidate(c)) continue;
-            const text = ((c.innerText || c.textContent || '')).toLowerCase().trim();
-            const aria = (c.getAttribute('aria-label') || '').toLowerCase().trim();
-            const candStr = aria || text;
+          var bestMatch = null;
+          var minDiff = Infinity;
+          for (var fi = 0; fi < validCandidates.length; fi++) {
+            var cf = validCandidates[fi];
+            var fText = ((cf.innerText || cf.textContent || '')).toLowerCase().trim();
+            var fAria = (cf.getAttribute('aria-label') || '').toLowerCase().trim();
+            var candStr = fAria || fText;
             if (candStr && candStr.includes(normLabel)) {
-              const diff = candStr.length - normLabel.length;
+              var diff = candStr.length - normLabel.length;
               if (diff >= 0 && diff < minDiff) {
                 minDiff = diff;
-                bestMatch = c;
+                bestMatch = cf;
               }
             }
           }
           if (bestMatch) {
             bestMatch.setAttribute('data-wt-id', refId);
-            const r = bestMatch.getBoundingClientRect();
+            var rb = bestMatch.getBoundingClientRect();
             return {
               success: true,
               strategy: 'fuzzy_label',
-              x: Math.round(r.left + r.width / 2),
-              y: Math.round(r.top + r.height / 2),
-              label: bestMatch.getAttribute('aria-label') || (bestMatch.innerText || bestMatch.textContent || '').trim() || bestMatch.placeholder || '',
+              x: Math.round(rb.left + rb.width / 2),
+              y: Math.round(rb.top + rb.height / 2),
+              label: extractSafeLabel(bestMatch),
               role: bestMatch.getAttribute('role') || bestMatch.tagName.toLowerCase()
             };
           }
@@ -1418,19 +1396,21 @@ export async function recoverDetachedRef(
 
     const res = result?.value as any;
     if (res && res.success) {
+      const rawRecoveredLabel = cleanInvisibleText(res.label || candidateLabel || "recovered-element");
+      const safeLabel = targetId ? SessionSecretTracker.redact(targetId, rawRecoveredLabel) : rawRecoveredLabel;
+
       const recoveredElement: ActionElement = {
-        id: ref.startsWith('w:') ? ref : `w:${ref}`,
-        role: res.role || candidateRole || 'button',
-        label: res.label || candidateLabel || 'recovered-element',
+        id: ref.startsWith("w:") ? ref : `w:${ref}`,
+        role: res.role || candidateRole || "button",
+        label: safeLabel,
         x: res.x,
         y: res.y,
-        selector: `[data-wt-id="${refNumericId}"]`,
+        selector: `[data-wt-id="${refNumericId.replace(/["\\]/g, "\\$&")}"]`,
         group: "utility",
         depth: 0,
-        fingerprint: `${res.role || candidateRole}:${res.label || candidateLabel}`,
+        fingerprint: `${res.role || candidateRole}:${safeLabel}`,
       };
 
-      // Patch the raw cache if present so subsequent lookups hit
       if (rawMap && rawMap.elements) {
         const existingIdx = rawMap.elements.findIndex(e => e.id === recoveredElement.id);
         if (existingIdx !== -1) {
@@ -1453,5 +1433,3 @@ export async function recoverDetachedRef(
 
   return { recovered: false };
 }
-
-

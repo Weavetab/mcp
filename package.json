@@ -1,6 +1,6 @@
 {
   "name": "@weavetab/mcp",
-  "version": "2.6.3",
+  "version": "2.6.4",
   "description": "The open automation engine for AI agents. Control live browsers and desktop apps locally with instant execution.",
   "author": {
     "name": "Weavetab",
@@ -77,9 +77,9 @@
     "verify": "npm run verify:versions && npm run verify:package",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "prepublishOnly": "npm run verify && npm run build",
+    "prepublishOnly": "npm run build && npm run verify",
     "test": "npm run test:unit",
-    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/site_memory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/design_extract.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/plugin_lifecycle.test.ts\" \"tests/unit/plugin_interceptors.test.ts\" \"tests/unit/plugin_hotswap.test.ts\" \"tests/unit/electron.test.ts\" \"tests/unit/stale_ref_recovery.test.ts\" \"tests/unit/secret_containment.test.ts\" \"tests/unit/checkpoint.test.ts\" \"tests/unit/marks.test.ts\" \"tests/unit/highlight.test.ts\" \"tests/unit/tools_resilience.test.ts\"",
+    "test:unit": "node --import tsx/esm --test \"tests/unit/cache.test.ts\" \"tests/unit/delta.test.ts\" \"tests/unit/sessionMemory.test.ts\" \"tests/unit/site_memory.test.ts\" \"tests/unit/trail.test.ts\" \"tests/unit/walker.test.ts\" \"tests/unit/burst.test.ts\" \"tests/unit/navigate.test.ts\" \"tests/unit/select.test.ts\" \"tests/unit/plugin.test.ts\" \"tests/unit/plugin_lifecycle.test.ts\" \"tests/unit/plugin_interceptors.test.ts\" \"tests/unit/plugin_hotswap.test.ts\" \"tests/unit/electron.test.ts\" \"tests/unit/stale_ref_recovery.test.ts\" \"tests/unit/secret_containment.test.ts\" \"tests/unit/checkpoint.test.ts\" \"tests/unit/marks.test.ts\" \"tests/unit/highlight.test.ts\" \"tests/unit/tools_resilience.test.ts\" \"tests/unit/hot_tools_fixes.test.ts\" \"tests/unit/batch2_tools_fixes.test.ts\" \"tests/unit/batch3_tools_fixes.test.ts\" \"tests/unit/batch4_tools_fixes.test.ts\" \"tests/unit/batch5_tools_fixes.test.ts\" \"tests/unit/batch6_tools_fixes.test.ts\" \"tests/unit/security_config_hardening.test.ts\" \"tests/unit/cdp_core_hardening.test.ts\" \"tests/unit/intel_sensors_hardening.test.ts\" \"tests/unit/ext_plugin_hardening.test.ts\" \"tests/unit/live_audit_fixes.test.ts\"",
     "test:e2e": "tsx tests/e2e/smoke_test.ts"
   },
   "dependencies": {

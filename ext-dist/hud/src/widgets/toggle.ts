@@ -3,14 +3,13 @@
 let hudVisible = true
 
 export function initToggle() {
-  // Listen for toggle command from content script (parent window)
   window.addEventListener('message', (e) => {
+    if (!e.data || typeof e.data !== 'object') return
     if (e.data.type === 'TOGGLE_HUD') {
       toggleHUD()
     }
   })
 
-  // Also listen directly from window (in case of direct calls)
   ;(window as any).toggleHUD = toggleHUD
 }
 

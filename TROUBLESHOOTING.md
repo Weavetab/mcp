@@ -1,6 +1,6 @@
 # Weavetab MCP Troubleshooting Guide
 
-> **Version:** 2.6.3 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
+> **Version:** 2.6.4 | **Package:** `@weavetab/mcp` | **Last Updated:** August 2026
 
 This guide covers common issues and their solutions when working with Weavetab's MCP tools.
 
@@ -221,8 +221,8 @@ browser_click({ id: "w:42" })
 **Cause:** Multiple Chrome instances with remote debugging enabled.
 
 **Solution:**
-- Use different CDP ports for each instance
-- Specify port in Weavetab config: `cdpPort: 9223`
+- Use different attach ports for each instance
+- Specify port in Weavetab config: `"attachPort": 9223`
 - Close other Chrome instances before starting Weavetab
 
 ---
@@ -320,12 +320,12 @@ Review the latest `~/.weavetab-system/logs/mission_<timestamp>.log` for:
 - Domain policy violations
 - Security events
 
-### Use Verbose Logging
+### Use Diagnostic Flags
 
-Set environment variable for verbose output:
+Run with `--no-color` or inspect JSON-RPC logs via `weavetab view`:
 
 ```bash
-DEBUG=weavetab:* Weavetab
+npx -y @weavetab/mcp@latest view
 ```
 
 ### Manual Browser Inspection

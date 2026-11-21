@@ -72,13 +72,15 @@ function ensureTargetLoaded(targetId: string): void {
 
 function persistTarget(targetId: string): void {
   try {
+    const file = checkpointFilePath(targetId);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     const map = checkpointRegistry.get(targetId) ?? new Map<string, CheckpointData>();
     const payload = {
       targetId,
       updatedAt: new Date().toISOString(),
       checkpoints: Object.fromEntries(map),
     };
-    fs.writeFileSync(checkpointFilePath(targetId), JSON.stringify(payload, null, 2), "utf-8");
+    fs.writeFileSync(file, JSON.stringify(payload, null, 2), { encoding: "utf-8", mode: 0o600 });
   } catch {
     // Persistence is best-effort; the in-memory registry remains authoritative.
   }
@@ -309,10 +311,19 @@ export async function browserCheckpoint(
     const { frameTree } = await Page.getFrameTree();
     const currentUrl = frameTree.frame.url;
 
-    // 1. Navigate to checkpoint URL if different
+    // 1. Navigate to checkpoint URL if different (arm loadEventFired BEFORE navigate + bound with timeout)
     if (currentUrl !== checkpoint.url) {
+      const loadWait = typeof Page.loadEventFired === "function"
+        ? Page.loadEventFired().catch(() => {})
+        : Promise.resolve();
       await Page.navigate({ url: checkpoint.url });
-      await Page.loadEventFired().catch(() => {});
+      const navMs = Math.min(config.navigationTimeout || 10000, 10000);
+      let navTimer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        loadWait,
+        new Promise<void>((r) => { navTimer = setTimeout(r, navMs); }),
+      ]);
+      if (navTimer) clearTimeout(navTimer);
       await new Promise((r) => setTimeout(r, 400));
     }
 

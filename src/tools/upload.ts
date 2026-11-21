@@ -44,12 +44,22 @@ export async function browserUpload(
 
   if (!targetNodeId && resolveRef) {
     const { buildActionMap } = await import("../cdp/walker.js");
+    const { getCachedActionMap, cacheActionMap } = await import("../state/cache.js");
     const { sessionRegistry } = await import("../state/session.js");
     const targetId = sessionRegistry.getActive(getConfigAgentId(config))?.targetId ?? "default";
-    const map = await buildActionMap(session, { lite: true }, targetId);
+    let currentUrl: string | undefined;
+    try {
+      const { frameTree } = await session.Page.getFrameTree();
+      currentUrl = frameTree.frame.url;
+    } catch {}
+    let map = getCachedActionMap(targetId, currentUrl);
+    if (!map) {
+      map = await buildActionMap(session, { lite: true }, targetId);
+      cacheActionMap(targetId, map);
+    }
 
     const element = ref
-      ? map.elements.find(el => el.id === ref || el.id.endsWith(ref.startsWith('w:') ? ref.slice(2) : ref))
+      ? map.elements.find(el => el.id === ref || el.id === `w:${ref}`)
       : selector
         ? map.elements.find(el => el.id === selector || el.selector === selector)
         : map.elements.find(el => el.label === label);
@@ -94,6 +104,7 @@ export async function browserUpload(
         files: filePaths
       });
     } else if (targetNodeId) {
+      await session.DOM.getDocument({ depth: 0 }).catch(() => {});
       const { nodeIds } = await session.DOM.pushNodesByBackendIdsToFrontend({ backendNodeIds: [targetNodeId] });
       if (!nodeIds[0]) throw new Error("Node not found in DOM");
 

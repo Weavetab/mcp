@@ -1,18 +1,22 @@
 <!DOCTYPE html>
-<html style="background: transparent">
+<html style="background: transparent !important; color-scheme: normal;">
   <head>
     <meta charset="utf-8">
+    <meta name="color-scheme" content="normal">
+    <link rel="icon" type="image/png" href="../icons/icon32.png">
     <title>WeaveTab HUD</title>
     <style>
-      body {
+      html, body {
         margin: 0;
-        background: transparent;
+        color-scheme: normal;
+        background: transparent !important;
+        background-color: transparent !important;
         overflow: hidden;
         font-family: 'IBM Plex Mono', 'Consolas', 'Menlo', 'Courier New', monospace;
       }
     </style>
   </head>
-  <body style="margin:0;background:transparent;overflow:hidden">
+  <body style="margin:0;color-scheme:normal;background:transparent !important;overflow:hidden">
     <canvas id="rt-canvas" style="position:fixed;inset:0;pointer-events:none;z-index:0"></canvas>
     <div id="widgets" style="position:fixed;inset:0;pointer-events:none;z-index:1"></div>
     <script src="hud.js"></script>

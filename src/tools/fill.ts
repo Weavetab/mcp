@@ -260,7 +260,6 @@ async function applyFieldValue(
             if (isCurrentlyChecked !== shouldCheck) {
               el.setAttribute('aria-checked', shouldCheck ? 'true' : 'false');
               el.click();
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
           }
@@ -279,7 +278,6 @@ async function applyFieldValue(
             if (el.getAttribute('aria-checked') !== 'true') {
               el.setAttribute('aria-checked', 'true');
               el.click();
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
           }
@@ -314,38 +312,38 @@ async function applyFieldValue(
 
 // ── Google Sheets grid fill helpers ──────────────────────────────────────
 
-/** Parse A1 notation into { col: number (0-indexed), row: number (0-indexed) }. */
-function parseA1(cell: string): { col: number; row: number } | null {
+/** Parse A1 notation into { col, row, colLetters }. */
+function parseA1(cell: string): { col: number; row: number; colLetters: string } | null {
   const m = cell.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/);
   if (!m) return null;
   let col = 0;
   for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
-  return { col: col - 1, row: parseInt(m[2], 10) - 1 };
+  return { col: col - 1, row: parseInt(m[2], 10) - 1, colLetters: m[1] };
 }
 
 /** Find a cell in the AX tree by A1 address. Returns { x, y } center coordinates. */
 async function findSheetCellCoords(
   session: CDP.Client,
-  cellAddress: string
+  cellAddress: string,
+  cachedNodes?: any[]
 ): Promise<{ x: number; y: number } | null> {
   const parsed = parseA1(cellAddress);
   if (!parsed) return null;
 
-  // Enable accessibility domain
-  try { await session.Accessibility.enable(); } catch { /* already enabled */ }
-
-  let nodes: any[] = [];
-  try {
-    const result = await session.Accessibility.getFullAXTree();
-    nodes = result?.nodes ?? [];
-  } catch (e) {
-    logDebug(`[GridFill] getFullAXTree failed: ${e}`);
-    return null;
+  let nodes = cachedNodes;
+  if (!nodes) {
+    try { await session.Accessibility.enable(); } catch { /* already enabled */ }
+    try {
+      const result = await session.Accessibility.getFullAXTree();
+      nodes = result?.nodes ?? [];
+    } catch (e) {
+      logDebug(`[GridFill] getFullAXTree failed: ${e}`);
+      return null;
+    }
   }
 
   // Google Sheets exposes cells with role="gridcell" and name like "A1" or "Row 1, Column A"
-  // Prefer exact name match first, then fall back to positional match
-  const colLetter = String.fromCharCode(65 + parsed.col);
+  const colLetter = parsed.colLetters;
   const rowNum = parsed.row + 1;
   const exactLabel = `${colLetter}${rowNum}`;
   const altLabel = `Row ${rowNum}, Column ${colLetter}`;
@@ -417,8 +415,18 @@ async function gridFill(
   const startMs = Date.now();
   const results: FillResult["results"] = [];
 
+  // Fetch AX tree once for the whole batch instead of N+1 per cell
+  try { await session.Accessibility.enable(); } catch {}
+  let axNodes: any[] = [];
+  try {
+    const tree = await session.Accessibility.getFullAXTree();
+    axNodes = tree?.nodes ?? [];
+  } catch (e) {
+    logDebug(`[GridFill] getFullAXTree failed: ${e}`);
+  }
+
   for (const cell of cells) {
-    const coords = await findSheetCellCoords(session, cell.cell);
+    const coords = await findSheetCellCoords(session, cell.cell, axNodes);
     if (!coords) {
       logAction("browser_fill", cell.cell, "FAIL — cell not found in AX tree");
       results.push({
@@ -717,7 +725,6 @@ export async function browserFill(
             if (curAria !== wantAria) {
               el.setAttribute('aria-checked', wantAria ? 'true' : 'false');
               el.click();
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
             results.push({ ref: f.ref, ok: true, msg: wantAria ? 'checked' : 'unchecked', type: 'custom-checkbox', isSecret: isSecret });
@@ -726,7 +733,6 @@ export async function browserFill(
             if (el.getAttribute('aria-checked') !== 'true') {
               el.setAttribute('aria-checked', 'true');
               el.click();
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
             }
             results.push({ ref: f.ref, ok: true, msg: 'selected', type: 'custom-radio', isSecret: isSecret });

@@ -36,11 +36,15 @@ export async function browserInspect(
 
   let resolvedNodeId: number | null = nodeId || null;
 
-  // Step 1: Resolve a live nodeId from any input
   if (!resolvedNodeId && ref) {
     const active = sessionRegistry.getActive(getConfigAgentId(_config));
     if (active) {
-      let map = getCachedActionMap(active.targetId);
+      let currentUrl: string | undefined;
+      try {
+        const { frameTree } = await session.Page.getFrameTree();
+        currentUrl = frameTree.frame.url;
+      } catch {}
+      let map = getCachedActionMap(active.targetId, currentUrl);
       if (!map) {
         try {
           map = await buildActionMap(session, { lite: true }, active.targetId);
@@ -48,7 +52,7 @@ export async function browserInspect(
         } catch { /* best-effort */ }
       }
       if (map) {
-        const el = map.elements.find((e) => e.id === ref || e.id.endsWith(ref.startsWith("w:") ? ref.slice(2) : ref));
+        const el = map.elements.find((e) => e.id === ref || e.id === `w:${ref}`);
         if (el?.backendNodeId) {
           const desc = await DOM.describeNode({ backendNodeId: el.backendNodeId }).catch(() => null);
           if (desc?.node?.nodeId) resolvedNodeId = desc.node.nodeId;
@@ -74,7 +78,7 @@ export async function browserInspect(
             return els[i];
           }
         }
-        return els[0] || null;
+        return els[0] || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null) || null;
       })(${JSON.stringify(selector)})`,
     });
     if (res.result?.objectId) {
@@ -90,38 +94,6 @@ export async function browserInspect(
     throw new Error("Could not resolve element to a node ID");
   }
 
-  // Step 2: Fetch box model, computed styles, and event listeners in parallel
-  let boxModelData: any = null;
-  if (resolvedNodeId) {
-    const boxModel = await DOM.getBoxModel({ nodeId: resolvedNodeId }).catch(() => null);
-    if (boxModel?.model) {
-      boxModelData = {
-        width: boxModel.model.width,
-        height: boxModel.model.height,
-        content: boxModel.model.content,
-      };
-    }
-  }
-
-  if (!boxModelData && selector) {
-    const { result: rectRes } = await session.Runtime.evaluate({
-      expression: `(function(sel) {
-        var el = document.querySelector(sel);
-        if (!el) return null;
-        var r = el.getBoundingClientRect();
-        return JSON.stringify({
-          width: Math.round(r.width),
-          height: Math.round(r.height),
-          content: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.top), Math.round(r.right), Math.round(r.bottom), Math.round(r.left), Math.round(r.bottom)]
-        });
-      })(${JSON.stringify(selector)})`,
-      returnByValue: true,
-    }).catch(() => ({ result: { value: null } }));
-    if (rectRes?.value) {
-      try { boxModelData = JSON.parse(rectRes.value); } catch {}
-    }
-  }
-
   function reconstructShorthand(prefix: 'margin' | 'padding', styles: Record<string, string>): string | undefined {
     const t = styles[`${prefix}-top`];
     const r = styles[`${prefix}-right`];
@@ -133,9 +105,25 @@ export async function browserInspect(
     return `${t} ${r} ${b} ${l}`;
   }
 
-  // Try CSS.getComputedStyleForNode first (CDP-native), fall back to Runtime.evaluate
+  // Fetch box model, computed styles, and event listeners in parallel
+  const [boxModel, cssResult, resolvedObj] = await Promise.all([
+    resolvedNodeId ? DOM.getBoxModel({ nodeId: resolvedNodeId }).catch(() => null) : Promise.resolve(null),
+    resolvedNodeId ? CSS.getComputedStyleForNode({ nodeId: resolvedNodeId }).catch(() => null) : Promise.resolve(null),
+    elementObjectId
+      ? Promise.resolve(elementObjectId)
+      : (resolvedNodeId ? DOM.resolveNode({ nodeId: resolvedNodeId }).then(r => r?.object?.objectId ?? null).catch(() => null) : Promise.resolve(null)),
+  ]);
+
+  let boxModelData: any = null;
+  if (boxModel?.model) {
+    boxModelData = {
+      width: boxModel.model.width,
+      height: boxModel.model.height,
+      content: boxModel.model.content,
+    };
+  }
+
   let computedStylesData: Record<string, string> | null = null;
-  const cssResult = resolvedNodeId ? await CSS.getComputedStyleForNode({ nodeId: resolvedNodeId }).catch(() => null) : null;
   if (cssResult?.computedStyle) {
     const INTERESTING = [
       'display','position','width','height','color','background-color','font-size','visibility','opacity','z-index','pointer-events',
@@ -164,37 +152,52 @@ export async function browserInspect(
       'pointer-events': rawStyles['pointer-events']
     };
   }
-  if (!computedStylesData && selector) {
-    // Fallback: use window.getComputedStyle via Runtime.evaluate
-    const { result: fallbackRes } = await session.Runtime.evaluate({
-      expression: `(function(sel) {
-        var el = document.querySelector(sel);
-        if (!el) return null;
-        var s = window.getComputedStyle(el);
-        var KEYS = ['display','position','width','height','margin','padding','color','background-color','font-size','visibility','opacity','z-index','pointer-events'];
-        var r = {};
-        for (var i = 0; i < KEYS.length; i++) r[KEYS[i]] = s.getPropertyValue(KEYS[i]);
-        return JSON.stringify(r);
-      })(${JSON.stringify(selector)})`,
-      returnByValue: true,
-    }).catch(() => ({ result: { value: null } }));
-    if (fallbackRes?.value) {
-      try { computedStylesData = JSON.parse(fallbackRes.value as string); } catch {}
-    }
+
+  const [fallbackBox, fallbackCss, evtRes] = await Promise.all([
+    !boxModelData && selector
+      ? session.Runtime.evaluate({
+          expression: `(function(sel) {
+            var el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+            if (!el) return null;
+            var r = el.getBoundingClientRect();
+            return JSON.stringify({
+              width: Math.round(r.width),
+              height: Math.round(r.height),
+              content: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.top), Math.round(r.right), Math.round(r.bottom), Math.round(r.left), Math.round(r.bottom)]
+            });
+          })(${JSON.stringify(selector)})`,
+          returnByValue: true,
+        }).catch(() => null)
+      : Promise.resolve(null),
+    !computedStylesData && selector
+      ? session.Runtime.evaluate({
+          expression: `(function(sel) {
+            var el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);
+            if (!el) return null;
+            var s = window.getComputedStyle(el);
+            var KEYS = ['display','position','width','height','margin','padding','color','background-color','font-size','visibility','opacity','z-index','pointer-events'];
+            var r = {};
+            for (var i = 0; i < KEYS.length; i++) r[KEYS[i]] = s.getPropertyValue(KEYS[i]);
+            return JSON.stringify(r);
+          })(${JSON.stringify(selector)})`,
+          returnByValue: true,
+        }).catch(() => null)
+      : Promise.resolve(null),
+    resolvedObj
+      ? DOMDebugger.getEventListeners({ objectId: resolvedObj, depth: 1, pierce: true }).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  if (!boxModelData && fallbackBox?.result?.value) {
+    try { boxModelData = JSON.parse(fallbackBox.result.value as string); } catch {}
+  }
+  if (!computedStylesData && fallbackCss?.result?.value) {
+    try { computedStylesData = JSON.parse(fallbackCss.result.value as string); } catch {}
   }
 
-  let listeners: any[] = [];
-  try {
-    const targetObjId = elementObjectId || (resolvedNodeId ? (await DOM.resolveNode({ nodeId: resolvedNodeId })).object?.objectId : null);
-    if (targetObjId) {
-      const evtRes = await DOMDebugger.getEventListeners({ objectId: targetObjId, depth: 1, pierce: true }).catch(() => null);
-      if (evtRes?.listeners) {
-        listeners = evtRes.listeners.map(l => ({ type: l.type, useCapture: l.useCapture, passive: l.passive }));
-      }
-    }
-  } catch (e) {
-    // Ignore DOMDebugger errors
-  }
+  const listeners = evtRes?.listeners
+    ? evtRes.listeners.map(l => ({ type: l.type, useCapture: l.useCapture, passive: l.passive }))
+    : [];
 
   const data = {
     boxModel: boxModelData,

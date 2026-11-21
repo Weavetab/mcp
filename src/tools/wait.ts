@@ -145,12 +145,14 @@ async function waitForNetwork(
   return new Promise<{ found: boolean; elapsed_ms: number }>((resolve) => {
     let pending = 0;
     let quietTimer: ReturnType<typeof setTimeout> | null = null;
+    let maxTimer: ReturnType<typeof setTimeout> | null = null;
     let done = false;
 
     const finish = (found: boolean) => {
       if (done) return;
       done = true;
       if (quietTimer) clearTimeout(quietTimer);
+      if (maxTimer) clearTimeout(maxTimer);
       try {
         (session as any).removeListener("Network.requestWillBeSent", onRequest);
         (session as any).removeListener("Network.loadingFinished", onComplete);
@@ -183,8 +185,7 @@ async function waitForNetwork(
     session.on("Network.loadingFinished", onComplete);
     session.on("Network.loadingFailed", onComplete);
 
-    // Overall timeout guard
-    setTimeout(() => finish(false), timeout);
+    maxTimer = setTimeout(() => finish(false), timeout);
   });
 }
 
@@ -249,7 +250,7 @@ export async function browserWait(
     if (waitFor === "network") {
       const { found, elapsed_ms } = await waitForNetwork(session, timeout);
       logAction("browser_wait", "network", found ? `network idle after ${elapsed_ms}ms` : `timeout after ${elapsed_ms}ms`);
-      return { success: true, found, elapsed_ms, matched_value: found ? "network-idle" : "" };
+      return { success: found, found, elapsed_ms, matched_value: found ? "network-idle" : "" };
     }
   } catch (e) {
     logDebug(`[Weavetab] Error in browserWait(${waitFor}): ${e}`);

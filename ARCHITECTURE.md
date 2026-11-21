@@ -1,6 +1,6 @@
 # Weavetab Architecture
 
-> **Version:** 2.6.3 | **Last Updated:** October 2026
+> **Version:** 2.6.4 | **Last Updated:** October 2026
 
 ---
 
@@ -40,9 +40,9 @@ flowchart LR
 
 ### Additional Checks
 
-- **User stop requests** via `window.__wt_stop_requested` in overlay HUD
-- **Chat queue** messages from user (`window.__wt_chat_queue`)
-- **Config live-reload** via `fs.watch` on `config.json`
+- **Per-tool timeout budgets** with `.unref()` timers inside `withSecurity()`
+- **Hook pipeline** (`beforeToolCall` / `afterToolCall`) dispatched after RBAC and domain checks
+- **Config live-reload** via lazy `startConfigWatcher()` on `config.json` with self-write suppression
 
 ---
 
@@ -50,7 +50,7 @@ flowchart LR
 
 ### Session Memory
 
-The session memory system maintains persistent per-domain profiles on disk at `~/.weavetab-system/memory/`. Each profile tracks:
+The session memory system maintains persistent per-domain profiles on disk at `~/.weavetab-system/memory/` with path-traversal containment and atomic temp-file + `rename` writes (capped at 50 memories and 50 failed selectors per domain). Each profile tracks:
 
 ```typescript
 interface DomainProfile {
@@ -66,29 +66,28 @@ interface DomainProfile {
 }
 ```
 
-**Automatic Framework Detection** runs via `Runtime.evaluate` probes for 8 frameworks:
+**Automatic Framework Detection** runs via a single consolidated `Runtime.evaluate` probe across 8 frameworks:
 
 ```
-Page Load → Check React → Check Vue → Check Angular → Check Lit 
-→ Check Svelte → Check Next/Nuxt/Gatsby → Cache Result
+Page Load → Single Runtime.evaluate Probe (React / Vue / Angular / Lit / Svelte / Next / Nuxt / Gatsby) → Cache Result
 ```
 
 ### Semantic Delta Engine
 
-The delta engine (`src/state/delta.ts`) implements a per-tab snapshot diffing system:
+The delta engine (`src/state/delta.ts`) implements a per-tab snapshot diffing system with `SessionSecretTracker` redaction on `RefEntry` labels and values:
 
 | Aspect | Implementation |
 |--------|---------------|
-| **Storage** | `Map<targetId, Map<refId, RefEntry>>` in memory |
+| **Storage** | `Map<targetId, Map<refId, RefEntry>>` and `propSnapshots` in memory (cleaned on `clearSnapshot`) |
 | **Fingerprint** | `role:normalizedLabel:parentRole:depth` for stable identity |
-| **Diff Output** | `{ added: [], removed: [], changed: [], stable_count: N }` |
-| **Rich Delta** | Adds property-level diffs (label, value, disabled, href, className changes) |
+| **Diff Output** | `{ added: [], removed: [], changed: [], stable_count: N }` with `_refs_truncated` propagation |
+| **Rich Delta** | Property-level diffs (label, value, disabled, href, className) with secret redaction |
 | **Iframe Tracking** | Per-frame element counts tracked separately |
 | **Actionable Recommendations** | Changed interactive elements flagged with suggested action |
 
 ### Semantic DOM Pruner
 
-The pruner (`src/cdp/pruner.ts`) performs **one-shot compression of a single DOM snapshot before it is returned to the agent**. This is fundamentally distinct from the Delta Engine:
+The pruner (`src/cdp/pruner.ts`) performs **one-shot compression of a single DOM snapshot across the document and open Shadow roots before it is returned to the agent**, while preserving OmniBroker child frame elements. This is distinct from the Delta Engine:
 
 | Dimension | Delta Engine | Semantic DOM Pruner |
 |-----------|-------------|---------------------|
@@ -111,14 +110,14 @@ The pruner (`src/cdp/pruner.ts`) performs **one-shot compression of a single DOM
 
 ### Loop Detection and Trail System
 
-The trail module (`src/intelligence/trail.ts`) maintains a rolling window of the last 50 tool actions. It implements strike-based loop detection:
+The trail module (`src/intelligence/trail.ts`) maintains a rolling window of the last 50 tool actions (`~/.weavetab-system/sessions/context.json`) with `SessionSecretTracker` redaction on `input`, `result`, and `url`, and per-tab scoping (`tabId`) for strike-based and 3-cycle cross-tool loop detection:
 
 ```
 Loop Detection Algorithm
 ─────────────────────────
-  Input: tool name, element ref
-  Process: Scan trail backwards, count consecutive failures
-           matching same tool + ref
+  Input: tool name, element ref, tabId
+  Process: Scan per-tab trail backwards, check last 3 consecutive actions
+           and 6-action window for 3-cycle cross-tool loops
 
   strikes < 5   → severity: "none"
   strikes 5-9   → severity: "warning"     (HUD notification)
@@ -129,11 +128,11 @@ Loop Detection Algorithm
 - Navigation events
 - Tab switches
 - Burst mode start
-- Manual override via `browser_map({ force: true })` or `browser_map({ force: true })`
+- Manual override via `browser_map({ force: true })` or `browser_wait({ reset_loop: true })`
 
 ### Knowledge Hints
 
-Domain-specific knowledge is stored in `~/.weavetab/knowledge/[domain].md`. When a tool discovers a site-specific quirk (e.g., "this login form requires clicking the label, not the input"), it appends a timestamped note. On subsequent visits, the hint is injected as a system prompt token (max 20 tokens).
+Domain-specific knowledge is stored in `~/.weavetab/knowledge/[domain].md` with path-traversal validation, deduplication, and a 20-line rolling cap. On subsequent visits, the most recent hint line (capped at 150 chars) is injected into session context.
 
 **Hint Format:**
 
@@ -150,20 +149,7 @@ Domain-specific knowledge is stored in `~/.weavetab/knowledge/[domain].md`. When
 
 ### Vision Fallback System
 
-When the CDP Accessibility Tree returns zero elements, Weavetab falls back to local pixel analysis using the `sharp` library:
-
-```mermaid
-flowchart TD
-    AX[CDP AX Tree Empty] --> Capture[Capture Screenshot]
-    Capture --> Gray[Grayscale Conversion]
-    Gray --> Heat[4x4 Grid Heatmap]
-    Heat --> Text[Text Density Calculation]
-    Text --> Click[Clickable Zone Detection]
-    Click --> Classify[Page State Classification]
-    Classify --> Result["Loading / Blank / Content / Error"]
-```
-
-This runs entirely locally with no external API calls or ML dependencies.
+When the CDP Accessibility Tree returns zero elements, Weavetab falls back to local pixel analysis via `sharp` (`.removeAlpha().raw().toBuffer({ resolveWithObject: true })` with channel-accurate stride and clickable zones capped at 5) alongside structural DOM heuristics — with zero external API calls.
 
 ---
 
@@ -171,7 +157,7 @@ This runs entirely locally with no external API calls or ML dependencies.
 
 ### Network Telemetry
 
-The network sensor (`src/sensors/network.ts`) intercepts CDP Network events to track:
+The network sensor (`src/sensors/network.ts`) lazily attaches CDP Network listeners on `start()`, unsubscribes cleanly on `stop()`, and tracks bounded buffers (500 requests, 200 errors, 100 toasts):
 
 - Request/response timing
 - Resource types (XHR, fetch, document, script, stylesheet)
@@ -181,14 +167,9 @@ The network sensor (`src/sensors/network.ts`) intercepts CDP Network events to t
 
 **Usage:** Enables `browser_network_intercept` for API mocking and tracking.
 
-### DOM Mutation Watcher
+### DOM Mutation Cache Invalidator
 
-The mutation sensor (`src/sensors/mutations.ts`) uses CDP DOM mutation events to detect:
-
-- Added/removed nodes
-- Attribute changes
-- Text content changes
-- Shadow DOM updates
+The cache layer (`src/state/cache.ts`) subscribes to CDP DOM events (`documentUpdated`, `childNodeInserted`, `childNodeRemoved`, `attributeModified`, `attributeRemoved`) to synchronously update `lastMutationTime` and clear cached `boxModels` and `domNodes`.
 
 **Usage:** Powers the delta engine and automatic cache invalidation.
 
@@ -224,11 +205,11 @@ The HUD (`src/sensors/thoughts.ts`) provides real-time visual feedback:
 
 ### Audit & Telemetry
 
-The audit system (`src/audit/logger.ts`) maintains structured logs:
+The audit system (`src/audit/logger.ts`) maintains structured logs with automatic `SessionSecretTracker` redaction and log retention pruning (keeping the latest 30 `mission_*` files in `~/.weavetab-system/logs/`):
 
 - **Mission logs** (`~/.weavetab-system/logs/mission_<timestamp>.log`) — Human-readable activity log
 - **Structured logs** (`~/.weavetab-system/logs/mission_<timestamp>.jsonl`) — Machine-readable JSONL format
-- **Telemetry** (optional) — Event broadcasting for analytics
+- **Telemetry** (opt-in via `telemetry: true`) — Anonymous local UDP event broadcasting and atomic `stats.json` persistence with `0o600` + Windows `icacls` on `telemetry-secret`
 
 ---
 
@@ -238,10 +219,10 @@ The audit system (`src/audit/logger.ts`) maintains structured logs:
 
 The walker (`src/cdp/walker.ts`) performs DOM enumeration via CDP:
 
-- **Accessibility Tree** — Primary source for element discovery
-- **DOM traversal** — Fallback for complex Shadow DOM scenarios
-- **Element resolution** — Maps backend node IDs to volatile `w:NN` refs that invalidate on mutation
-- **Label extraction** — Prioritizes aria-label, placeholder, text content
+- **Accessibility Tree** — Primary source for element discovery with `depth: 0` DOM root initialization, 10s TTL `axTreeCache`, and 16-chunk `getBoxModel` batching
+- **DOM & OmniBroker traversal** — Fallback for complex Shadow DOM and out-of-process iframe (`iframe` / `webview`) scenarios with parent-frame coordinate offsets and secret redaction
+- **Element resolution** — $O(N)$ `backendNodeId → nodeId` mapping into volatile `w:NN` refs; cached map reuse when the DOM has not mutated, with a bounded 1500ms load-stability wait on cold walks
+- **Label extraction** — Prioritizes aria-label, placeholder, text content with `stripInvisibleChars` and `filterHidden` sanitization
 
 ### Ghost Cursor Engine
 
@@ -265,37 +246,36 @@ The typing engine (`src/tools/type.ts`) simulates realistic keyboard input:
 
 The pruner (`src/cdp/pruner.ts`) compresses DOM snapshots:
 
-- **Hidden element removal** — Drops non-interactive hidden elements
+- **Hidden element removal** — Drops non-interactive hidden elements across document and open Shadow roots
 - **SVG collapsing** — Replaces SVG icons with `[SVG Icon: label]` tokens
-- **Controls preservation** — Keeps elements referenced by `aria-controls`
+- **Controls & child-frame preservation** — Keeps elements referenced by `aria-controls` and OmniBroker child frame elements
 - **Secret safety** — Preserves `data-wt-secret` elements
 
 ### Shadow DOM Injector
 
-The injector (`src/overlay/injector.ts`) manages UI overlay:
+The injector (`src/overlay/injector.ts`) manages UI overlay bridges:
 
-- **Voice UI** — Speech-to-text input for 2FA and sensitive data
-- **DevMode HUD** — Real-time debugging information
-- **Chat interface** — User-to-agent communication
-- **Plan dashboard** — Mission progress visualization
+- **Sanitized webpage config** — Passes only `{ devMode }` to page context (`buildConfigExpr`), tracked via a `WeakSet` per session and short-circuited in `headless` mode
+- **Top-frame MV3 extension HUD & cursor** — Mounts HUD, cursor, and indicator exclusively in the top frame (`window === window.top`) with origin-checked messaging and HTML-escaped anchor badges
+- **DevMode HUD & Debug Menu** — Real-time overlays inside the isolated extension HUD iframe (`Alt+Shift+D`)
 
 ### Tab & Window Manager
 
 The session registry (`src/state/session.ts`) manages browser sessions:
 
-- **Session pooling** — Reuses CDP connections across tabs
-- **Target ID mapping** — Maps MCP client IDs to CDP targets
-- **Lifecycle management** — Handles tab creation, switching, closure
+- **Session pooling** — Reuses CDP connections across tabs and clears stale persisted `contexts.json` on startup
+- **Target ID mapping** — Maps MCP client IDs to CDP targets and clears `SessionSecretTracker` state on `unregister()`
+- **Lifecycle management** — Handles tab creation, switching, closure, and navigation cache invalidation (`clearSnapshot`, `clearAXTreeCache`, `clearShadowDomCache`, `labelCache.invalidate`)
 - **Crash recovery** — Detects and heals crashed tabs
 
 ### Browser Launcher
 
-The launcher (`src/cdp/connector.ts`) manages browser startup:
+The launcher (`src/cdp/connector.ts`, `src/cdp/bridge.ts`, `src/cdp/lock.ts`) manages browser and Electron startup:
 
-- **Lock system** — Two-factor validation (PID + TCP port)
+- **Lock & mutex system** — `AsyncLocalStorage` re-entrant CDP mutexes, atomic `.tmp` + `renameSync` lockfiles, `clearLock` preserving active mutexes, and two-factor lock validation (PID liveness + TCP port)
+- **Flag & profile hardening** — Strips dangerous user flags (`--user-data-dir`, `--remote-debugging-port`, `--remote-debugging-address`, `--remote-allow-origins`, `--disable-web-security`), places mandatory Weavetab flags last, enforces `realpathSync` profile checks, and isolates Electron `XDG_CONFIG_HOME`/`XDG_DATA_HOME`
 - **Extension loading** — Injects Weavetab extension on startup
-- **Remote debugging** — Connects to existing Chrome instances
-- **Headless mode** — Supports both headed and headless execution
+- **Remote debugging & headless mode** — Connects to existing Chrome/Electron instances and supports headed and headless execution
 
 ---
 
@@ -330,50 +310,20 @@ flowchart TD
 
 | Mechanism | Implementation | Threat Mitigated |
 |-----------|----------------|------------------|
-| **Domain Blacklist** | Hardcoded + custom JSON config | High-risk domain access |
-| **Domain Policy Engine** | Per-domain allow/read-only/deny/audit modes | Unauthorized domain interactions |
-| **RBAC** | 5 roles with tool permission matrix | Privilege escalation |
-| **Rate Limiting** | Mutex-based actions/min enforcement | Runaway agent behavior |
+| **Domain Blacklist & Policy Engine** | Specificity-ordered policies (exact > longest literal suffix > wildcard), bare-domain subdomain matching, trailing-dot normalization, and `allow`-before-`block` evaluation | Unauthorized or high-risk domain access |
+| **RBAC** | 5 fail-closed roles (`operator`, `viewer`, `automation`, `system`, `admin`); `viewer` and `read-only` exclude `browser_eval` and enforce action-level read-only gating on `cookies`, `tabs`, `snapshot`, `console`, and `pattern_learn` | Privilege escalation |
+| **Rate Limiting** | Sliding-window actions/min enforcement across top-level tools and `browser_burst` steps | Runaway agent behavior |
 | **Root Guard** | `assertNotRoot()` at startup | Privileged execution |
-| **Storage Blocker** | Optional localStorage/sessionStorage nullification | Tracking/fingerprinting |
-| **Input Filter** | Suspicious label stripping | Prompt injection |
-| **Blind Injection** | Domain-scoped secret injection with masking | Credential leakage |
-| **Shadow DOM Isolation** | UI in isolated Shadow DOM | Host page tampering |
-| **Localhost Binding** | CDP WS bound to 127.0.0.1 | Remote exploitation |
-| **Two-Factor Lock** | PID + TCP port validation | Stale lock false-positives |
-
----
-
-## Performance Characteristics
-
-### Latency Profile
-
-| Operation | Typical Range | Notes |
-|-----------|---------------|-------|
-| **Tool security & RBAC checks** | < 1ms | In-memory policy evaluation |
-| **CDP WebSocket round-trip** | 2–5ms | Localhost loopback transport |
-| **DOM walk (cached / delta)** | 1–5ms | In-memory fingerprint diffing |
-| **DOM walk (first pass)** | 10–35ms | Scales with DOM node density |
-| **Interactive input dispatch** | 50–250ms | Includes actionability verification & humanized pacing |
-
-### Memory Footprint
-
-| Component | Memory Usage |
-|-----------|--------------|
-| **Base server** | ~50MB |
-| **Per-session cache** | ~10-20MB |
-| **Extension** | ~5MB |
-| **Total (typical)** | ~65-75MB |
-
-### Disk Usage
-
-| Component | Disk Usage |
-|-----------|------------|
-| **Server code** | ~5MB |
-| **Extension** | ~2MB |
-| **Session memory** | ~1-5MB (per domain) |
-| **Knowledge hints** | ~100KB (per domain) |
-| **Audit logs** | ~1-10MB (per mission) |
+| **Storage Blocker** | Optional `localStorage`/`sessionStorage` and `Document.prototype` cookie nullification | Tracking/fingerprinting |
+| **Input Filter** | Pre-NFKC stripping of invisible chars, bidi overrides, Unicode Tags, and prompt injection patterns (preserving `U+FE0F` & `U+00A0`) | Prompt injection |
+| **Blind Injection** | Fail-closed AES-256-GCM decryption, opt-in `WT_PROJECT_SECRETS=1` project secrets, domain scoping (`file://`/`about:blank` blocked), and DOM hardening | Credential leakage |
+| **Non-Destructive Capture Masking** | Inline CSS masking (`-webkit-text-security: disc; color: transparent`) during screenshot, snapshot, and PDF capture | Visual credential leakage without clearing inputs |
+| **Recursive Output Redaction** | `SessionSecretTracker.redactValue()` across eval, storage, cookies, clipboard, automation, console, find, snapshot, office, delta diffs, session trails, pattern compiler, and audit logs | Cross-tool secret exfiltration |
+| **Injection & XSS Hardening** | Strict `storage` scope allowlist, `textContent` + color allowlist in `highlight`, HTML escaping in HUD anchor badges, `JSON.stringify` dialog toasts, `{ devMode }`-only webpage config | Page/script injection & XSS |
+| **Path, Flag & File Hardening** | `realpathSync` plugin/profile containment, `WT_ALLOW_WORKSPACE_PLUGINS=1` gate, manifest-only plugin permissions, dangerous browser flag stripping, Electron `XDG_CONFIG_HOME`/`XDG_DATA_HOME` isolation, and `0o600` + Windows `icacls` on `secrets.json`, `secrets-key`, `ws-secret`, and `telemetry-secret` | Local file escape & privilege escalation |
+| **Extension & Shadow DOM Isolation** | Top-frame-only MV3 HUD/cursor mounting with origin-checked messaging and removed webpage-callable privileged relays | Host page tampering |
+| **Localhost Binding & WS Auth** | CDP WS and `--ws` bound to `127.0.0.1` with per-socket auth, 5s timeout, and IPv6 `[::1]` host validation | Remote exploitation & CSWSH |
+| **Two-Factor Lock & Re-entrant Mutex** | `AsyncLocalStorage` re-entrant CDP mutex, atomic lockfiles, `clearLock` preserving active mutexes, PID + TCP port validation | Race conditions & stale locks |
 
 ---
 
@@ -424,7 +374,7 @@ Developers can add custom tools by:
 - **Tool execution time** — Per-tool timing breakdown
 - **Cache hit rates** — DOM map and delta cache efficiency
 - **Loop detection events** — Strike count and severity
-- **Domain profile hits** — Session memory utilization
+- **Domain profile hits** — Session memory hit rate
 - **Network request counts** — Per-domain request tracking
 
 ### Audit Trail
@@ -460,7 +410,7 @@ When `devMode: true` is enabled, the HUD displays:
 Weavetab's architecture is designed for **autonomous AI agents** requiring:
 
 - **Direct in-process CDP execution** without intermediate WebDriver binaries
-- **5-10x token efficiency** via semantic DOM pruning and delta diffing
+- **Token-disciplined DOM observation** via semantic DOM pruning and per-tab delta diffing
 - **Layered local security** with domain policies, RBAC, and blind secret injection
 - **Self-learning capabilities** through persistent per-domain session memory
 - **Human-like kinematics** for reliable interaction with modern web applications

@@ -106,14 +106,19 @@ async function focusEditable(session: CDP.Client, objectId: string, clearFirst?:
   if (clearFirst) {
     await session.Runtime.callFunctionOn({
       functionDeclaration: `function() {
-        if (typeof this.select === 'function') this.select();
-        else if (this.isContentEditable) {
+        if (this.isContentEditable) {
           this.textContent = '';
           this.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-          this.value = '';
+          const setter = this.tagName === 'TEXTAREA'
+            ? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+            : Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (setter) setter.call(this, '');
+          else this.value = '';
           this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
         }
+        if (typeof this.select === 'function') this.select();
       }`,
       objectId,
       silent: true,
@@ -417,6 +422,7 @@ export async function weaveType(
     y?: number;
     text: string;
     clearFirst?: boolean;
+    clear?: boolean;
     paste?: boolean;
     /** Typing profile: 'normal' (default) | 'fast' | 'deliberate'. Auto-selected if omitted. */
     profile?: "fast" | "normal" | "deliberate";
@@ -428,7 +434,8 @@ export async function weaveType(
   config: Config
 ): Promise<TypeResult | WeaveError> {
   const id = args.id || args.target || args.selector;
-  const { label, intent, backendNodeId: directNodeId, text, clearFirst, fast = false } = args;
+  const clearFirst = args.clearFirst ?? args.clear;
+  const { label, intent, backendNodeId: directNodeId, text, fast = false } = args;
   const { Page, DOM } = session;
 
   const startMs = Date.now();
@@ -456,9 +463,13 @@ export async function weaveType(
   const active = sessionRegistry.getActive(getConfigAgentId(config));
   if (active) targetId = active.targetId;
 
-  const urlObj = new URL(url);
-  const hostname = urlObj.hostname;
-  const pathname = urlObj.pathname;
+  let hostname = "local";
+  let pathname = "/";
+  try {
+    const u = new URL(url);
+    hostname = u.hostname || u.protocol.replace(/:$/, "") || "local";
+    pathname = u.pathname || "/";
+  } catch { /* file/empty/custom electron scheme */ }
 
   let usedMemoryIntent = false;
   let sniperWarning = "";
@@ -517,17 +528,13 @@ export async function weaveType(
       };
     }
 
-    if (query && !target) {
-      const matches = findAllMatches(map.elements, query ?? "");
+    // Only run fuzzy ambiguity check when resolving by label/intent, not exact id/selector
+    const fuzzyQuery = !id ? (label ?? intent) : undefined;
+    if (fuzzyQuery) {
+      const matches = findAllMatches(map.elements, fuzzyQuery);
       if (matches.length > 1) {
         const skipped = matches.slice(1, 4).map(m => `[${m.id}]`).join(", ") + (matches.length > 4 ? ` (+${matches.length - 4} more)` : "");
-        return { success: false, error_code: "AMBIGUOUS_TARGET", message: `[!] Refusing to type into ambiguous target. Found ${matches.length} matches for '${query}'. Matches: ${skipped}` };
-      }
-    } else if (query && target) {
-      const matches = findAllMatches(map.elements, query ?? "");
-      if (matches.length > 1) {
-        const skipped = matches.slice(1, 4).map(m => `[${m.id}]`).join(", ") + (matches.length > 4 ? ` (+${matches.length - 4} more)` : "");
-        return { success: false, error_code: "AMBIGUOUS_TARGET", message: `[!] Refusing to type into ambiguous target. Found ${matches.length} matches for '${query}'. Please be more specific or use exact ID. Matches: ${skipped}` };
+        return { success: false, error_code: "AMBIGUOUS_TARGET", message: `[!] Refusing to type into ambiguous target. Found ${matches.length} matches for '${fuzzyQuery}'. Please be more specific or use exact ID. Matches: ${skipped}` };
       }
     }
   }
@@ -678,7 +685,7 @@ export async function weaveType(
 
   // ── 3. Focus + Type ──────────────────────────────────────────────────────
   if (coords.x !== undefined && coords.y !== undefined) {
-    const ghostMoveProfile = args.profile === "fast" ? "fast" : "human";
+    const ghostMoveProfile = getConfigHeadless(config) || args.profile === "fast" ? "fast" : "human";
     await ghostMove(session, coords.x, coords.y, config, resolvedLabel.slice(0, 30), ghostMoveProfile);
     await sendToExtension(session, { type: 'Weavetab_STATE', cursor: { x: coords.x, y: coords.y }, state: 'typing' });
     if (!getConfigHeadless(config)) await new Promise(r => setTimeout(r, 100 + Math.random() * 150));
@@ -734,8 +741,7 @@ export async function weaveType(
     }
 
     // Manual clear only when explicitly requested (insertText replaces naturally)
-    const shouldPaste = args.paste || text.length > 8;
-    if (clearFirst === true && !shouldPaste) {
+    if (clearFirst === true) {
       await session.Runtime.evaluate({
         expression: `(function(sel) {
           const el = document.querySelector(sel) || (window.__Weavetab_shadowQuery ? window.__Weavetab_shadowQuery(sel) : null);

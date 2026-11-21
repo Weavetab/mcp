@@ -1,41 +1,37 @@
-/**
- * Weavetab — audit/telemetry.ts
- * UDP IPC for broadcasting live telemetry to the CLI dashboard without breaking stdio MCP.
- * Also tracks tool usage analytics locally (Phase 10g).
- * Weavetab by fy2ne
- */
-
 import * as dgram from "node:dgram";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
-import { getSystemDir } from "../config/loader.js";
+import { getCachedConfig } from "../config/loader.js";
+import { applyFilePermissions, enforceFilePermissions } from "../security/secrets.js";
 
 const TELEMETRY_PORT = 9223;
 const STATS_FILE = path.join(os.homedir(), ".weavetab-system", "stats.json");
+const MAX_PER_DOMAIN = 500;
 let udpSocket: dgram.Socket | null = null;
 
-// Generate or load telemetry secret for authentication
 const TELEMETRY_SECRET_FILE = path.join(os.homedir(), ".weavetab-system", "telemetry-secret");
 let telemetrySecret: string;
 
 function getTelemetrySecret(): string {
   if (telemetrySecret) return telemetrySecret;
-  
+
   try {
     if (fs.existsSync(TELEMETRY_SECRET_FILE)) {
+      enforceFilePermissions(TELEMETRY_SECRET_FILE);
       telemetrySecret = fs.readFileSync(TELEMETRY_SECRET_FILE, "utf-8").trim();
     } else {
       telemetrySecret = crypto.randomBytes(32).toString("hex");
       const dir = path.dirname(TELEMETRY_SECRET_FILE);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(TELEMETRY_SECRET_FILE, telemetrySecret, { mode: 0o600 });
+      applyFilePermissions(TELEMETRY_SECRET_FILE);
     }
   } catch {
     telemetrySecret = crypto.randomBytes(32).toString("hex");
   }
-  
+
   return telemetrySecret;
 }
 
@@ -79,40 +75,39 @@ function loadStats(): ToolUsageStats {
   }
 }
 
+function writeStatsSync(stats: ToolUsageStats): void {
+  const dir = path.dirname(STATS_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmpFile = `${STATS_FILE}.tmp.${process.pid}.${crypto.randomBytes(4).toString("hex")}`;
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(stats, null, 2), "utf-8");
+    fs.renameSync(tmpFile, STATS_FILE);
+  } catch {
+    try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+  }
+}
+
 let statsDirty = false;
 let saveStatsTimer: ReturnType<typeof setTimeout> | null = null;
 
 function saveStats(): void {
   if (!statsCache) return;
-  // Mark as dirty and schedule an async flush at most once per 5 seconds.
-  // Previously this was a synchronous writeFileSync on every tool call,
-  // blocking the event loop. Now we batch writes to avoid that overhead.
   statsDirty = true;
   if (!saveStatsTimer) {
     saveStatsTimer = setTimeout(() => {
       saveStatsTimer = null;
       if (!statsDirty || !statsCache) return;
       statsDirty = false;
-      const dir = path.dirname(STATS_FILE);
-      try {
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        const data = JSON.stringify(statsCache, null, 2);
-        fs.writeFile(STATS_FILE, data, () => { /* async — ignore errors */ });
-      } catch { /* ignore */ }
+      writeStatsSync(statsCache);
     }, 5000);
-    // Allow the timer to not prevent process exit
     saveStatsTimer.unref?.();
   }
 }
 
-// Flush remaining dirty stats synchronously on exit so no data is lost
 process.on("exit", () => {
   if (!statsDirty || !statsCache) return;
-  try {
-    const dir = path.dirname(STATS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(STATS_FILE, JSON.stringify(statsCache, null, 2));
-  } catch { /* ignore */ }
+  statsDirty = false;
+  writeStatsSync(statsCache);
 });
 
 export function recordToolUsage(entry: ToolUsageEntry): void {
@@ -120,15 +115,22 @@ export function recordToolUsage(entry: ToolUsageEntry): void {
   s.totalCalls++;
 
   if (!s.perTool[entry.tool]) s.perTool[entry.tool] = { calls: 0, failures: 0, avgDurationMs: 0 };
-  const t = s.perTool[entry.tool];
+  const t = s.perTool[entry.tool]!;
   t.calls++;
   if (!entry.success) t.failures++;
   t.avgDurationMs = Math.round((t.avgDurationMs * (t.calls - 1) + entry.duration) / t.calls);
 
   const domain = entry.domain || "(unknown)";
-  if (!s.perDomain[domain]) s.perDomain[domain] = { calls: 0, failures: 0 };
-  s.perDomain[domain].calls++;
-  if (!entry.success) s.perDomain[domain].failures++;
+  if (!Object.hasOwn(s.perDomain, domain)) {
+    const keys = Object.keys(s.perDomain);
+    while (keys.length >= MAX_PER_DOMAIN) {
+      const oldest = keys.shift();
+      if (oldest) delete s.perDomain[oldest];
+    }
+    s.perDomain[domain] = { calls: 0, failures: 0 };
+  }
+  s.perDomain[domain]!.calls++;
+  if (!entry.success) s.perDomain[domain]!.failures++;
 
   s.recentEntries.unshift(entry);
   if (s.recentEntries.length > 1000) s.recentEntries.length = 1000;
@@ -150,12 +152,17 @@ export function clearToolUsageStats(): void {
   saveStats();
 }
 
-/** Broadcast a telemetry event to any listening dashboard (wb run) */
 export function broadcastTelemetry(event: Omit<TelemetryEvent, "timestamp">): void {
+  try {
+    const cfg = getCachedConfig();
+    if (!cfg || cfg.telemetry !== true) return;
+  } catch {
+    return;
+  }
+
   if (!udpSocket) {
     try {
       udpSocket = dgram.createSocket("udp4");
-      // Prevent the socket from keeping the process alive
       udpSocket.unref();
     } catch {
       return;
@@ -164,24 +171,22 @@ export function broadcastTelemetry(event: Omit<TelemetryEvent, "timestamp">): vo
 
   const fullEvent: TelemetryEvent = {
     ...event,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   };
 
   try {
     const secret = getTelemetrySecret();
     const payload = JSON.stringify(fullEvent);
     const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
-    
+
     const message = {
       sig: signature,
-      payload: payload
+      payload,
     };
-    
+
     const msg = Buffer.from(JSON.stringify(message) + "\n");
-    udpSocket.send(msg, 0, msg.length, TELEMETRY_PORT, "127.0.0.1", (err) => {
-      // Ignore broadcast errors (e.g. no dashboard listening)
-    });
+    udpSocket.send(msg, 0, msg.length, TELEMETRY_PORT, "127.0.0.1", () => {});
   } catch {
-    // Ignore stringify/send errors
+    // ignore
   }
 }

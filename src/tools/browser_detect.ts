@@ -1,5 +1,6 @@
-import { findBrowser, findFirefox, probeAllBrowsers } from "../cdp/bridge.js";
-import { getCachedConfig, getElectronApps, type BrowserEngine, type ElectronAppConfig } from "../config/loader.js";
+import { findFirefox, probeAllBrowsers } from "../cdp/bridge.js";
+import { getCachedConfig, getElectronApps, type BrowserEngine } from "../config/loader.js";
+import { normalizeElectronAppName } from "../desktop/discovery.js";
 
 // Phase 8c: Per-engine tool coverage map
 // Firefox CDP is ~80% feature-complete; WebKit is ~60%
@@ -64,7 +65,7 @@ export interface BrowserDetectResult {
   unsupportedTools: Record<string, string[]>;
 }
 
-export async function detectBrowsers(currentEngine: BrowserEngine): Promise<BrowserDetectResult> {
+export async function detectBrowsers(currentEngine: BrowserEngine, targetApp?: string): Promise<BrowserDetectResult> {
   const available: { engine: BrowserEngine; name: string; path: string }[] = [];
 
   // Detect Chromium-based browsers
@@ -94,9 +95,14 @@ export async function detectBrowsers(currentEngine: BrowserEngine): Promise<Brow
   const runningUnconfiguredApps: DiscoveredElectronApp[] = [];
 
   // Identify configured app statuses
+  const filterNorm = targetApp ? normalizeElectronAppName(targetApp) : null;
+  const agentClients = sessionRegistry.getAllForAgent(getConfigAgentId(config));
   for (const [appName, appCfg] of Object.entries(electronApps)) {
-    const clients = sessionRegistry.getAllForAgent(getConfigAgentId(config));
-    const activeClient = clients.find(c => c.isElectron && c.appName === appName);
+    const appNorm = normalizeElectronAppName(appName);
+    if (filterNorm && appNorm !== filterNorm) continue;
+    const activeClient = agentClients.find(
+      c => c.isElectron && c.appName && normalizeElectronAppName(c.appName) === appNorm
+    );
     
     let status: ConfiguredAppStatus["status"] = "offline";
     let activeTabs: any[] = [];
@@ -110,7 +116,7 @@ export async function detectBrowsers(currentEngine: BrowserEngine): Promise<Brow
         activeTabs = tabs.map(t => ({ id: t.id, title: t.title, url: t.url }));
       } catch { /* ignore tab list failure */ }
     } else {
-      const running = runningElectronApps.find(r => r.name.toLowerCase() === appName.toLowerCase());
+      const running = runningElectronApps.find(r => normalizeElectronAppName(r.name) === appNorm);
       if (running) {
         status = running.status === "debug_port_open" ? "connected" : "running_no_debug";
         port = running.port;
@@ -128,7 +134,9 @@ export async function detectBrowsers(currentEngine: BrowserEngine): Promise<Brow
 
   // Find running apps that are not configured
   for (const running of runningElectronApps) {
-    const isConfigured = Object.keys(electronApps).some(n => n.toLowerCase() === running.name.toLowerCase());
+    const runNorm = normalizeElectronAppName(running.name);
+    if (filterNorm && runNorm !== filterNorm) continue;
+    const isConfigured = Object.keys(electronApps).some(n => normalizeElectronAppName(n) === runNorm);
     if (!isConfigured) {
       runningUnconfiguredApps.push(running);
     }

@@ -1,22 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Weavetab Agent",
-  "version": "1.0.62054",
+  "version": "1.0.52212",
   "description": "Native browser agent for Weavetab MCP",
   "permissions": [
     "tabs",
-    "tabGroups",
     "scripting",
     "storage",
-    "webNavigation",
-    "activeTab",
     "declarativeNetRequest",
-    "cookies",
-    "notifications",
-    "alarms",
-    "contextMenus",
-    "downloads",
-    "browsingData"
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -24,7 +16,24 @@
   "background": {
     "service_worker": "background.js"
   },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "main_world.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
     {
       "matches": [
         "<all_urls>"
@@ -40,7 +49,13 @@
     }
   ],
   "action": {
-    "default_title": "Weavetab Agent"
+    "default_title": "Weavetab Agent",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "omnibox": {
     "keyword": "Weavetab"
@@ -48,8 +63,9 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "dashboard.html",
-        "hud/*"
+        "hud/index.html",
+        "hud/hud.js",
+        "icons/*"
       ],
       "matches": [
         "<all_urls>"

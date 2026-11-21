@@ -26,16 +26,22 @@ function sizeOf(relPath) {
 
 const steps = [
   {
-    title: 'Chrome extension',
-    detail: 'service worker + content scripts',
-    cmd: [node, 'scripts/build-ext.js'],
-    artifacts: ['ext-dist/background.js', 'ext-dist/content.js', 'ext-dist/styles.css'],
-  },
-  {
     title: 'HUD overlay',
     detail: 'bundled widget layer',
     cmd: [node, 'scripts/build-hud.js'],
     artifacts: ['ext-dist/hud/hud.js'],
+  },
+  {
+    title: 'Chrome extension',
+    detail: 'service worker + content scripts',
+    cmd: [node, 'scripts/build-ext.js'],
+    artifacts: [
+      'ext-dist/background.js',
+      'ext-dist/content.js',
+      'ext-dist/main_world.js',
+      'ext-dist/dashboard.js',
+      'ext-dist/styles.css',
+    ],
   },
   {
     title: 'MCP server',

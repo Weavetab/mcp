@@ -6,11 +6,8 @@
 
 import CDP from "chrome-remote-interface";
 import { recordAction } from "../intelligence/trail.js";
-import { waitForDOMStable } from "../sensors/guard.js";
-import { waitForNetworkIdle } from "../sensors/wait.js";
 import { buildActionMap, toRefEntries } from "../cdp/walker.js";
-import { cacheActionMap, cacheBoxModel } from "../state/cache.js";
-import { computeDelta, storeSnapshot } from "../state/delta.js";
+import { computeDelta } from "../state/delta.js";
 import { sessionRegistry } from "../state/session.js";
 import type { Config } from "../config/loader.js";
 import { getConfigAgentId } from "../config/loader.js";
@@ -103,7 +100,7 @@ export async function weaveKey(
   if (effectiveModifiers.includes("Shift")) modMask |= 8;
 
   const label = effectiveModifiers.length > 0 ? `${effectiveModifiers.join("+")}+${effectiveKey}` : effectiveKey;
-  await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `pressing ${label}` } });
+  await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `pressing ${label}` } }).catch(() => {});
 
   const { frameTree: beforeFrameTree } = await session.Page.getFrameTree().catch(() => ({ frameTree: { frame: { url: '' } } }));
   const urlBefore = beforeFrameTree.frame.url;
@@ -111,109 +108,100 @@ export async function weaveKey(
   let targetId = "default";
   const active = sessionRegistry.getActive(getConfigAgentId(_config));
   if (active) targetId = active.targetId;
+  const isElectron = Boolean(active?.isElectron);
 
-  // We removed the direct toast injection here because the extension handles HUD display via Weavetab_STATE (line 66)
+  const isPrintableChar = effectiveKey.length === 1 && (modMask === 0 || modMask === 8);
+  const vk = effectiveKey === "Enter" ? 13 : undefined;
 
-  await session.Input.dispatchKeyEvent({ type: "rawKeyDown", key, modifiers: modMask, windowsVirtualKeyCode: key === "Enter" ? 13 : undefined, nativeVirtualKeyCode: key === "Enter" ? 13 : undefined });
-  if (key === "Enter") {
-    // SPA Fallback: direct form submit + submit button click for React/Vue/Google
-    // This is needed because Input.dispatchKeyEvent alone doesn't trigger SPA form submission
-    await session.Runtime.evaluate({ expression: `
-      (function(){
-        try {
-          var el = document.activeElement;
-          if (!el || !el.tagName) return;
-
-          // Focus the element first to make sure it's active
-          if (typeof el.focus === 'function') el.focus();
-
-          // 1. Try native form submit (Google search, DuckDuckGo, etc.)
-          var form = el.closest('form');
-          if (form) {
-            var submitBtn = form.querySelector('input[type="submit"], button[type="submit"]');
-            if (submitBtn && submitBtn.offsetParent !== null) { submitBtn.click(); return; }
-            try { form.submit(); return; } catch(e) {}
-          }
-
-          // 2. Google-specific: find name="q" input and submit its form
-          var q = document.querySelector('input[name="q"], textarea[name="q"]');
-          if (q) {
-            var qForm = q.closest('form');
-            if (qForm) { try { qForm.submit(); return; } catch(e) {} }
-          }
-
-          // 3. Last resort: find any visible submit/search button near the active element
-          var parent = el.parentElement;
-          while (parent && parent.tagName !== 'BODY') {
-            var btns = parent.querySelectorAll('button, input[type="submit"], input[type="button"]');
-            for (var i = 0; i < btns.length; i++) {
-              if (btns[i].offsetParent !== null && btns[i].getBoundingClientRect().width > 0) { btns[i].click(); return; }
-            }
-            parent = parent.parentElement;
-          }
-        } catch(e) {}
-      })();
-    `}).catch(() => {});
-  }
-  await session.Input.dispatchKeyEvent({ type: "keyUp", key: effectiveKey, modifiers: modMask, windowsVirtualKeyCode: effectiveKey === "Enter" ? 13 : undefined, nativeVirtualKeyCode: effectiveKey === "Enter" ? 13 : undefined });
-
-  // Fast return for non-submission keys (Tab, Escape, Arrows, Shortcuts)
-  if (effectiveKey === "Enter") {
-    await new Promise(r => setTimeout(r, 60));
-  } else {
-    await new Promise(r => setTimeout(r, 15));
-  }
-
-  // Post-key location context
-  let postUrl = "";
-  let postTitle = "";
   try {
-    const { frameTree } = await session.Page.getFrameTree();
-    postUrl = frameTree.frame.url;
-    const activeSession = sessionRegistry.getActive(getConfigAgentId(_config));
-    if (activeSession) activeSession.url = postUrl;
-    const titleRes = await session.Runtime.evaluate({ expression: "document.title", returnByValue: true }).catch(() => null);
-    if (titleRes?.result?.value) {
-      postTitle = String(titleRes.result.value);
-    } else if (activeSession?.title) {
-      postTitle = activeSession.title;
-    }
-  } catch { /* ignore */ }
+    await session.Input.dispatchKeyEvent({
+      type: isPrintableChar ? "keyDown" : "rawKeyDown",
+      key: effectiveKey,
+      ...(isPrintableChar ? { text: effectiveKey, unmodifiedText: effectiveKey } : {}),
+      modifiers: modMask,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
 
-  const urlChanged = postUrl !== urlBefore;
-  let domChanged = false;
-  let stuckWarning = false;
-  let stuckHint: string | undefined;
-
-  if (key === "Enter") {
-    const nextMap = await buildActionMap(session, { lite: true }, targetId);
-    const newRefs = toRefEntries(nextMap.elements);
-    const diff = computeDelta(targetId, urlBefore, newRefs);
-    const changedRefs = diff ? [...diff.added, ...diff.changed] : [];
-    domChanged = changedRefs.length > 0 || (diff?.removed.length ?? 0) > 0;
-    stuckWarning = !domChanged && !urlChanged;
-    if (stuckWarning) {
-      await sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: 'hmm, no response. reassessing...' } });
-      stuckHint = "Page did not respond to Enter key. You might need to find the actual submit button and use browser_click instead.";
+    if (effectiveKey === "Enter" && !isElectron) {
+      // SPA fallback: submit owning form (never click arbitrary unrelated buttons)
+      await session.Runtime.evaluate({ expression: `
+        (function(){
+          try {
+            var el = document.activeElement;
+            if (!el || !el.tagName) return;
+            var form = el.closest('form');
+            if (form) {
+              var submitBtn = form.querySelector('input[type="submit"], button[type="submit"]');
+              if (submitBtn && submitBtn.offsetParent !== null) { submitBtn.click(); return; }
+              try { form.submit(); return; } catch(e) {}
+            }
+          } catch(e) {}
+        })();
+      `}).catch(() => {});
     }
+
+    await session.Input.dispatchKeyEvent({
+      type: "keyUp",
+      key: effectiveKey,
+      modifiers: modMask,
+      windowsVirtualKeyCode: vk,
+      nativeVirtualKeyCode: vk,
+    });
+
+    await new Promise(r => setTimeout(r, effectiveKey === "Enter" ? 60 : 15));
+
+    let postUrl = "";
+    let postTitle = "";
+    try {
+      const { frameTree } = await session.Page.getFrameTree();
+      postUrl = frameTree.frame.url;
+      const activeSession = sessionRegistry.getActive(getConfigAgentId(_config));
+      if (activeSession) activeSession.url = postUrl;
+      const titleRes = await session.Runtime.evaluate({ expression: "document.title", returnByValue: true }).catch(() => null);
+      if (titleRes?.result?.value) {
+        postTitle = String(titleRes.result.value);
+      } else if (activeSession?.title) {
+        postTitle = activeSession.title;
+      }
+    } catch { /* ignore */ }
+
+    const urlChanged = postUrl !== urlBefore;
+    let domChanged = false;
+    let stuckWarning = false;
+    let stuckHint: string | undefined;
+
+    if (effectiveKey === "Enter") {
+      const nextMap = await buildActionMap(session, { lite: true }, targetId);
+      const newRefs = toRefEntries(nextMap.elements);
+      const diff = computeDelta(targetId, urlBefore, newRefs);
+      const changedRefs = diff ? [...diff.added, ...diff.changed] : [];
+      domChanged = changedRefs.length > 0 || (diff?.removed.length ?? 0) > 0;
+      stuckWarning = !domChanged && !urlChanged;
+      if (stuckWarning) {
+        stuckHint = "Page did not respond to Enter key. You might need to find the actual submit button and use browser_click instead.";
+      }
+    }
+
+    recordAction({
+      timestamp: new Date().toISOString(),
+      tool: "browser_key",
+      input: { key, modifiers },
+      result: { success: true, pressed: label },
+    });
+
+    return {
+      success: true,
+      pressed: label,
+      tab_id: targetId,
+      url: postUrl,
+      title: postTitle,
+      url_changed: urlChanged,
+      dom_changed: domChanged,
+      stuck_warning: stuckWarning,
+      ...(stuckHint ? { stuck_hint: stuckHint } : {})
+    };
+  } finally {
+    sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: '' } }).catch(() => {});
   }
-
-  recordAction({
-    timestamp: new Date().toISOString(),
-    tool: "browser_key",
-    input: { key, modifiers },
-    result: { success: true, pressed: label },
-  });
-
-  return { 
-    success: true, 
-    pressed: label, 
-    tab_id: targetId, 
-    url: postUrl, 
-    title: postTitle,
-    url_changed: urlChanged,
-    dom_changed: domChanged,
-    stuck_warning: stuckWarning,
-    ...(stuckHint ? { stuck_hint: stuckHint } : {})
-  };
 }

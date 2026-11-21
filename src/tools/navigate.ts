@@ -30,7 +30,7 @@ export async function weaveNavigate(
   url: string,
   config: Config,
   targetId = "default",
-  force = false,
+  _force = false,
   fast = false,
   appName?: string
 ): Promise<NavigateResult | WeaveError> {
@@ -131,47 +131,6 @@ export async function weaveNavigate(
   // Resolve active tab id
   const resolvedTargetId = active?.targetId ?? targetId;
 
-  // 1. Anchor Tab Protection
-  let isAnchor = false;
-  try {
-    const res = await session.Runtime.evaluate({
-      expression: `new Promise((resolve) => {
-        let done = false;
-        const finish = (val) => { if (!done) { done = true; resolve(val); } };
-        setTimeout(() => finish(false), 30);
-        try {
-          const browserAPI = typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null);
-          if (browserAPI && browserAPI.runtime && browserAPI.runtime.id) {
-            browserAPI.runtime.sendMessage({ type: 'GET_ANCHOR_STATUS' }, (response) => {
-              finish(response?.isAnchor || false);
-            });
-          } else {
-            finish(false);
-          }
-        } catch(e) { finish(false); }
-      })`,
-      awaitPromise: true,
-      returnByValue: true
-    }).catch(() => null);
-    isAnchor = res?.result?.value === true;
-  } catch (e) {
-    logDebug(`[weaveNavigate] Failed to check anchor status: ${e}`);
-  }
-
-  if (isAnchor && !force) {
-    // Open in new tab instead of clobbering anchor
-    const { WeavetabOpen } = await import("./tabs.js");
-    const openRes = await WeavetabOpen(parsed.href, config);
-    
-    // Map WeavetabOpen result to NavigateResult
-    return {
-      success: true,
-      url: openRes.url,
-      title: "New Tab",
-      tab_id: openRes.tabId
-    };
-  }
-
   const { sendToExtension } = await import("../cdp/helpers.js");
   sendToExtension(session, { type: 'Weavetab_STATE', hud: { action: `navigating to ${parsed.hostname}...` } }).catch(() => {});
   sendToExtension(session, { type: 'Weavetab_STATE', cursor: { x: 10, y: 10 }, state: 'thinking' }).catch(() => {});
@@ -195,31 +154,34 @@ export async function weaveNavigate(
   clearAXTreeCache(resolvedTargetId);
   clearTabCache(resolvedTargetId);
 
-  // Parallelize post-navigation metadata & cookie banner dismissal
+  // Parallelize post-navigation metadata & cookie banner dismissal (web only, never Electron)
+  const shouldDismissCookie = !isElectron && (proto === "http:" || proto === "https:");
   const [frameRes, titleRes] = await Promise.all([
     session.Page.getFrameTree().catch(() => ({ frameTree: { frame: { url: parsed.href } } })),
     session.Runtime.evaluate({ expression: 'document.title', returnByValue: true }).catch(() => null),
-    session.Runtime.evaluate({
-      expression: `
-        (function(){
-          var selectors = [
-            '[id*="cookie"] button','[class*="cookie"] button',
-            '[id*="consent"] button','[class*="consent"] button',
-            '[id*="gdpr"] button','[class*="gdpr"] button',
-            '[aria-label*="Accept"]','[aria-label*="Agree"]',
-            'button[data-cookiebanner]'
-          ];
-          for(var i=0;i<selectors.length;i++){
-            var el=document.querySelector(selectors[i]);
-            if(el){try{el.click();}catch(e){}break;}
-          }
-        })()
-      `
-    }).catch(() => {})
+    shouldDismissCookie
+      ? session.Runtime.evaluate({
+          expression: `
+            (function(){
+              var selectors = [
+                '[id*="cookie"] button','[class*="cookie"] button',
+                '[id*="consent"] button','[class*="consent"] button',
+                '[id*="gdpr"] button','[class*="gdpr"] button',
+                '[aria-label*="Accept"]','[aria-label*="Agree"]',
+                'button[data-cookiebanner]'
+              ];
+              for(var i=0;i<selectors.length;i++){
+                var el=document.querySelector(selectors[i]);
+                if(el){try{el.click();}catch(e){}break;}
+              }
+            })()
+          `
+        }).catch(() => {})
+      : Promise.resolve(),
   ]);
 
   const finalUrl = frameRes?.frameTree?.frame?.url || parsed.href;
-  const title = (titleRes?.result?.value as string) || parsed.hostname;
+  const title = (titleRes?.result?.value as string) || parsed.hostname || parsed.pathname || finalUrl;
 
   // Keep session registry in sync with the new URL
   if (active) active.url = finalUrl;

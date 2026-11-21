@@ -9,7 +9,7 @@ interface AgentStateCallbacks {
 
 class AgentStateManager {
   private state: GroupState = "idle";
-  private word = "";
+  private word: string | undefined = undefined;
   private idleTimeoutMs: number;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private callbacks: AgentStateCallbacks | null = null;
@@ -38,10 +38,10 @@ class AgentStateManager {
 
   reportToolCall() {
     this.clearIdleTimer();
+    this.word = undefined;
     if (this.state !== "weaving") {
       this.transition("weaving");
     } else {
-      // Always fire onStateChange so activeSessionTabId stays in sync
       this.callbacks?.onStateChange(this.session, this.state, this.word);
     }
     this.startIdleTimer();
@@ -60,24 +60,25 @@ class AgentStateManager {
 
   reportStuck(word: string) {
     this.clearIdleTimer();
-    this.word = word;
     this.transition("stuck", word);
   }
 
   reportDone() {
     this.clearIdleTimer();
-    this.word = "";
+    this.word = undefined;
     this.state = "idle";
-    // Always broadcast — bypasses guard to ensure favicon/tab cleanup
     this.callbacks?.onStateChange(this.session, "idle");
     if (this.session) this.callbacks?.onUpdateTabTitle(this.session, "idle");
   }
 
   reportTransportClosed() {
     this.clearIdleTimer();
-    this.word = "";
+    const prevSession = this.session;
+    this.word = undefined;
     this.state = "idle";
-    this.callbacks?.onStateChange(this.session, "idle");
+    this.session = null;
+    this.errorStreak = 0;
+    this.callbacks?.onStateChange(prevSession, "idle");
   }
 
   getState() {
@@ -93,11 +94,14 @@ class AgentStateManager {
   }
 
   private transition(newState: GroupState, word?: string) {
-    // Always fire the callback for 'idle' so favicon dots get cleared on every tab
     const isRedundant = this.state === newState && (!word || word === this.word);
     if (isRedundant && newState !== "idle") return;
     this.state = newState;
-    if (word !== undefined) this.word = word;
+    if (newState === "weaving" || newState === "idle") {
+      this.word = undefined;
+    } else if (word !== undefined) {
+      this.word = word;
+    }
 
     this.callbacks?.onStateChange(this.session, this.state, this.word);
 
@@ -109,12 +113,9 @@ class AgentStateManager {
   private startIdleTimer() {
     this.clearIdleTimer();
     this.idleTimer = setTimeout(() => {
-      this.word = "";
+      this.word = undefined;
       this.transition("idle");
     }, this.idleTimeoutMs);
-    // unref() so this timer does not pin the Node.js event loop. Without this,
-    // the process stays alive indefinitely between tool calls even when the IDE
-    // is idle and nothing else is running.
     this.idleTimer.unref();
   }
 

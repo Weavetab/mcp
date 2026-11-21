@@ -1,43 +1,31 @@
-// hud/src/widgets/debugMenu.ts — Debug menu overlay with Ctrl+F3
-
 let debugMenuVisible = false
 let container: HTMLElement | null = null
 let consoleOutput: HTMLElement | null = null
+let tabPlaceholder: HTMLElement | null = null
 let activeTab = 'console'
 
 export function initDebugMenu() {
-  console.log('[Weavetab HUD] Debug menu initialized')
-  
-  // Listen for toggle command from content script
   window.addEventListener('message', (e) => {
-    console.log('[Weavetab HUD] Received message:', e.data.type)
+    if (!e.data || typeof e.data !== 'object') return
     if (e.data.type === 'TOGGLE_DEBUG') {
-      console.log('[Weavetab HUD] Toggling debug menu')
       toggleDebugMenu()
     }
   })
 
-  // Also listen from parent (content script) via postMessage
   ;(window as any).toggleDebugMenu = toggleDebugMenu
-  
-  console.log('[Weavetab HUD] Debug menu ready - use Ctrl+F3 or WeaveTabHUD.toggleDebugMenu()')
 }
 
 export function toggleDebugMenu() {
-  console.log('[Weavetab HUD] toggleDebugMenu called, current state:', debugMenuVisible)
   debugMenuVisible = !debugMenuVisible
 
   if (!container) {
-    console.log('[Weavetab HUD] Creating debug menu container')
     createDebugMenu()
   }
 
   if (container) {
     container.style.display = debugMenuVisible ? 'flex' : 'none'
-    console.log('[Weavetab HUD] Debug menu visibility set to:', debugMenuVisible)
   }
 
-  // Persist state
   window.parent.postMessage({
     type: 'HUD_STATE_CHANGED',
     state: { debugMenuVisible }
@@ -67,7 +55,6 @@ function createDebugMenu() {
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
   `
 
-  // Header
   const header = document.createElement('div')
   header.style.cssText = `
     padding: 12px 16px;
@@ -79,11 +66,10 @@ function createDebugMenu() {
   `
   header.innerHTML = `
     <span style="color: #60a5fa; font-weight: 600;">🔧 WeaveTab Debug Menu</span>
-    <span style="color: #6b7280; font-size: 10px;">Ctrl+F3 to toggle</span>
+    <span style="color: #6b7280; font-size: 10px;">Alt+Shift+D to toggle</span>
   `
   container.appendChild(header)
 
-  // Tabs
   const tabs = document.createElement('div')
   tabs.style.cssText = `
     display: flex;
@@ -112,7 +98,6 @@ function createDebugMenu() {
   })
   container.appendChild(tabs)
 
-  // Content area
   const content = document.createElement('div')
   content.id = 'wt-debug-content'
   content.style.cssText = `
@@ -131,13 +116,22 @@ function createDebugMenu() {
   `
   consoleOutput.innerHTML = `
     <div style="color: #6b7280;">[Debug Console Ready]</div>
-    <div style="color: #6b7280;">Press Ctrl+F3 to close this menu</div>
-    <div style="color: #6b7280; margin-top: 8px;">Use browserAsk to test messaging system</div>
+    <div style="color: #6b7280;">Press Alt+Shift+D to close this menu</div>
   `
   content.appendChild(consoleOutput)
+
+  tabPlaceholder = document.createElement('div')
+  tabPlaceholder.id = 'wt-debug-tab-placeholder'
+  tabPlaceholder.style.cssText = `
+    display: none;
+    color: #6b7280;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    line-height: 1.4;
+  `
+  content.appendChild(tabPlaceholder)
   container.appendChild(content)
 
-  // Footer with actions
   const footer = document.createElement('div')
   footer.style.cssText = `
     padding: 8px 16px;
@@ -148,7 +142,6 @@ function createDebugMenu() {
 
   const actionButtons = [
     { label: 'Clear', color: '#6b7280', action: () => clearConsole() },
-    { label: 'Test Ask', color: '#3b82f6', action: () => testAskSystem() },
     { label: 'Export', color: '#22c55e', action: () => exportLogs() }
   ]
 
@@ -176,19 +169,21 @@ function createDebugMenu() {
 
 function switchTab(tabName: string) {
   activeTab = tabName
-  const tabs = container?.querySelectorAll('button[dataset-tab]')
+  const tabs = container?.querySelectorAll('button[data-tab]')
   tabs?.forEach(tab => {
     const isActive = (tab as HTMLElement).dataset.tab === tabName
     ;(tab as HTMLElement).style.background = isActive ? '#3b82f6' : 'transparent'
     ;(tab as HTMLElement).style.color = isActive ? '#fff' : '#9ca3af'
   })
 
-  if (consoleOutput) {
+  if (consoleOutput && tabPlaceholder) {
     if (tabName === 'console') {
       consoleOutput.style.display = 'block'
+      tabPlaceholder.style.display = 'none'
     } else {
       consoleOutput.style.display = 'none'
-      consoleOutput.innerHTML = `<div style="color: #6b7280;">[${tabName.charAt(0).toUpperCase() + tabName.slice(1)} Tab - Coming Soon]</div>`
+      tabPlaceholder.style.display = 'block'
+      tabPlaceholder.textContent = `[${tabName.charAt(0).toUpperCase() + tabName.slice(1)} Tab - Coming Soon]`
     }
   }
 }
@@ -197,13 +192,6 @@ function clearConsole() {
   if (consoleOutput) {
     consoleOutput.innerHTML = '<div style="color: #6b7280;">[Console Cleared]</div>'
   }
-}
-
-function testAskSystem() {
-  logToConsole('Testing ask system...', 'info')
-  window.parent.postMessage({
-    type: 'TEST_ASK_SYSTEM'
-  }, '*')
 }
 
 function exportLogs() {
@@ -236,13 +224,20 @@ export function logToConsole(message: string, type: 'info' | 'warn' | 'error' = 
     margin-bottom: 4px;
     color: ${colors[type]};
   `
-  logEntry.innerHTML = `<span style="color: #6b7280;">[${timestamp}]</span> ${message}`
+  const ts = document.createElement('span')
+  ts.style.color = '#6b7280'
+  ts.textContent = `[${timestamp}] `
+  logEntry.appendChild(ts)
+  logEntry.appendChild(document.createTextNode(message))
   consoleOutput.appendChild(logEntry)
   consoleOutput.scrollTop = consoleOutput.scrollHeight
 }
 
 export function restoreDebugVisibility(visible: boolean) {
   debugMenuVisible = visible
+  if (debugMenuVisible && !container) {
+    createDebugMenu()
+  }
   if (container) {
     container.style.display = debugMenuVisible ? 'flex' : 'none'
   }
