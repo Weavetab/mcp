@@ -30,13 +30,11 @@ export async function waitForNetworkIdle(
     };
 
     const deadline = setTimeout(cleanup, timeout);
-    deadline.unref?.();
 
     const reset = () => {
       if (done) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(cleanup, idleThresholdMs);
-      idleTimer.unref?.();
     };
 
     for (const ev of ["requestWillBeSent", "loadingFinished", "loadingFailed"] as const) {

@@ -133,7 +133,6 @@ export async function awaitNavigation(
 
       const commitWaitMs = Math.min(timeout, 250);
       const commitTimer = setTimeout(done, commitWaitMs);
-      commitTimer.unref?.();
     });
 
     const remaining = Math.max(100, timeout - (Date.now() - startTime));

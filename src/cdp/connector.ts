@@ -104,13 +104,11 @@ async function waitForPageReady(session: CDP.Client): Promise<void> {
     };
 
     const hardTimeout = setTimeout(() => { cleanup(); }, NETWORK_IDLE_TIMEOUT_MS);
-    hardTimeout.unref();
 
     const resetQuiet = () => {
       if (done) return;
       if (quietTimer) clearTimeout(quietTimer);
       quietTimer = setTimeout(cleanup, NETWORK_IDLE_QUIET_MS);
-      quietTimer.unref();
     };
 
     session.Network.enable().catch(() => {});
