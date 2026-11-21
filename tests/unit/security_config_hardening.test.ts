@@ -177,7 +177,8 @@ test("secrets — fail-closed encryption key & decrypt, Object.hasOwn, trailing-
   assert.throws(() => decrypt("not-hex-ciphertext", key), /Malformed|Invalid/i);
 
   const badKeyFile = path.join(os.tmpdir(), `wt-bad-key-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(badKeyFile, "not_a_64_char_hex_key", "utf-8");
+  fs.writeFileSync(badKeyFile, "not_a_64_char_hex_key", { encoding: "utf-8", mode: 0o600 });
+  if (process.platform !== "win32") fs.chmodSync(badKeyFile, 0o600);
   try {
     assert.throws(() => getEncryptionKey(badKeyFile), /Invalid encryption key format/);
   } finally {
