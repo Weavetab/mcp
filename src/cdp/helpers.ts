@@ -56,7 +56,6 @@ async function drainQueue(session: CDP.Client): Promise<void> {
 
   if (queue.length > 0) {
     const timer = setTimeout(() => drainQueue(session), BATCH_INTERVAL_MS);
-    timer.unref();
     queueTimers.set(session, timer);
   } else {
     const t = queueTimers.get(session);
@@ -94,7 +93,6 @@ function enqueueMessage(session: CDP.Client, message: object): Promise<boolean> 
 
     if (!queueTimers.has(session)) {
       const timer = setTimeout(() => drainQueue(session), BATCH_INTERVAL_MS);
-      timer.unref();
       queueTimers.set(session, timer);
     }
   });
