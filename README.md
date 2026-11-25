@@ -10,6 +10,7 @@
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-10b981?style=flat-square" alt="MCP" /></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square" alt="Node" />
   <a href="docs/tools/tools.md"><img src="https://img.shields.io/badge/tools-40-ec4899?style=flat-square" alt="tools" /></a>
+  <a href="https://glama.ai/mcp/servers/Weavetab/mcp"><img src="https://glama.ai/mcp/servers/Weavetab/mcp/badges/score.svg" alt="Weavetab MCP server" height="20" /></a>
 
 </p>
 
